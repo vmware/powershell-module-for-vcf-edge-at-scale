@@ -28,13 +28,14 @@
 #
 # PowerShell Module: SimpleSupervisorDeploymentAtScale
 # Module Version: 1.0.0.3
-# Last modified: 2025-12-11
+# Last modified: 2025-12-30
 #
 
 # Module-level variables
 $Script:ModuleVersion = '1.0.0.3'
 
 # Set platform-specific command names for cross-platform compatibility.
+$Script:ArgocdCmd = if ($isWindows) { "argocd.exe" } else { "argocd" }
 $Script:KubectlCmd = if ($isWindows) { "kubectl.exe" } else { "kubectl" }
 $Script:VcfCmd = if ($isWindows) { "vcf.exe" } else { "vcf" }
 
@@ -54,7 +55,9 @@ $Script:ConfiguredLogLevel = "INFO"
 # =============================================================================
 # Internal Functions (Not Exported)
 # =============================================================================
+
 Function Test-LogLevel {
+
     <#
         .SYNOPSIS
         Determines if a message should be displayed based on the configured log level.
@@ -84,10 +87,13 @@ Function Test-LogLevel {
         .OUTPUTS
         Boolean
         Returns $true if the message should be displayed, $false otherwise.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [String]$MessageType,
-        [Parameter(Mandatory = $true)] [String]$ConfiguredLevel
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ConfiguredLevel,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MessageType
+
     )
 
     $messageLevel = $Script:LogLevelHierarchy[$MessageType]
@@ -96,7 +102,9 @@ Function Test-LogLevel {
     return ($messageLevel -ge $configuredLevelValue)
 }
 
+
 Function Write-ErrorAndReturn {
+
     <#
         .SYNOPSIS
         Writes an error message and returns a standardized error result.
@@ -133,7 +141,7 @@ Function Write-ErrorAndReturn {
         - ERR_VALIDATION: General validation failures
 
         .EXAMPLE
-        # Helper function returns error object
+        # Helper function returns error object.
         Function Add-HostToVDS {
             try {
                 # ... configuration ...
@@ -143,7 +151,7 @@ Function Write-ErrorAndReturn {
         }
 
         .EXAMPLE
-        # Caller checks result and decides how to handle
+        # Caller checks result and decides how to handle.
         $result = Add-HostToVDS -Hostname $esxHost -VdsName $vdsName
         if (-not $result.Success) {
             Write-LogMessage -Type ERROR -Message "VDS configuration failed: $($result.ErrorMessage)"
@@ -158,10 +166,13 @@ Function Write-ErrorAndReturn {
         Error Handling: This is a utility function used by other functions to return
         standardized error objects. Do NOT use 'exit 1' in helper functions; use this
         function instead to allow the caller to control error handling.
+
     #>
+
     Param(
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ErrorCode = "ERR_UNKNOWN"
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ErrorCode = "ERR_UNKNOWN",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage
+
     )
 
     Write-LogMessage -Type ERROR -Message $ErrorMessage
@@ -170,6 +181,76 @@ Function Write-ErrorAndReturn {
         Success = $false
         ErrorMessage = $ErrorMessage
         ErrorCode = $ErrorCode
+    }
+}
+Function Get-CleanErrorMessage {
+
+    <#
+        .SYNOPSIS
+        Extracts clean error messages from JSON error responses.
+
+        .DESCRIPTION
+        The Get-CleanErrorMessage function attempts to extract localized or default error
+        messages from JSON-formatted error responses. This function standardizes error message
+        extraction throughout the module, eliminating code duplication and ensuring consistent
+        error message handling.
+
+        The function checks for error messages in the following priority order:
+        1. "localized" field - User-friendly localized error message
+        2. "default_message" field - Default error message
+        3. Original error message - Falls back to the input if no clean message is found
+
+        This function is used throughout the module to extract clean, user-friendly error
+        messages from API responses that may contain JSON-formatted error details.
+
+        .PARAMETER ErrorMessage
+        The raw error message that may contain JSON-formatted error details. This can be
+        a plain string or a JSON string containing error information.
+
+        .EXAMPLE
+        $cleanError = Get-CleanErrorMessage -ErrorMessage $_.Exception.Message
+        Write-LogMessage -Type ERROR -Message "Operation failed: $cleanError"
+
+        Extracts a clean error message from an exception and logs it.
+
+        .EXAMPLE
+        $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errorResponse
+        if ($cleanMessage) {
+            Write-Host "Error: $cleanMessage"
+        }
+
+        Extracts a clean error message from an API response for display to the user.
+
+        .OUTPUTS
+        System.String
+        Returns the cleanest available error message. If no clean message is found in the
+        JSON response, returns the original error message unchanged.
+
+        .NOTES
+        This function uses regex pattern matching to extract error messages from JSON strings.
+        The patterns match common JSON error response formats used by vCenter and VCF APIs.
+
+        Error Message Priority:
+        - "localized" field is preferred as it provides user-friendly messages
+        - "default_message" field is used if "localized" is not available
+        - Original message is returned if neither field is found
+
+    #>
+
+    Param(
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage
+    )
+
+    switch -Regex ($ErrorMessage) {
+        '"localized":"([^"]+)"' {
+            return $matches[1]
+        }
+        '"default_message":"([^"]+)"' {
+            return $matches[1]
+        }
+        default {
+            return $ErrorMessage
+        }
     }
 }
 Function Get-EnvironmentSetup {
@@ -212,6 +293,14 @@ Function Get-EnvironmentSetup {
     $vcfPowerCliRelease = (Get-Module -ListAvailable -Name VCF.PowerCLI -ErrorAction SilentlyContinue | Sort-Object Revision | Select-Object -First 1).Version
     $vmwarePowerCliRelease = (Get-Module -ListAvailable -Name VMware.PowerCLI -ErrorAction SilentlyContinue | Sort-Object Revision | Select-Object -First 1).Version
 
+    # If the module is not installed, set the release to "N/A".
+    if ($null -eq $vcfPowerCliRelease) {
+        $vcfPowerCliRelease = "N/A"
+    }
+    if ($null -eq $vmwarePowerCliRelease) {
+        $vmwarePowerCliRelease = "N/A"
+    }
+
     # Start with basic OS information from PowerShell automatic variables.
     $operatingSystem = $($PSVersionTable.OS)
 
@@ -251,7 +340,7 @@ Function Get-EnvironmentSetup {
         Write-LogMessage -Type DEBUG -Message "Client VMware.PowerCLI version is $vmwarePowerCliRelease."
     }
     if (-not $vcfPowerCliRelease) {
-        Write-LogMessage -Type ERROR -Message "Client PowerCLI not installed. Please install VCF.PowerCLI module."
+        Write-LogMessage -Type ERROR -Message "VCF.PowerCLI not installed. Please install VCF.PowerCLI module."
         throw "Deployment failed. Check logs for details."
     }
 
@@ -299,16 +388,16 @@ Function New-LogFile {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$directory = "logs",
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$prefix = "SimpleSupervisorDeploymentAtScale"
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Directory = "logs",
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Prefix = "SimpleSupervisorDeploymentAtScale"
     )
 
     # Generate timestamp for daily log file naming (yyyy-MM-dd format)
     $fileTimeStamp = Get-Date -Format "yyyy-MM-dd"
 
     # Set script-scoped variables for log directory and file paths.
-    $Script:LogFolder = Join-Path -Path $PSScriptRoot -ChildPath $directory
-    $Script:LogFile = Join-Path -Path $Script:LogFolder -ChildPath "$prefix-$fileTimeStamp.log"
+    $Script:LogFolder = Join-Path -Path $PSScriptRoot -ChildPath $Directory
+    $Script:LogFile = Join-Path -Path $Script:LogFolder -ChildPath "$Prefix-$fileTimeStamp.log"
 
     # Create log directory if it doesn't exist.
     if (-not (Test-Path -Path $Script:LogFolder -PathType Container) ) {
@@ -403,12 +492,12 @@ Function Write-LogMessage {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$appendNewLine,
-        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$message,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$prependNewLine,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$suppressOutputToFile,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$suppressOutputToScreen,
-        [Parameter(Mandatory = $false)] [ValidateSet("INFO", "ERROR", "WARNING", "EXCEPTION", "ADVISORY", "DEBUG")] [String]$type = "INFO"
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AppendNewLine,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Message,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$PrependNewLine,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$SuppressOutputToFile,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$SuppressOutputToScreen,
+        [Parameter(Mandatory = $false)] [ValidateSet("INFO", "ERROR", "WARNING", "EXCEPTION", "ADVISORY", "DEBUG")] [String]$Type = "INFO"
     )
 
     # Define color mapping for different message types.
@@ -422,36 +511,36 @@ Function Write-LogMessage {
     }
 
     # Get the appropriate color for the message type.
-    $messageColor = $msgTypeToColor.$type
+    $messageColor = $msgTypeToColor.$Type
 
     # Create timestamp for log file entries (yyyy-MM-dd_HH:mm:ss format)
     $timeStamp = Get-Date -Format "yyyy-MM-dd_HH:mm:ss"
 
     # Determine if message should be displayed based on log level threshold.
-    $shouldDisplay = Test-LogLevel -MessageType $type -ConfiguredLevel $Script:ConfiguredLogLevel
+    $shouldDisplay = Test-LogLevel -MessageType $Type -ConfiguredLevel $Script:ConfiguredLogLevel
 
     # Add blank line before message if requested and not in log-only mode and meets log level threshold.
-    if ($prependNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and $shouldDisplay) {
+    if ($PrependNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and $shouldDisplay) {
         Write-Output ""
     }
 
     # Display message to console with color coding (unless suppressed, in log-only mode, or below log level threshold).
-    if (-not $suppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and $shouldDisplay) {
-        Write-Host -ForegroundColor $messageColor "[$type] $message"
+    if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and $shouldDisplay) {
+        Write-Host -ForegroundColor $messageColor "[$Type] $Message"
     }
 
     # Add blank line after message if requested and not in log-only mode and meets log level threshold.
-    if ($appendNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and $shouldDisplay) {
+    if ($AppendNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and $shouldDisplay) {
         Write-Output ""
     }
 
     # Write message to log file (unless suppressed).
-    if (-not $suppressOutputToFile) {
-        # Only attempt to write to log file if it's been initialized and path is valid
+    if (-not $SuppressOutputToFile) {
+        # Only attempt to write to log file if it's been initialized and path is valid.
         if ($Script:LogFile -and -not [string]::IsNullOrWhiteSpace($Script:LogFile)) {
-            $logContent = '[' + $timeStamp + '] ' + '(' + $type + ')' + ' ' + $message
+            $logContent = '[' + $timeStamp + '] ' + '(' + $Type + ')' + ' ' + $Message
             try {
-                # Ensure the log file directory exists
+                # Ensure the log file directory exists.
                 $logDir = Split-Path -Path $Script:LogFile -Parent -ErrorAction SilentlyContinue
                 if ($logDir -and -not (Test-Path -Path $logDir -ErrorAction SilentlyContinue)) {
                     New-Item -ItemType Directory -Path $logDir -Force | Out-Null
@@ -459,9 +548,9 @@ Function Write-LogMessage {
                 Add-Content -Path $Script:LogFile -Value $logContent -ErrorAction Stop
             }
             catch {
-                # Handle log file write failures gracefully - only show error if log file was expected
+                # Handle log file write failures gracefully - only show error if log file was expected.
                 # Silently ignore if log file wasn't initialized (e.g., standalone function calls)
-                # Don't show error message to avoid cluttering output when function is called standalone
+                # Don't show error message to avoid cluttering output when function is called standalone.
             }
         }
         # If log file is not initialized, silently skip file logging (function may be called standalone)
@@ -487,12 +576,12 @@ Function Show-Version {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$silence
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Show-Version function..."
 
-    if (-not $silence) {
+    if (-not $Silence) {
         Write-LogMessage -Type INFO -Message "Version: $Script:ModuleVersion"
     } else {
         Write-LogMessage -Type DEBUG -Message "Script Version: $Script:ModuleVersion"
@@ -522,19 +611,19 @@ Function Connect-Vcenter {
         - Graceful handling of existing connections with detailed user information
         - Connection state validation to prevent duplicate connections
 
-        .PARAMETER serverName
+        .PARAMETER ServerName
         The fully qualified domain name (FQDN) or IP address of the server to connect to.
-        This can be either a vCenter or an ESX host, depending on the serverType parameter.
+        This can be either a vCenter or an ESX host, depending on the ServerType parameter.
         This parameter is mandatory and must be a valid, reachable server instance.
 
-        .PARAMETER serverCredential
+        .PARAMETER ServerCredential
         A PSCredential object containing the username and password for authentication to the target server.
         This should contain a valid user account with appropriate permissions for the operations being performed.
         For vCenter: Supports both local vCenter accounts and SSO domain accounts (e.g., administrator@vsphere.local).
         For ESX: Typically uses root account or other local ESX user accounts.
         Using PSCredential objects ensures that passwords are handled securely and not exposed in plain text.
 
-        .PARAMETER serverType
+        .PARAMETER ServerType
         Specifies the type of server being connected to. Valid values are "vCenter" or "ESX".
         This parameter determines the connection context and affects logging messages and error handling.
         - "vCenter": Connects to a vCenter instance for centralized management
@@ -542,7 +631,7 @@ Function Connect-Vcenter {
 
         .EXAMPLE
         $credential = Get-Credential -Message "Enter vCenter credentials"
-        Connect-Vcenter -serverName "vcenter.example.com" -serverCredential $credential -serverType "vCenter"
+        Connect-Vcenter -ServerName "vcenter.example.com" -ServerCredential $credential -ServerType "vCenter"
 
         Connects to a vCenter using credentials obtained from Get-Credential cmdlet.
 
@@ -554,8 +643,8 @@ Function Connect-Vcenter {
         Connects to an ESX host using a PSCredential object created from secure input.
 
         .EXAMPLE
-        Connect-Vcenter -serverName $Script:VCenterName -serverCredential $vCenterCredential -serverType "vCenter"
-        Connect-Vcenter -serverName $esxHost -serverCredential $esxCredential -serverType "ESX"
+        Connect-Vcenter -ServerName $Script:VCenterName -ServerCredential $vCenterCredential -ServerType "vCenter"
+        Connect-Vcenter -ServerName $esxHost -ServerCredential $esxCredential -ServerType "ESX"
 
         Example of connecting to both vCenter and ESX host in sequence using variables.
 
@@ -571,34 +660,39 @@ Function Connect-Vcenter {
         - Successful connections are confirmed with informational messages for audit trail purposes
         - Function is designed for use in deployment scenarios where reliable server connectivity is critical
 
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$serverName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$serverCredential,
-        [Parameter(Mandatory = $true)] [ValidateSet("vCenter", "ESX")] [String]$serverType
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$ServerCredential,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServerName,
+
+        [Parameter(Mandatory = $true)] [ValidateSet("vCenter", "ESX")] [String]$ServerType
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Connect-Vcenter function..."
 
     # Check if we're already connected to this vCenter to avoid duplicate connections.
-    $connectedVcenter = $Global:DefaultViServers | Where-Object {$_.name -eq $serverName -and $_.IsConnected -eq "true"}
+    $connectedVcenter = $Global:DefaultViServers | Where-Object {$_.name -eq $ServerName -and $_.IsConnected -eq "true"}
 
     if (-not $connectedVcenter) {
         # Attempt to establish a new connection to the vCenter.  If it fails, exit the script.
         try {
-            Write-LogMessage -Type DEBUG -Message "Attempting to connect to $serverType Server `"$serverName`"..."
-            Connect-VIServer -Server $serverName -Credential $serverCredential -ErrorAction Stop | Out-Null
+            Write-LogMessage -Type DEBUG -Message "Attempting to connect to $ServerType Server `"$ServerName`"..."
+            Connect-VIServer -Server $ServerName -Credential $ServerCredential -ErrorAction Stop | Out-Null
         } catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot connect to $serverType Server `"$serverName`" due to network/timeout issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch {
-            # Extract clean error message
+            # Extract clean error message.
+
             $errorMessage = $_.Exception.Message
 
-            # Check for SSL/TLS connection errors
+            # Check for SSL/TLS connection errors.
+
             if ($errorMessage -match "SSL connection could not be established|SSL|certificate") {
-                Write-LogMessage -Type ERROR -Message "Failed to establish SSL connection to $serverType `"$serverName`"."
+                Write-LogMessage -Type ERROR -Message "Failed to establish SSL connection to $ServerType `"$ServerName`"."
                 Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Common causes and solutions:"
                 Write-LogMessage -Type ERROR -Message "  1. Self-signed or untrusted SSL certificate"
@@ -610,37 +704,42 @@ Function Connect-Vcenter {
                 Write-LogMessage -Type ERROR -Message "     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12"
                 Write-Host ""
                 Write-LogMessage -Type ERROR -Message "  3. Network connectivity or firewall blocking HTTPS (port 443)"
-                Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $serverName -Port 443"
+                Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $ServerName -Port 443"
                 Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage"
             }
-            # Check for authentication errors
+            # Check for authentication errors.
+
             elseif ($errorMessage -match "incorrect user name or password|authentication|credentials") {
-                Write-LogMessage -Type ERROR -Message "Failed to connect to $serverType `"$serverName`": Authentication failed."
+                Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."
                 Write-LogMessage -Type ERROR -Message "Please verify the username and password are correct."
                 Write-Host ""
                 Write-LogMessage -Type DEBUG -Message "Full error details: $errorMessage"
+                # Throw immediately for authentication failures to prevent further execution.
+                throw "Authentication failed"
             }
             # Generic connection error
             else {
-                Write-LogMessage -Type ERROR -Message "Failed to connect to $serverType `"$serverName`"."
+                Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`"."
                 Write-LogMessage -Type ERROR -Message "Error details: $errorMessage"
             }
 
             throw "Deployment failed. Check logs for details."
         }
-        Write-LogMessage -Type DEBUG -Message "Successfully connected to $serverType `"$serverName`"."
+        Write-LogMessage -Type DEBUG -Message "Successfully connected to $ServerType `"$ServerName`"."
     } else {
         # Connection already exists.  Surface the data on what user the connection is using.
-        $existingUsername = ($Global:DefaultVIServers | Where-Object {$_.Name -eq $serverName }).User
+        $existingUsername = ($Global:DefaultVIServers | Where-Object {$_.Name -eq $ServerName }).User
         if ($existingUsername) {
-            Write-LogMessage -Type WARNING -Message "Already connected to $serverType `"$serverName`" as `"$ExistingUsername`"."
+            Write-LogMessage -Type WARNING -Message "Already connected to $ServerType `"$ServerName`" as `"$existingUsername`"."
         } else {
-            Write-LogMessage -Type WARNING -Message "Already connected to $serverType `"$serverName`"."
+            Write-LogMessage -Type WARNING -Message "Already connected to $ServerType `"$ServerName`"."
         }
     }
 }
+
 Function Test-VcenterConnection {
+
     <#
         .SYNOPSIS
         Tests if an active and valid vCenter connection exists with minimal overhead.
@@ -684,7 +783,8 @@ Function Test-VcenterConnection {
         }
 
         .EXAMPLE
-        # Fast check without API call
+        # Fast check without API call.
+
         $sessionExists = Test-VcenterConnection -SkipConnectivityTest
         if ($sessionExists.IsConnected) {
             Write-LogMessage -Type DEBUG -SuppressOutputToFile -Message "Session exists for `"$($sessionExists.ServerName)`" (age: $($sessionExists.SessionAge))"
@@ -716,7 +816,7 @@ Function Test-VcenterConnection {
     #>
 
     Param(
-        [Parameter(Mandatory = $false)] [String]$ServerName = $Script:VCenterName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServerName = $Script:VCenterName,
         [Parameter(Mandatory = $false)] [Switch]$SkipConnectivityTest
     )
 
@@ -746,7 +846,8 @@ Function Test-VcenterConnection {
         if ($vcServer.ServiceUri.StartTime) {
             $result.SessionAge = (Get-Date) - $vcServer.ServiceUri.StartTime
         } elseif ($vcServer.ExtensionData.Content.About.ApiVersion) {
-            # Session exists but start time not available - estimate as "recent"
+            # Session exists but start time not available - estimate as "recent".
+
             $result.SessionAge = [TimeSpan]::FromMinutes(0)
         }
 
@@ -758,7 +859,8 @@ Function Test-VcenterConnection {
             return $result
         }
 
-        # Phase 2: Verify connection is actually alive with lightweight API call
+        # Phase 2: Verify connection is actually alive with lightweight API call.
+
         # Using Get-Datacenter because it's:
         # - Fast (small response)
         # - Always available (every vCenter has at least one datacenter)
@@ -817,26 +919,26 @@ Function Disconnect-Vcenter {
         scenarios, or when switching between different server connections to ensure
         proper cleanup of VMware PowerCLI connections.
 
-        .PARAMETER allServers
+        .PARAMETER AllServers
         Optional switch parameter that disconnects from all active vCenter and ESX host connections.
         When specified, the function uses wildcard disconnection (Disconnect-VIServer -Server *)
         to terminate all active PowerCLI sessions. This is useful for cleanup scenarios where
         all connections should be terminated regardless of which servers are connected.
-        Cannot be used together with serverName parameter.
+        Cannot be used together with ServerName parameter.
 
-        .PARAMETER serverName
+        .PARAMETER ServerName
         Optional. The fully qualified domain name (FQDN) or IP address of a specific server to disconnect from.
-        This can be either a vCenter or an ESX host, depending on the serverType parameter.
+        This can be either a vCenter or an ESX host, depending on the ServerType parameter.
         This should match the server name used in the original connection.
-        Required when allServers is not specified.
+        Required when AllServers is not specified.
 
-        .PARAMETER serverType
+        .PARAMETER ServerType
         Optional. Specifies the type of server being disconnected from. Valid values are "vCenter" or "ESX".
         This parameter is used for logging context but is not strictly required for disconnection.
         - "vCenter": Indicates disconnection from a vCenter instance
         - "ESX": Indicates disconnection from an ESX host instance
 
-        .PARAMETER silence
+        .PARAMETER Silence
         Optional switch parameter that suppresses console output for disconnection success messages.
         When specified, successful disconnections are logged with SuppressOutputToScreen flag,
         preventing console output while maintaining log file entries. Error messages are still
@@ -880,26 +982,26 @@ Function Disconnect-Vcenter {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$allServers,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$serverName,
-        [Parameter(Mandatory = $false)] [ValidateSet("vCenter", "ESX")] [String]$serverType,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$silence
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AllServers,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServerName,
+        [Parameter(Mandatory = $false)] [ValidateSet("vCenter", "ESX")] [String]$ServerType,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence
     )
     Write-LogMessage -Type DEBUG -Message "Entered Disconnect-Vcenter function..."
 
     # Disconnect from vCenter.  Stop on error.
     try {
-        if ($allServers) {
+        if ($AllServers) {
             Disconnect-VIServer -Server * -Force -Confirm:$false -ErrorAction:Stop | Out-Null
         } else {
-            Disconnect-VIServer -Server $serverName -Force -Confirm:$false -ErrorAction:Stop | Out-Null
+            Disconnect-VIServer -Server $ServerName -Force -Confirm:$false -ErrorAction:Stop | Out-Null
         }
     } catch {
     }
     # Double check that all servers are disconnected.
     if ($null -eq $Global:DefaultVIServer) {
-        if ($silence) {
-            Write-LogMessage -Type INFO -suppressOutputToScreen -Message "Successfully disconnected from all vCenter and ESX hosts"
+        if ($Silence) {
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Successfully disconnected from all vCenter and ESX hosts"
         } else {
             Write-LogMessage -Type INFO -Message "Successfully disconnected from all vCenter and ESX hosts"
         }
@@ -937,13 +1039,13 @@ Function Test-VCenterVersion {
         - Logs version information for audit trail
         - Returns standardized result object for error handling
 
-        .PARAMETER minimumVersion
+        .PARAMETER MinimumVersion
         The minimum required version in "major.minor.patch" format (e.g., "9.0.0", "8.0.3").
         This parameter is mandatory and determines the version threshold for validation.
         The version string must contain at least three dot-separated numeric components.
 
         .EXAMPLE
-        $result = Test-VCenterVersion -minimumVersion "9.0.0"
+        $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
             Write-Host "Version validation failed: $($result.ErrorMessage)"
             throw "Deployment failed. Check logs for details."
@@ -952,7 +1054,7 @@ Function Test-VCenterVersion {
         Validates the vCenter version against a minimum requirement of 9.0.0.
 
         .EXAMPLE
-        Test-VCenterVersion -minimumVersion "8.0.3"
+        Test-VCenterVersion -MinimumVersion "8.0.3"
 
         Validates the vCenter version with a minimum requirement of 8.0.3.
 
@@ -984,20 +1086,22 @@ Function Test-VCenterVersion {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$minimumVersion
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MinimumVersion
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-VCenterVersion function..."
 
     try {
-        # Get the connected vCenter instance using the script-scoped vCenter name
+        # Get the connected vCenter instance using the script-scoped vCenter name.
+
         $vcServer = $Global:DefaultViServers | Where-Object { $_.Name -eq $Script:VCenterName -and $_.IsConnected }
 
         if (-not $vcServer) {
             return Write-ErrorAndReturn -ErrorMessage "Not connected to vCenter `"$Script:VCenterName`". Please establish a connection first." -ErrorCode "ERR_NOT_CONNECTED"
         }
 
-        # Get the vCenter version from the API version property
+        # Get the vCenter version from the API version property.
+
         $vcVersionString = $vcServer.Version
 
         if (-not $vcVersionString) {
@@ -1009,30 +1113,158 @@ Function Test-VCenterVersion {
         # Convert version strings to [version] type for proper semantic version comparison
         try {
             $vcVersion = [version]$vcVersionString
-            $minVersion = [version]$minimumVersion
+            $minVersion = [version]$MinimumVersion
         } catch {
-            return Write-ErrorAndReturn -ErrorMessage "Failed to parse version strings. vCenter version: `"$vcVersionString`", Minimum version: `"$minimumVersion`". Both must be in valid version format (e.g., 9.0.0)." -ErrorCode "ERR_VERSION_PARSE_FAILED"
+            return Write-ErrorAndReturn -ErrorMessage "Failed to parse version strings. vCenter version: `"$vcVersionString`", Minimum version: `"$MinimumVersion`". Both must be in valid version format (e.g., 9.0.0)." -ErrorCode "ERR_VERSION_PARSE_FAILED"
         }
 
         # Compare versions using [version] type comparison (automatically handles major.minor.build.revision)
         if ($vcVersion -lt $minVersion) {
-            return Write-ErrorAndReturn -ErrorMessage "vCenter `"$Script:VCenterName`" version $vcVersionString does not meet minimum required version: $minimumVersion. Please upgrade vCenter." -ErrorCode "ERR_VERSION_TOO_OLD"
+            return Write-ErrorAndReturn -ErrorMessage "vCenter `"$Script:VCenterName`" version $vcVersionString does not meet minimum required version: $MinimumVersion. Please upgrade vCenter." -ErrorCode "ERR_VERSION_TOO_OLD"
         }
 
         # Version validation passed
-        Write-LogMessage -Type INFO -Message "vCenter `"$Script:VCenterName`" version $vcVersionString meets minimum required version ($minimumVersion)."
+        Write-LogMessage -Type INFO -Message "vCenter `"$Script:VCenterName`" version $vcVersionString meets minimum required version ($MinimumVersion)."
 
         return @{
             Success = $true
             ErrorMessage = $null
             ErrorCode = $null
             Version = $vcVersionString
-            MinimumVersion = $minimumVersion
+            MinimumVersion = $MinimumVersion
         }
 
     } catch {
         return Write-ErrorAndReturn -ErrorMessage "Failed to validate vCenter version for `"$Script:VCenterName`": $_" -ErrorCode "ERR_VALIDATION_EXCEPTION"
     }
+}
+
+Function New-SubscriptionBasedContentLibrary {
+
+    <#
+        .SYNOPSIS
+        Creates a new subscription based content library on vCenter and returns its unique identifier.
+
+        .DESCRIPTION
+        The New-SubscriptionBasedContentLibrary function creates a new subscription based content library in vCenter
+        using the specified datastore for storage. This content library is a container for storing 9.0.1 async patch
+        for supervisor.
+
+        This function performs the following operations:
+        1. Retrieves the specified datastore object from vCenter
+        2. Creates a new subscription based content library with the provided name, description and subscriptionURL
+        3. Associates the content library with the specified datastore for storage
+        4. Returns the unique identifier of the newly created content library
+
+        The function includes comprehensive error handling for authorization issues, network timeouts,
+        and other potential failures during content library creation. All operations are logged using
+        the Write-LogMessage system for audit trail and troubleshooting purposes.
+
+        .PARAMETER DatastoreName
+        The name of the datastore where the content library will store its content. This datastore
+        must already exist and be accessible from the connected vCenter. The datastore will
+        be used to store 9.0.1 async patch for supervisor.
+
+        .PARAMETER LibraryDescription
+        A descriptive text that explains the purpose and contents of the content library. This
+        description helps administrators understand the library's intended use and is displayed
+        in the vSphere Client interface.
+
+        .PARAMETER LibraryName
+        The name for the new content library. This name must be unique within the vCenter
+        and should follow standard naming conventions. The name will be used to identify and
+        manage the content library through the vSphere Client and API operations.
+
+        .PARAMETER SubscriptionUrl
+        Specifies the URL of the endpoint where the metadata for the remotely published library is served.
+
+        .EXAMPLE
+        New-SubscriptionBasedContentLibrary -DatastoreName "datastore1" -LibraryName "VCF-ContentLibrary" -LibraryDescription "9.0.1 async patch storage for supervisor" -SubscriptionUrl "Publisher Content Library publishurl"
+
+        Creates a new subscription based content library named "VCF-ContentLibrary" stored on "datastore1" with the specified description.
+
+        .EXAMPLE
+        $libraryId = New-SubscriptionBasedContentLibrary -DatastoreName "shared-storage" -LibraryName "Production-Templates" -LibraryDescription "9.0.1 async patch storage for supervisor" -SubscriptionUrl "Publisher Content Library publishurl"
+
+        Creates a content library and stores the returned library ID in a variable for later use.
+
+        .EXAMPLE
+        New-SubscriptionBasedContentLibrary -DatastoreName $DatastoreName -LibraryName $LibraryName -LibraryDescription $LibraryDescription -SubscriptionUrl $SubscriptionUrl
+
+        Creates a content library using variables for dynamic deployment scenarios.
+
+        .OUTPUTS
+        System.String
+        Returns the unique identifier (ID) of the newly created content library. This ID can be used
+        for subsequent operations such as adding content items or configuring library permissions.
+
+        .NOTES
+        - Requires an active PowerCLI connection to vCenter via the $Script:VCenterName variable
+        - The specified datastore must exist and be accessible from vCenter
+        - The publishURL from the contentlibray has to be passed as SubscriptionUrl
+        - The function will terminate script execution (exit 1) if content library creation fails
+        - Uses comprehensive error handling for authorization, network timeout, and general failures
+        - Integrates with the VCF PowerShell Toolbox logging infrastructure for consistent reporting
+        - The returned library ID is obtained by calling Get-ContentLibraryId after successful creation
+        - The function uses the VMware PowerCLI New-ContentLibrary cmdlet for library creation
+
+        .LINK
+        Get-ContentLibraryId
+        New-ContentLibrary
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryDescription,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SubscriptionUrl
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Entered New-SubscriptionBasedContentLibrary function..."
+
+    # Verify vCenter connection before proceeding.
+    $connectionTest = Test-VcenterConnection
+    if (-not $connectionTest.IsConnected) {
+        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:VCenterName`": $($connectionTest.ErrorMessage)"
+        throw "Deployment failed. Check logs for details."
+    }
+
+    # Check if the content library already exists and if so, return the id.
+    $contentLibraryId = Get-ContentLibraryId -libraryName $LibraryName
+    if ($contentLibraryId) {
+        Write-LogMessage -Type WARNING -Message "Content library `"$LibraryName`" already exists on vCenter `"$Script:VCenterName`"."
+        return $contentLibraryId
+    }
+
+    try {
+        # Get Datastore object. Using the datastore name.
+        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:VCenterName
+
+        # Create subscription based content library. Using the datastore object.
+        New-ContentLibrary -Name $LibraryName `
+            -Description $LibraryDescription `
+            -Type Subscribed `
+            -SubscriptionUrl $SubscriptionUrl `
+            -Datastore $datastoreObject `
+            -AutomaticSyncEnabled:$true `
+            -ErrorAction Stop `
+            -Server $Script:VCenterName | Out-Null
+    }
+    catch [System.UnauthorizedAccessException] {
+        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        throw "Deployment failed. Check logs for details."
+    }
+    catch [System.TimeoutException] {
+        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        throw "Deployment failed. Check logs for details."
+    }
+    catch {
+        Write-LogMessage -Type ERROR -Message "Failed to create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:VCenterName`": $_"
+        throw "Deployment failed. Check logs for details."
+    }
+    Write-LogMessage -Type INFO -Message "Successfully created content library `"$LibraryName`" on vCenter `"$Script:VCenterName`"."
+    $contentLibraryId = Get-ContentLibraryId -libraryName $LibraryName
+    return $contentLibraryId
 }
 Function Add-Cluster {
 
@@ -1047,48 +1279,59 @@ Function Add-Cluster {
         automatically configures the cluster with Distributed Resource Scheduler (DRS)
         and High Availability (HA) enabled for optimal resource management and availability.
 
+        The function prompts the user to interactively select a vLCM image from the
+        vCenter's image catalog using Find-VlcmImage. The selected image's software
+        specification is then retrieved using Get-LcmSoftwareSpecification and applied
+        to the cluster during creation, ensuring the cluster is configured with the
+        desired ESXi image specification.
+
         Key features:
         - Pre-creation validation of datacenter existence
         - Duplicate cluster detection and prevention
+        - Interactive vLCM image selection for cluster software specification
+        - Automatic software specification object retrieval and validation
         - Automatic DRS and HA enablement
         - Comprehensive error handling and logging
         - Integration with VCF PowerShell Toolbox logging infrastructure
 
-        The function will exit the script if the target datacenter is not found or if
-        cluster creation fails, ensuring that subsequent operations don't proceed with
-        invalid cluster configurations.
+        The function will throw an exception if the target datacenter is not found, if
+        the software specification cannot be retrieved, or if cluster creation fails,
+        ensuring that subsequent operations don't proceed with invalid cluster configurations.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the new cluster to create. This name must be unique within the
         specified datacenter and should follow VMware naming conventions. The cluster
         name will be used for identification and management purposes.
 
-        .PARAMETER dataCenterName
+        .PARAMETER DataCenterName
         The name of the datacenter where the cluster will be created. This datacenter
         must already exist in the specified vCenter. The function will validate
         the datacenter's existence before attempting cluster creation.
 
         .EXAMPLE
-        Add-Cluster -clusterName "Production-Cluster-01" -dataCenterName "Datacenter1"
+        Add-Cluster -ClusterName "Production-Cluster-01" -DataCenterName "Datacenter1"
 
         Creates a new cluster named "Production-Cluster-01" in "Datacenter1" on the specified vCenter.
 
         .EXAMPLE
-        Add-Cluster -clusterName $ClusterName -dataCenterName $DataCenterName
+        Add-Cluster -clusterName $clusterName -dataCenterName $datacenterName
 
         Creates a cluster using variables for dynamic cluster deployment scenarios.
 
         .NOTES
         This function requires an active PowerCLI connection to the specified vCenter.
-        The function will terminate script execution (exit 1) if critical errors occur,
-        such as datacenter not found or cluster creation failure. DRS is configured in
-        fully automated mode, and HA is enabled with default settings.
+        The function will throw an exception if critical errors occur, such as datacenter
+        not found, software specification retrieval failure, or cluster creation failure.
+        DRS is configured in fully automated mode, and HA is enabled with default settings.
+        The function uses Find-VlcmImage to prompt the user for vLCM image selection and
+        Get-LcmSoftwareSpecification to retrieve the software specification object for
+        cluster creation.
 
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$dataCenterName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DataCenterName
     )
     Write-LogMessage -Type DEBUG -Message "Entered Add-Cluster function..."
 
@@ -1101,59 +1344,75 @@ Function Add-Cluster {
 
     # Look to see if the the datacenter exists in this vCenter.
     try {
-        $dataCenterFound = Get-Datacenter -Name $dataCenterName -Server $Script:VCenterName -ErrorAction:Ignore
+        $dataCenterFound = Get-Datacenter -Name $DataCenterName -Server $Script:VCenterName -ErrorAction:Ignore
     } catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$dataCenterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$dataCenterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed perform Get-Datacenter operation on `"$dataCenterName`" on vCenter on `"$Script:VCenterName`" : $_"
+        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed perform Get-Datacenter operation on `"$DataCenterName`" on vCenter on `"$Script:VCenterName`" : $_"
         throw "Deployment failed. Check logs for details."
     }
 
     # If the datacenter does not exist, exit.
     if (-not $dataCenterFound) {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "The datacenter `"$dataCenterName`" could not be found on vCenter `"$Script:VCenterName`". Exiting."
+        Write-LogMessage -Type ERROR -AppendNewLine -Message "The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:VCenterName`". Exiting."
         throw "Deployment failed. Check logs for details."
     }
 
     # Look to see if the cluster already exists.
     try {
-        $clusterFound = Get-Cluster -Name $clusterName -location $dataCenterName -ErrorAction:Stop -Server $Script:VCenterName
+        $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction:Stop -Server $Script:VCenterName
     } catch {
-            Write-LogMessage -Type INFO -Message "The cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`" is not present. Proceeding with creating a new cluster."
+        Write-LogMessage -Type INFO -Message "The cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`" is not present. Proceeding with creating a new cluster."
     }
     # If the cluster does not exist, create it.
     if (-not $clusterFound) {
         # Create the cluster.
         try {
-            New-Cluster -Name $clusterName -Location $dataCenterName -DrsEnabled:$true -HAEnabled:$true -Server $Script:VCenterName -ErrorAction Stop | Out-Null
-            $clusterFound = Get-Cluster -Name $clusterName -location $dataCenterName -ErrorAction:Stop -Server $Script:VCenterName
+            # Ask the user to select a vLCM image.  The function will throw an exception if the user cancels.
+            $softwareSpecificationId = Find-VlcmImage
+            Write-LogMessage -Type DEBUG -Message "Retrieving software specification object for ID: $softwareSpecificationId"
+            try {
+                $softwareSpecification = Get-LcmSoftwareSpecification -Id $softwareSpecificationId -ErrorAction Stop
+            }
+            catch {
+                Write-LogMessage -Type ERROR -Message "Failed to retrieve software specification with ID `"$softwareSpecificationId`": $_"
+                throw "Deployment failed. Check logs for details."
+            }
+            if ($null -eq $softwareSpecification) {
+                Write-LogMessage -Type ERROR -Message "Software specification with ID `"$softwareSpecificationId`" was not found."
+                throw "Deployment failed. Check logs for details."
+            }
+            Write-LogMessage -Type DEBUG -Message "Successfully retrieved software specification object."
+            New-Cluster -Name $ClusterName -Location $DataCenterName -DrsEnabled:$true -HAEnabled:$true -SoftwareSpecification $softwareSpecification -Server $Script:VCenterName -ErrorAction Stop | Out-Null
+            $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction:Stop -Server $Script:VCenterName
+
         } catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Failed to create cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+            Write-LogMessage -Type ERROR -Message "Failed to create cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Failed to create cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+            Write-LogMessage -Type ERROR -Message "Failed to create cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch {
-            Write-LogMessage -Type ERROR -Message "Failed create cluster cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`" : $_"
+            Write-LogMessage -Type ERROR -Message "Failed create cluster cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`" : $_"
             throw "Deployment failed. Check logs for details."
         }
     } else {
-        Write-LogMessage -Type WARNING -Message "The cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`" is already present."
+        Write-LogMessage -Type WARNING -Message "The cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`" is already present."
         return
     }
 
     if ($clusterFound) {
-        Write-LogMessage -Type INFO -Message "Successfully created the cluster `"$clusterName`" on datacenter `"$dataCenterName`" on `"$Script:VCenterName`"."
+        Write-LogMessage -Type INFO -Message "Successfully created the cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on `"$Script:VCenterName`"."
     } else {
-        Write-LogMessage -Type ERROR -Message "Something went wrong creating the cluster `"$clusterName`" on datacenter `"$dataCenterName`" on vCenter `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Something went wrong creating the cluster `"$ClusterName`" on datacenter `"$DataCenterName`" on vCenter `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1182,7 +1441,7 @@ Function Update-Cluster {
         - VM Monitoring: vmMonitoringOnly (monitors VM heartbeats but not application-level monitoring)
         - Admission Control: Disabled (prevents resource reservation from blocking VM startup in simple scenarios)
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         Specifies the name of the vSphere cluster to be configured. The cluster must already exist
         in the vCenter environment specified by the global $Script:VCenterName variable.
         This parameter is mandatory and must reference a valid, existing cluster.
@@ -1215,7 +1474,7 @@ Function Update-Cluster {
 
         Error Handling:
         - Comprehensive error handling for authorization, timeout, and general configuration failures
-        - Script execution terminates (exit 1) on any critical configuration errors
+        - Throws exceptions on any critical configuration errors
         - Detailed error logging with specific error context for troubleshooting
 
         Performance:
@@ -1230,7 +1489,7 @@ Function Update-Cluster {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Update-Cluster function..."
@@ -1243,14 +1502,15 @@ Function Update-Cluster {
     }
 
     try {
-        $cluster = Get-Cluster -Name $clusterName -Server $Script:VCenterName -ErrorAction Stop
+        $cluster = Get-Cluster -Name $ClusterName -Server $Script:VCenterName -ErrorAction Stop
         $clusterView = Get-View $cluster.Id
         if (-not $cluster) {
-            Write-LogMessage -Type ERROR -Message "The cluster `"$clusterName`" on datacenter `"$dataCenter`" in vCenter `"$Script:VCenterName`" was not found."
+            Write-LogMessage -Type ERROR -Message "The cluster `"$ClusterName`" on datacenter `"$dataCenter`" in vCenter `"$Script:VCenterName`" was not found."
             throw "Deployment failed. Check logs for details."
         } else {
-            # Enabling HA and DRS and admission control on HA
-            Set-Cluster -Cluster $clusterName -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -Confirm:$false -Server $Script:VCenterName -ErrorAction Stop | Out-Null
+            # Enabling HA and DRS and admission control on HA.
+
+            Set-Cluster -Cluster $ClusterName -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -Confirm:$false -Server $Script:VCenterName -ErrorAction Stop | Out-Null
 
             # This work-around is required because the HostMonitoring option is not exposed by Set-Cluster cmdlet.
             $cluster.ExtensionData.ConfigurationEx.DasConfig.HostMonitoring = 'enabled'
@@ -1263,7 +1523,8 @@ Function Update-Cluster {
             $configSpec.dasConfig.HostMonitoring = "enabled"
 
             # Set vmMonitoring
-            # Acceptable values - "vmMonitoringDisabled" "vmMonitoringOnly" "vmAndAppMonitoring"
+            # Acceptable values - "vmMonitoringDisabled" "vmMonitoringOnly" "vmAndAppMonitoring".
+
             $configSpec.dasConfig.VMMonitoring = "vmMonitoringOnly"
 
             # Disable the AdmissionControlEnabled option.
@@ -1272,22 +1533,22 @@ Function Update-Cluster {
             # Apply changes.
             $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
             if ($cluster.ExtensionData.ConfigurationEx.DasConfig.HostMonitoring -eq 'enabled') {
-                Write-LogMessage -Type INFO -Message "Successfully enabled HA monitoring settings on cluster `"$clusterName`" on vCenter `"$Script:VCenterName`"."
+                Write-LogMessage -Type INFO -Message "Successfully enabled HA monitoring settings on cluster `"$ClusterName`" on vCenter `"$Script:VCenterName`"."
             }
             if ($cluster.ExtensionData.ConfigurationEx.DasConfig.VmMonitoring -eq 'vmMonitoringOnly') {
-                Write-LogMessage -Type INFO -Message "Successfully configured VM monitoring settings on cluster `"$clusterName`" on vCenter `"$Script:VCenterName`"."
+                Write-LogMessage -Type INFO -Message "Successfully configured VM monitoring settings on cluster `"$ClusterName`" on vCenter `"$Script:VCenterName`"."
             }
         }
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$clusterName`" on `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$clusterName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to update settings on cluster `"$clusterName`" on `"$Script:VCenterName`" : $_"
+        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to update settings on cluster `"$ClusterName`" on `"$Script:VCenterName`" : $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1308,19 +1569,19 @@ Function Add-HostToCluster {
         The function uses the Force parameter to bypass confirmation prompts during host addition.
 
         .EXAMPLE
-        Add-HostToCluster -clusterName "cl02" -esxHostName "esx01.example.com" -esxCredential $esxCredential
+        Add-HostToCluster -ClusterName "cl02" -EsxHostName "esx01.example.com" -EsxCredential $EsxCredential
 
         This example adds the ESX host "esx01.example.com" to the cluster "cl02"
         in the vCenter "vcenter.example.com" using the provided ESX credentials.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         Specifies the name of the vSphere cluster where the ESX host will be added.
         The cluster must already exist in the specified vCenter.
 
-        .PARAMETER esxHostName
+        .PARAMETER EsxHostName
         Specifies the FQDN or IP address of the ESX host to be added to the cluster.
 
-        .PARAMETER esxCredential
+        .PARAMETER EsxCredential
         Specifies the PSCredential object containing the username and password for authenticating
         with the ESX host during the addition process.
 
@@ -1332,9 +1593,9 @@ Function Add-HostToCluster {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHostName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$esxCredential
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$EsxCredential,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-HostToCluster function..."
@@ -1348,39 +1609,41 @@ Function Add-HostToCluster {
 
     # Retrieve the target cluster object from vCenter.
     try {
-        $clusterObject = Get-Cluster -Name $clusterName -Server $Script:VCenterName -ErrorAction Stop
+        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:VCenterName -ErrorAction Stop
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$clusterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$clusterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Cluster operation for cluster `"$clusterName`" on vCenter `"$Script:VCenterName`" : $_"
+        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:VCenterName`" : $_"
         throw "Deployment failed. Check logs for details."
     }
 
     # Check if the host is already in the cluster.
     try {
-        $existingHost = $clusterObject | Get-VMHost -Name $esxHostName -Server $Script:VCenterName -ErrorAction SilentlyContinue
+        $existingHost = $clusterObject | Get-VMHost -Name $EsxHostName -Server $Script:VCenterName -ErrorAction SilentlyContinue
     } catch {
-        # If Get-VMHost fails, continue to add the host
+        # If Get-VMHost fails, continue to add the host.
+
         $existingHost = $null
     }
 
     if ($existingHost) {
-        Write-LogMessage -TYPE WARNING -Message "ESX Host `"$esxHostName`" is already in cluster `"$clusterName`" in vCenter `"$Script:VCenterName`" with state `"$($existingHost.ConnectionState)`"."
+        Write-LogMessage -TYPE WARNING -Message "ESX Host `"$EsxHostName`" is already in cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`" with state `"$($existingHost.ConnectionState)`"."
 
-        # If not connected, try to connect it
+        # If not connected, try to connect it.
+
         if ($existingHost.ConnectionState -ne "Connected") {
-            Write-LogMessage -TYPE INFO -Message "Setting ESX host `"$esxHostName`" to connected state..."
+            Write-LogMessage -TYPE INFO -Message "Setting ESX host `"$EsxHostName`" to connected state..."
             try {
-                Set-VMHost -VMHost $esxHostName -Server $Script:VCenterName -State Connected -Confirm:$false -ErrorAction Stop
-                Write-LogMessage -TYPE INFO -Message "Successfully set ESX host `"$esxHostName`" to connected state."
+                Set-VMHost -VMHost $EsxHostName -Server $Script:VCenterName -State Connected -Confirm:$false -ErrorAction Stop
+                Write-LogMessage -TYPE INFO -Message "Successfully set ESX host `"$EsxHostName`" to connected state."
             } catch {
-                Write-LogMessage -TYPE ERROR -Message "Failed to set ESX host `"$esxHostName`" to connected state in vCenter `"$Script:VCenterName`" : $_"
+                Write-LogMessage -TYPE ERROR -Message "Failed to set ESX host `"$EsxHostName`" to connected state in vCenter `"$Script:VCenterName`" : $_"
                 throw "Deployment failed. Check logs for details."
             }
         }
@@ -1388,64 +1651,67 @@ Function Add-HostToCluster {
     }
 
     # Attempt to add the ESX host to the specified cluster.
-    Write-LogMessage -TYPE INFO -Message "Attempting to add ESX host `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`"..."
+    Write-LogMessage -TYPE INFO -Message "Attempting to add ESX host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`"..."
     try {
-        Add-VMHost -Name $esxHostName -Credential $esxCredential -Location $clusterName -Force -Server $Script:VCenterName -ErrorAction Stop | Out-Null
-        Write-LogMessage -TYPE INFO -Message "ESX host `"$esxHostName`" added to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`"."
+        Add-VMHost -Name $EsxHostName -Credential $EsxCredential -Location $ClusterName -Force -Server $Script:VCenterName -ErrorAction Stop | Out-Null
+        Write-LogMessage -TYPE INFO -Message "ESX host `"$EsxHostName`" added to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`"."
     }
     catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -TYPE ERROR -Message "Cannot add host `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -TYPE ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -TYPE ERROR -Message "Cannot add host `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -TYPE ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        # Extract just the meaningful error message, removing PowerShell metadata
+        # Extract just the meaningful error message, removing PowerShell metadata.
+
         $errorMessage = $_.Exception.Message
 
-        # Check for common "already managed" scenario and make it friendlier
+        # Check for common "already managed" scenario and make it friendlier.
+
         if ($errorMessage -match "already being managed|already managed|already exists") {
-            Write-LogMessage -TYPE ERROR -Message "This host `"$esxHostName`" is already being managed by vCenter `"$Script:VCenterName`"."
+            Write-LogMessage -TYPE ERROR -Message "This host `"$EsxHostName`" is already being managed by vCenter `"$Script:VCenterName`"."
         } else {
-            # For other errors, show the clean error message without PowerShell metadata
-            Write-LogMessage -TYPE ERROR -Message "Failed to add host `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`": $errorMessage"
+            # For other errors, show the clean error message without PowerShell metadata.
+
+            Write-LogMessage -TYPE ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`": $errorMessage"
         }
         throw "Deployment failed. Check logs for details."
     }
 
     # Ensure the host is in connected state.
-    Write-LogMessage -TYPE INFO -Message "Setting host `"$esxHostName`" to connected state..."
+    Write-LogMessage -TYPE INFO -Message "Setting host `"$EsxHostName`" to connected state..."
     try {
         Start-Sleep 2
-        Set-VMHost -VMHost $esxHostName -Server $Script:VCenterName -State Connected -Confirm:$false -ErrorAction Stop | Out-Null
+        Set-VMHost -VMHost $EsxHostName -Server $Script:VCenterName -State Connected -Confirm:$false -ErrorAction Stop | Out-Null
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -TYPE ERROR -Message "Cannot set host `"$esxHostName`" to connected state in vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -TYPE ERROR -Message "Cannot set host `"$EsxHostName`" to connected state in vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -TYPE ERROR -Message "Cannot set host `"$esxHostName`" to connected state in vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -TYPE ERROR -Message "Cannot set host `"$EsxHostName`" to connected state in vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -TYPE ERROR -Message "Failed to set host `"$esxHostName`" to connected state in vCenter `"$Script:VCenterName`" : $_"
+        Write-LogMessage -TYPE ERROR -Message "Failed to set host `"$EsxHostName`" to connected state in vCenter `"$Script:VCenterName`" : $_"
         throw "Deployment failed. Check logs for details."
     }
 
     # Verify that the host was successfully added and is connected.
     try {
-        $verifyHost = Get-VMHost -Name $esxHostName -Server $Script:VCenterName -ErrorAction Stop
+        $verifyHost = Get-VMHost -Name $EsxHostName -Server $Script:VCenterName -ErrorAction Stop
     } catch {
-        Write-LogMessage -TYPE ERROR -Message "Failed to verify host `"$esxHostName`" in vCenter `"$Script:VCenterName`" : $_"
+        Write-LogMessage -TYPE ERROR -Message "Failed to verify host `"$EsxHostName`" in vCenter `"$Script:VCenterName`" : $_"
         throw "Deployment failed. Check logs for details."
     }
 
-    if ($verifyHost.Parent.Name -eq $clusterName -and $verifyHost.ConnectionState -eq "Connected") {
-        Write-LogMessage -TYPE INFO -Message "Successfully added host `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`"."
+    if ($verifyHost.Parent.Name -eq $ClusterName -and $verifyHost.ConnectionState -eq "Connected") {
+        Write-LogMessage -TYPE INFO -Message "Successfully added host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`"."
     }
     else {
-        Write-LogMessage -TYPE ERROR -Message "Failed to add `"$esxHostName`" to cluster `"$clusterName`" in vCenter `"$Script:VCenterName`". Current state: Parent=$($verifyHost.Parent.Name), ConnectionState=$($verifyHost.ConnectionState)"
+        Write-LogMessage -TYPE ERROR -Message "Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:VCenterName`". Current state: Parent=$($verifyHost.Parent.Name), ConnectionState=$($verifyHost.ConnectionState)"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1466,15 +1732,15 @@ Function Get-ClusterId {
         The function will terminate the script with an error if the cluster is not found or if any other error
         occurs during the lookup.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the vSphere cluster for which to retrieve the MoRef identifier. This parameter is mandatory.
 
         .EXAMPLE
-        Get-ClusterId -clusterName "compute-cluster-01"
+        Get-ClusterId -ClusterName "compute-cluster-01"
         Returns the MoRef identifier (e.g., "domain-c2045") for the cluster named "compute-cluster-01".
 
         .EXAMPLE
-        $clusterId = Get-ClusterId -clusterName "edge-cluster"
+        $clusterId = Get-ClusterId -ClusterName "edge-cluster"
         Stores the cluster MoRef ID in a variable for use with VCF PowerCLI 9 supervisor enablement cmdlets.
 
         .OUTPUTS
@@ -1490,7 +1756,7 @@ Function Get-ClusterId {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-ClusterId function..."
@@ -1503,25 +1769,27 @@ Function Get-ClusterId {
     }
 
     try {
-        # Get cluster object from vCenter
-        $clusterObject = Get-Cluster -Name $clusterName -Server $Script:VCenterName -ErrorAction Stop
+        # Get cluster object from vCenter.
+
+        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:VCenterName -ErrorAction Stop
 
         # Extract the MoRef ID (e.g., "domain-c2045") from ExtensionData
-        # VCF PowerCLI 9 API expects just the MoRef value, not the full type-prefixed ID
+        # VCF PowerCLI 9 API expects just the MoRef value, not the full type-prefixed ID.
+
         $clusterId = $clusterObject.ExtensionData.MoRef.Value
 
         return $clusterId
 
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$clusterName`" on `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$clusterName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get cluster id for `"$clusterName`" on `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to get cluster id for `"$ClusterName`" on `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1538,14 +1806,14 @@ Function Get-PortGroupId {
         terminate the script with an error if the port group is not found or if any other error occurs during the lookup.
 
         .EXAMPLE
-        Get-PortGroupId -portGroupName "management"
+        Get-PortGroupId -PortGroupName "management"
         Returns the unique identifier for the "management" port group.
 
         .EXAMPLE
-        $mgmtPortGroupId = Get-PortGroupId -portGroupName "tkgs-management"
+        $mgmtPortGroupId = Get-PortGroupId -PortGroupName "tkgs-management"
         Stores the port group ID in a variable for later use in supervisor cluster configuration.
 
-        .PARAMETER portGroupName
+        .PARAMETER PortGroupName
         The name of the VDS port group for which to retrieve the unique identifier. This parameter is mandatory.
 
         .NOTES
@@ -1556,7 +1824,7 @@ Function Get-PortGroupId {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$portGroupName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PortGroupName
     )
     Write-LogMessage -Type DEBUG -Message "Entered Get-PortGroupId function..."
 
@@ -1568,21 +1836,22 @@ Function Get-PortGroupId {
     }
 
     try {
-        # Get VDS Port group ID from name
-        $pgObject = Get-VDPortgroup -Name $portGroupName -Server $Script:VCenterName -ErrorAction Stop
+        # Get VDS Port group ID from name.
+
+        $pgObject = Get-VDPortgroup -Name $PortGroupName -Server $Script:VCenterName -ErrorAction Stop
         $pgId = $pgObject.ExtensionData.Key
         return $pgId
 
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$portGroupName`" on `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$portGroupName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get port group id for `"$portGroupName`" on `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to get port group id for `"$PortGroupName`" on `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1602,35 +1871,35 @@ Function Set-NewDatastore {
         the specified tag to the datastore for identification and management purposes.
 
         .EXAMPLE
-        Set-NewDatastore -datastoreName "MyDatastore" -esxHost "esx01.example.com" -diskCanonicalName "naa:600508b1001c1234567890abcdef" -tagName "Production"
+        Set-NewDatastore -DatastoreName "MyDatastore" -EsxHost "esx01.example.com" -DiskCanonicalName "naa:600508b1001c1234567890abcdef" -TagName "Production"
 
         This example creates a new VMFS datastore named "MyDatastore" on the ESX host "esx01.example.com" using the specified
         disk canonical name and applies the "Production" tag to the datastore.
 
         .EXAMPLE
-        Set-NewDatastore -datastoreName "vSAN-Datastore" -esxHost "esx02.example.com" -diskCanonicalName "naa:600508b1001c987654321fedcba" -tagName "vSAN-Storage" -totalWaitTime 180 -checkInterval 15
+        Set-NewDatastore -DatastoreName "vSAN-Datastore" -EsxHost "esx02.example.com" -DiskCanonicalName "naa:600508b1001c987654321fedcba" -TagName "vSAN-Storage" -TotalWaitTime 180 -CheckInterval 15
 
         This example creates a datastore with custom wait parameters (3 minutes total, checking every 15 seconds) and tags it
         appropriately for storage management.
 
-        .PARAMETER checkInterval
+        .PARAMETER CheckInterval
         The interval in seconds between checks when waiting for the datastore to become available. Default is 10 seconds.
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         The name of the datastore to be created. This name must be unique within the vCenter.
 
-        .PARAMETER diskCanonicalName
+        .PARAMETER DiskCanonicalName
         (Mandatory) The canonical name of the disk device to be used for creating the datastore. This should be in the format
         "naa:xxxxx" or similar device identifier visible to the ESX host.
 
-        .PARAMETER esxHost
+        .PARAMETER EsxHost
         The name or FQDN of the ESX host where the datastore will be created.
 
-        .PARAMETER tagName
+        .PARAMETER TagName
         The name of the tag to be applied to the datastore after creation or verification. This tag is used for identification
         and management purposes within vCenter.
 
-        .PARAMETER totalWaitTime
+        .PARAMETER TotalWaitTime
         The maximum time in seconds to wait for the datastore to become available after creation. Default is 120 seconds (2 minutes).
 
         .NOTES
@@ -1643,12 +1912,12 @@ Function Set-NewDatastore {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [Int]$checkInterval=10,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datastoreName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$diskCanonicalName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHost,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagName,
-        [Parameter(Mandatory = $false)] [Int]$totalWaitTime=120
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=10,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DiskCanonicalName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=120
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Set-NewDatastore function..."
@@ -1661,29 +1930,30 @@ Function Set-NewDatastore {
     }
 
     # Check to see if the datastore name is present on the vCenter in question.
-    $datastoreFoundOnVcenter = ((Get-Datastore -Name $datastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue).State -eq 'Available')
+    $datastoreFoundOnVcenter = ((Get-Datastore -Name $DatastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue).State -eq 'Available')
     $datastoreFoundOnEsx = $false  # Initialize variable to avoid undefined variable issues
 
     if ($datastoreFoundOnVcenter) {
         try {
-            $datastoreFoundOnEsx = Get-VMHost -Name $esxHost -Datastore $datastoreName -Server $Script:VCenterName -ErrorAction Stop
+            $datastoreFoundOnEsx = Get-VMHost -Name $EsxHost -Datastore $DatastoreName -Server $Script:VCenterName -ErrorAction Stop
         }
         catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$datastoreName`" on ESX host `"$esxHost`" due to authorization issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$datastoreName`" on ESX host `"$esxHost`" due to network/timeout issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch {
             # Check if this is specifically a "StorageResource not found" error (datastore exists on vCenter but not on this ESX host)
             if ($_.Exception.Message -match "Could not find StorageResource with name") {
-                Write-LogMessage -Type ERROR -Message "The datastore `"$datastoreName`" name is already being used by another server on vCenter `"$Script:VCenterName`". Exiting."
+                Write-LogMessage -Type ERROR -Message "The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:VCenterName`". Exiting."
                 throw "Deployment failed. Check logs for details."
             } else {
-                # Re-throw other errors as they are not related to datastore name conflicts
-                Write-LogMessage -Type ERROR -Message "Error checking datastore `"$datastoreName`" on ESX host `"$esxHost`": $_"
+                # Re-throw other errors as they are not related to datastore name conflicts.
+
+                Write-LogMessage -Type ERROR -Message "Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $_"
                 throw "Deployment failed. Check logs for details."
             }
         }
@@ -1691,24 +1961,27 @@ Function Set-NewDatastore {
 
     # If the datastore was found on the expected ESX server, we can return safely.
     if ($datastoreFoundOnEsx) {
-        Write-LogMessage -Type WARNING -Message "The datastore `"$datastoreName`" was already created on ESX host `"$esxHost`" attached to vCenter `"$Script:VCenterName`"."
-        # Still need to tag the existing datastore, so continue to tagging section
+        Write-LogMessage -Type WARNING -Message "The datastore `"$DatastoreName`" was already created on ESX host `"$EsxHost`" attached to vCenter `"$Script:VCenterName`"."
+        # Still need to tag the existing datastore, so continue to tagging section.
+
     } else {
         try {
-            # Create datastore on the specified ESX host
-            Write-LogMessage -Type INFO -Message "Attempting to create the new datastore `"$datastoreName`" on ESX host `"$esxHost`" attached to vCenter `"$Script:VCenterName`"..."
+            # Create datastore on the specified ESX host.
+
+            Write-LogMessage -Type INFO -Message "Attempting to create the new datastore `"$DatastoreName`" on ESX host `"$EsxHost`" attached to vCenter `"$Script:VCenterName`"..."
             # Create the datastore (hardcode for VMFS for now, but should be agnostic to the type of datastore)
-            New-Datastore -VMHost $esxHost -Name $datastoreName -Path $diskCanonicalName -Vmfs -Server $Script:VCenterName -ErrorAction Stop | Out-Null
-            # Wait for datastore to become available with progress indicator
+            New-Datastore -VMHost $EsxHost -Name $DatastoreName -Path $DiskCanonicalName -Vmfs -Server $Script:VCenterName -ErrorAction Stop | Out-Null
+            # Wait for datastore to become available with progress indicator.
+
 
             $elapsedTime = 0
-            $maxChecks = $totalWaitTime / $checkInterval
+            $maxChecks = $TotalWaitTime / $CheckInterval
             $currentCheck = 0
             $datastoreReady = $false
 
             do {
                 $currentCheck++
-                $datastoreState = (Get-Datastore -Name $datastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue).State
+                $datastoreState = (Get-Datastore -Name $DatastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue).State
 
                 if ($datastoreState -eq 'Available') {
                     Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
@@ -1718,45 +1991,46 @@ Function Set-NewDatastore {
                     $statusMessage = "Check $currentCheck of $maxChecks - State: $datastoreState"
                     $currentStatus = "Elapsed: $elapsedTime seconds"
                     Write-Progress -Activity "Waiting for Datastore to become Available" -Status $statusMessage -CurrentOperation $currentStatus
-                    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Waiting for datastore `"$datastoreName`" to settle into a connected state... $elapsedTime seconds elapsed)"
-                    Start-Sleep $checkInterval
-                    $elapsedTime += $checkInterval
+                    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Waiting for datastore `"$DatastoreName`" to settle into a connected state... $elapsedTime seconds elapsed)"
+                    Start-Sleep $CheckInterval
+                    $elapsedTime += $CheckInterval
                 }
-            } while ($elapsedTime -lt $totalWaitTime)
+            } while ($elapsedTime -lt $TotalWaitTime)
 
-            # Clear progress indicator and check final status
+            # Clear progress indicator and check final status.
+
             Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
 
             if (-not $datastoreReady) {
-                Write-LogMessage -Type ERROR -Message "Timeout waiting for datastore `"$datastoreName`" to become available after $totalWaitTime seconds."
+                Write-LogMessage -Type ERROR -Message "Timeout waiting for datastore `"$DatastoreName`" to become available after $TotalWaitTime seconds."
                 throw "Deployment failed. Check logs for details."
             }
-            Write-LogMessage -Type INFO -Message "The datastore `"$datastoreName`" was created successfully on ESX host `"$esxHost`" attached to vCenter `"$Script:VCenterName`"."
+            Write-LogMessage -Type INFO -Message "The datastore `"$DatastoreName`" was created successfully on ESX host `"$EsxHost`" attached to vCenter `"$Script:VCenterName`"."
         } catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Cannot create datastore `"$datastoreName`" on ESX host `"$esxHost`" due to authorization issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot create datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot create datastore `"$datastoreName`" on ESX host `"$esxHost`" due to network/timeout issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot create datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch {
-            Write-LogMessage -Type ERROR -Message "Failed to create datastore `"$datastoreName`" on ESX host `"$esxHost`": $_"
+            Write-LogMessage -Type ERROR -Message "Failed to create datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $_"
             throw "Deployment failed. Check logs for details."
         }
     }
     try {
-        $datastoreObject = Get-Datastore -Name $datastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue
+        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:VCenterName -ErrorAction SilentlyContinue
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get datastore `"$datastoreName`" on vCenter `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
     # Tag the datastore.
     try {
-        New-TagAssignment -Tag $tagName -Entity $datastoreObject -Server $Script:VCenterName -ErrorAction Stop | Out-Null
-        Write-LogMessage -Type INFO -Message "Successfully tagged datastore `"$datastoreName`" with tag `"$tagName`" on vCenter `"$Script:VCenterName`"."
+        New-TagAssignment -Tag $TagName -Entity $datastoreObject -Server $Script:VCenterName -ErrorAction Stop | Out-Null
+        Write-LogMessage -Type INFO -Message "Successfully tagged datastore `"$DatastoreName`" with tag `"$TagName`" on vCenter `"$Script:VCenterName`"."
     } catch {
-        Write-LogMessage -Type ERROR -Message "Error tagging datastore `"$datastoreName`" with tag `"$tagName`" on vCenter `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Error tagging datastore `"$DatastoreName`" with tag `"$TagName`" on vCenter `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1773,13 +2047,13 @@ Function Get-EsxUnformattedDisk {
         This is a helper function extracted from Get-EsxDatastoreInfo to follow the Single Responsibility Principle.
         It focuses solely on disk scanning logic without UI or validation concerns.
 
-        .PARAMETER vmHost
+        .PARAMETER VmHost
         The VMHost object representing the ESX host to scan. Must be a valid PowerCLI VMHost object.
 
-        .PARAMETER esxHostName
+        .PARAMETER EsxHostName
         The hostname or IP address of the ESX host (used for logging only).
 
-        .PARAMETER silence
+        .PARAMETER Silence
         Switch to suppress console output. When enabled, logs are written to file only.
 
         .OUTPUTS
@@ -1793,20 +2067,20 @@ Function Get-EsxUnformattedDisk {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] $vmHost,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHostName,
-        [Parameter(Mandatory = $false)] [Switch]$silence
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [Switch]$Silence,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VmHost
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-EsxUnformattedDisk function..."
-    Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Scanning for unformatted disks/LUNs on ESX host `"$esxHostName`"..."
+    Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Scanning for unformatted disks/LUNs on ESX host `"$EsxHostName`"..."
 
     try {
         # Get all SCSI LUNs of type disk.
-        $allDisks = $vmHost | Get-ScsiLun -LunType disk
+        $allDisks = $VmHost | Get-ScsiLun -LunType disk
 
         # Get all mounted datastores.
-        $mountedDatastores = Get-Datastore -VMHost $vmHost
+        $mountedDatastores = Get-Datastore -VMHost $VmHost
 
         # Get disk backing for mounted datastores.
         $usedDisks = @()
@@ -1829,7 +2103,7 @@ Function Get-EsxUnformattedDisk {
         $unformattedDiskArray = @()
 
         if ($unformattedDisks -and $unformattedDisks.Count -gt 0) {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Found $($unformattedDisks.Count) unformatted disk(s) on ESX host `"$esxHostName`"."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Found $($unformattedDisks.Count) unformatted disk(s) on ESX host `"$EsxHostName`"."
 
             $diskId = 1
             foreach ($disk in $unformattedDisks) {
@@ -1850,13 +2124,13 @@ Function Get-EsxUnformattedDisk {
             }
         }
         else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "No unformatted disks found on ESX host `"$esxHostName`"."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "No unformatted disks found on ESX host `"$EsxHostName`"."
         }
 
         return $unformattedDiskArray
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to scan for unformatted disks on ESX host `"$esxHostName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to scan for unformatted disks on ESX host `"$EsxHostName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -1877,16 +2151,19 @@ Function Get-EsxDatastoreHealth {
         This is a helper function extracted from Get-EsxDatastoreInfo to follow the Single Responsibility Principle.
         It focuses solely on datastore validation logic.
 
-        .PARAMETER vmHost
+        .PARAMETER VmHost
         The VMHost object representing the ESX host. Must be a valid PowerCLI VMHost object.
 
-        .PARAMETER esxHostName
+        .PARAMETER EsxHostName
         The hostname or IP address of the ESX host (used for logging only).
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         The name of the datastore to validate.
 
-        .PARAMETER silence
+        .PARAMETER FreeSpaceWarningThreshold
+        The free space percentage threshold below which a warning is generated. Default is 10.
+
+        .PARAMETER Silence
         Switch to suppress console output. When enabled, logs are written to file only.
 
         .OUTPUTS
@@ -1896,23 +2173,24 @@ Function Get-EsxDatastoreHealth {
         - IsHealthy, HealthIssues, ExtentCount, Extents
 
         .NOTES
-        - Health check thresholds: free space warning if < 10%
+        - Health check thresholds: free space warning if < FreeSpaceWarningThreshold (default 10%)
         - Returns IsMounted=$false if datastore not found
         - Includes extent information for VMFS datastores
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] $vmHost,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHostName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datastoreName,
-        [Parameter(Mandatory = $false)] [Switch]$silence
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 100)] [Int]$FreeSpaceWarningThreshold = 10,
+        [Parameter(Mandatory = $false)] [Switch]$Silence,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VmHost
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-EsxDatastoreHealth function..."
-    Write-LogMessage -Type DEBUG -SuppressOutputToScreen:$silence -Message "Validating mounted datastore `"$datastoreName`" on ESX host `"$esxHostName`"..."
+    Write-LogMessage -Type DEBUG -SuppressOutputToScreen:$Silence -Message "Validating mounted datastore `"$DatastoreName`" on ESX host `"$EsxHostName`"..."
 
     try {
-        $targetDatastore = Get-Datastore -Name $datastoreName -VMHost $vmHost -ErrorAction Stop
+        $targetDatastore = Get-Datastore -Name $DatastoreName -VMHost $VmHost -ErrorAction Stop
 
         # Get datastore details.
         $dsView = Get-View -Id $targetDatastore.ExtensionData.MoRef
@@ -1935,7 +2213,7 @@ Function Get-EsxDatastoreHealth {
 
         # Check capacity.
         $freeSpacePercent = [math]::Round(($targetDatastore.FreeSpaceGB / $targetDatastore.CapacityGB * 100), 2)
-        if ($freeSpacePercent -lt 10) {
+        if ($freeSpacePercent -lt $FreeSpaceWarningThreshold) {
             $healthIssues += "Low free space: $freeSpacePercent%"
         }
 
@@ -1967,26 +2245,26 @@ Function Get-EsxDatastoreHealth {
         # Log results with VMFS status.
         if ($isVmfs) {
             if ($isHealthy) {
-                Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Datastore `"$datastoreName`" is mounted, VMFS v$vmfsVersion formatted, and healthy on ESX host `"$esxHostName`"."
+                Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Datastore `"$DatastoreName`" is mounted, VMFS v$vmfsVersion formatted, and healthy on ESX host `"$EsxHostName`"."
                 Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "UUID: $datastoreUuid - Capacity: $($datastoreStatus.CapacityGB) GB - Free: $($datastoreStatus.FreeSpaceGB) GB ($($datastoreStatus.FreeSpacePercent)%)"
             }
             else {
-                Write-LogMessage -Type WARNING -SuppressOutputToScreen:$silence -Message "Datastore `"$datastoreName`" is mounted and VMFS v$vmfsVersion formatted but has issues on ESX host `"$esxHostName`": $($healthIssues -join ', ')"
+                Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "Datastore `"$DatastoreName`" is mounted and VMFS v$vmfsVersion formatted but has issues on ESX host `"$EsxHostName`": $($healthIssues -join ', ')"
             }
         }
         else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Datastore `"$datastoreName`" is mounted on ESX host `"$esxHostName`" but is NOT VMFS formatted (Type: $($targetDatastore.Type))."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Datastore `"$DatastoreName`" is mounted on ESX host `"$EsxHostName`" but is NOT VMFS formatted (Type: $($targetDatastore.Type))."
             if (-not $isHealthy) {
-                Write-LogMessage -Type WARNING -SuppressOutputToScreen:$silence -Message "Datastore has issues: $($healthIssues -join ', ')"
+                Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "Datastore has issues: $($healthIssues -join ', ')"
             }
         }
 
         return $datastoreStatus
     }
     catch {
-        Write-LogMessage -Type WARNING -SuppressOutputToScreen:$silence -Message "Datastore `"$datastoreName`" not found or not mounted on ESX host `"$esxHostName`": $_"
+        Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "Datastore `"$DatastoreName`" not found or not mounted on ESX host `"$EsxHostName`": $_"
         return [PSCustomObject]@{
-            Name = $datastoreName
+            Name = $DatastoreName
             IsMounted = $false
             IsVMFS = $false
             IsHealthy = $false
@@ -2007,39 +2285,41 @@ Function Select-EsxUnformattedDisk {
         This is a helper function extracted from Get-EsxDatastoreInfo to separate UI concerns
         from business logic, improving testability and maintainability.
 
-        .PARAMETER unformattedDisks
+        .PARAMETER UnformattedDisks
         Array of PSCustomObject representing unformatted disks (from Get-EsxUnformattedDisk).
         Each object must have: ID, CanonicalName, CapacityGB, Vendor, Model, UUID.
 
-        .PARAMETER silence
+        .PARAMETER Silence
         Switch to suppress non-interactive console output. When enabled, logs are written to file only.
 
         .OUTPUTS
-        String. Returns the CanonicalName of the selected disk, or $null if user skips selection.
+        String. Returns the CanonicalName of the selected disk.
+        Throws an exception if the user enters 'c' to cancel.
 
         .NOTES
         - Requires user interaction (Read-Host) - cannot be fully automated
-        - User can enter 0 to skip selection
+        - User must select a disk (1-N) or enter 'c' to cancel (which exits the module)
         - Validates input is numeric and within valid range
         - Displays disk details in formatted table for easy selection
+        - If user cancels, the function throws an exception to stop deployment
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Array]$unformattedDisks,
-        [Parameter(Mandatory = $false)] [Switch]$silence
+        [Parameter(Mandatory = $false)] [Switch]$Silence,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Array]$UnformattedDisks
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Select-EsxUnformattedDisk function..."
 
-    if ($unformattedDisks.Count -eq 0) {
-        Write-LogMessage -Type WARNING -SuppressOutputToScreen:$silence -Message "No unformatted disks available for selection."
+    if ($UnformattedDisks.Count -eq 0) {
+        Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "No unformatted disks available for selection."
         return $null
     }
 
-    Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Available unformatted disks:"
+    Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Available unformatted disks:"
 
     # Display table of unformatted disks.
-    $selectionTable = $unformattedDisks | Select-Object ID, CanonicalName, CapacityGB, Vendor, Model
+    $selectionTable = $UnformattedDisks | Select-Object ID, CanonicalName, CapacityGB, Vendor, Model
     $selectionTable | Format-Table -AutoSize | Out-String | Write-Host
 
     # Prompt user for selection.
@@ -2047,28 +2327,31 @@ Function Select-EsxUnformattedDisk {
     $selectedId = $null
 
     while (-not $validSelection) {
-        Write-Host "Enter the ID of the disk to select (1-$($unformattedDisks.Count)) or 0 to skip: " -NoNewline -ForegroundColor Yellow
+        Write-Host "Enter the ID of the disk to select (1-$($UnformattedDisks.Count)) or 'c' to cancel: " -NoNewline -ForegroundColor Yellow
         $userInput = Read-Host
 
-        if ($userInput -match '^\d+$') {
+        # Check for cancel option.
+        if ($userInput -eq 'c' -or $userInput -eq 'C') {
+            Write-Host ""
+            Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "User cancelled disk selection."
+            Write-LogMessage -Type ERROR -SuppressOutputToScreen:$Silence -Message "Disk selection cancelled. Cannot proceed with deployment."
+            throw "Deployment failed. Check logs for details."
+        }
+        elseif ($userInput -match '^\d+$') {
             $selectedId = [int]$userInput
 
-            if ($selectedId -eq 0) {
-                Write-LogMessage -Type WARNING -SuppressOutputToScreen:$silence -Message "No disk selected."
-                return $null
-            }
-            elseif ($selectedId -ge 1 -and $selectedId -le $unformattedDisks.Count) {
+            if ($selectedId -ge 1 -and $selectedId -le $UnformattedDisks.Count) {
                 Write-Host ""
-                $selectedDisk = $unformattedDisks | Where-Object { $_.ID -eq $selectedId }
-                Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Selected disk: $($selectedDisk.CanonicalName) - UUID: $($selectedDisk.UUID) - Capacity: $($selectedDisk.CapacityGB) GB"
+                $selectedDisk = $UnformattedDisks | Where-Object { $_.ID -eq $selectedId }
+                Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Selected disk: $($selectedDisk.CanonicalName) - UUID: $($selectedDisk.UUID) - Capacity: $($selectedDisk.CapacityGB) GB"
                 return $selectedDisk.CanonicalName
             }
             else {
-                Write-Host "Invalid selection. Please enter a number between 0 and $($unformattedDisks.Count)." -ForegroundColor Red
+                Write-Host "Invalid selection. Please enter a number between 1 and $($UnformattedDisks.Count), or 'c' to cancel." -ForegroundColor Red
             }
         }
         else {
-            Write-Host "Invalid input. Please enter a numeric value." -ForegroundColor Red
+            Write-Host "Invalid input. Please enter a number between 1 and $($UnformattedDisks.Count), or 'c' to cancel." -ForegroundColor Red
         }
     }
 }
@@ -2094,34 +2377,34 @@ Function Get-EsxDatastoreInfo {
         - Provides detailed capacity information for all discovered storage
         - Returns structured data for programmatic processing
 
-        .PARAMETER esxHostName
+        .PARAMETER EsxHostName
         The hostname or IP address of the ESX host to scan. This parameter is mandatory.
         Requires an active direct connection to the ESX host.
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         Optional. Name of a specific mounted datastore to validate.
         When specified, the function ONLY checks this specific datastore and skips unformatted disk scans.
         Performs health checks including mount status, VMFS formatting, accessibility, state, and free space validation.
 
-        .PARAMETER selectUnformattedDatastore
+        .PARAMETER SelectUnformattedDatastore
         Switch to enable interactive selection of an unformatted datastore.
         When enabled, displays a table of unformatted disks with ID, UUID, and capacity.
         User can select a disk by entering its ID.
         The selected disk UUID will be included in the return value.
-        This parameter is ignored if -datastoreName is specified.
+        This parameter is ignored if -DatastoreName is specified.
 
-        .PARAMETER silence
+        .PARAMETER Silence
         Switch to suppress all console output.
         When enabled, all log messages are written to the log file only (using -SuppressOutputToScreen).
         Useful for automation scenarios where console output should be minimized.
 
         .EXAMPLE
-        Get-EsxDatastoreInfo -esxHostName "esx01.example.com"
+        Get-EsxDatastoreInfo -EsxHostName "esx01.example.com"
 
         Scans the ESX host for all unformatted disks/LUNs.
 
         .EXAMPLE
-        Get-EsxDatastoreInfo -esxHostName "esx01.example.com" -datastoreName "datastore1"
+        Get-EsxDatastoreInfo -EsxHostName "esx01.example.com" -DatastoreName "datastore1"
 
         Validates that datastore "datastore1" is mounted and healthy on the specified host.
         Checks if it is VMFS formatted and reports the VMFS version if applicable.
@@ -2162,10 +2445,10 @@ Function Get-EsxDatastoreInfo {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHostName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$datastoreName,
-        [Parameter(Mandatory = $false)] [Switch]$selectUnformattedDatastore,
-        [Parameter(Mandatory = $false)] [Switch]$silence
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [Switch]$SelectUnformattedDatastore,
+        [Parameter(Mandatory = $false)] [Switch]$Silence
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-EsxDatastoreInfo function..."
@@ -2179,65 +2462,65 @@ Function Get-EsxDatastoreInfo {
 
     try {
         # If datastoreName is specified, only check that specific datastore.
-        if ($datastoreName) {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Checking for specific datastore `"$datastoreName`" only."
+        if ($DatastoreName) {
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Checking for specific datastore `"$DatastoreName`" only."
         }
         else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Starting datastore scan on ESX host `"$esxHostName`"..."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Starting datastore scan on ESX host `"$EsxHostName`"..."
         }
 
         # Get VMHost object from direct ESX connection.
         try {
-            $vmHost = Get-VMHost -Name $esxHostName -Server $esxHostName -ErrorAction Stop
+            $vmHost = Get-VMHost -Name $EsxHostName -Server $EsxHostName -ErrorAction Stop
         }
         catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$esxHostName`" due to authorization issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to authorization issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$esxHostName`" due to network/timeout issues: $_"
+            Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to network/timeout issues: $_"
             throw "Deployment failed. Check logs for details."
         }
         catch {
-            Write-LogMessage -Type ERROR -Message "Failed to get ESX host `"$esxHostName`": $_"
+            Write-LogMessage -Type ERROR -Message "Failed to get ESX host `"$EsxHostName`": $_"
             throw "Deployment failed. Check logs for details."
         }
 
         # Initialize result object.
         $result = [PSCustomObject]@{
-            EsxHost = $esxHostName
+            EsxHost = $EsxHostName
             UnformattedDisks = @()
             MountedDatastoreStatus = $null
             SelectedDatastoreUUID = $null
         }
 
         # Check for unformatted disks and LUNs (if not checking specific datastore).
-        if (-not $datastoreName) {
+        if (-not $DatastoreName) {
             # Delegate to Get-EsxUnformattedDisk helper function.
-            $result.UnformattedDisks = Get-EsxUnformattedDisk -vmHost $vmHost -esxHostName $esxHostName -silence:$silence
+            $result.UnformattedDisks = Get-EsxUnformattedDisk -vmHost $vmHost -esxHostName $EsxHostName -silence:$Silence
 
             # Interactive selection if requested.
-            if ($selectUnformattedDatastore) {
+            if ($SelectUnformattedDatastore) {
                 # Delegate to Select-EsxUnformattedDisk helper function.
-                $selectedCanonicalName = Select-EsxUnformattedDisk -unformattedDisks $result.UnformattedDisks -silence:$silence
+                $selectedCanonicalName = Select-EsxUnformattedDisk -unformattedDisks $result.UnformattedDisks -silence:$Silence
                 $result.SelectedDatastoreUUID = $selectedCanonicalName
             }
 
             # Log summary.
-            Write-LogMessage -Type INFO -SuppressOutputToScreen:$silence -Message "Datastore scan completed on ESX host `"$esxHostName`". Unformatted disks: $($result.UnformattedDisks.Count)"
+            Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Datastore scan completed on ESX host `"$EsxHostName`". Unformatted disks: $($result.UnformattedDisks.Count)"
         }
 
         # Check specific mounted datastore health if requested.
-        if ($datastoreName) {
+        if ($DatastoreName) {
             # Delegate to Get-EsxDatastoreHealth helper function.
-            $result.MountedDatastoreStatus = Get-EsxDatastoreHealth -vmHost $vmHost -esxHostName $esxHostName -datastoreName $datastoreName -silence:$silence
+            $result.MountedDatastoreStatus = Get-EsxDatastoreHealth -vmHost $vmHost -esxHostName $EsxHostName -datastoreName $DatastoreName -silence:$Silence
         }
 
         # Return the result object.
         return $result
     }
     catch {
-        Write-LogMessage -Type ERROR -SuppressOutputToScreen:$silence -Message "Failed to scan ESX host `"$esxHostName`": $_"
+        Write-LogMessage -Type ERROR -SuppressOutputToScreen:$Silence -Message "Failed to scan ESX host `"$EsxHostName`": $_"
         Write-LogMessage -Type EXCEPTION -Message $_.Exception.Message
         throw "Deployment failed. Check logs for details."
     }
@@ -2257,20 +2540,20 @@ Function Wait-SupervisorReady {
         including elapsed time, configuration status, and Kubernetes status. Returns $true on success
         or $false on timeout, allowing the calling function to handle cleanup and error processing.
 
-        .PARAMETER supervisorId
+        .PARAMETER SupervisorId
         The ID of the Supervisor to monitor. This parameter is mandatory.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the cluster where the Supervisor is deployed. Used for logging purposes.
 
-        .PARAMETER checkInterval
+        .PARAMETER CheckInterval
         The interval in seconds between status checks. Default is 10 seconds.
 
-        .PARAMETER totalWaitTime
+        .PARAMETER TotalWaitTime
         The maximum time in seconds to wait for the Supervisor to become ready. Default is 1800 seconds (30 minutes).
 
         .EXAMPLE
-        $success = Wait-SupervisorReady -supervisorId $supId -clusterName "MyCluster"
+        $success = Wait-SupervisorReady -SupervisorId $supId -ClusterName "MyCluster"
         if (-not $success) {
             # Handle timeout/failure
         }
@@ -2278,7 +2561,7 @@ Function Wait-SupervisorReady {
         Waits for the specified Supervisor to become ready and checks the result.
 
         .EXAMPLE
-        Wait-SupervisorReady -supervisorId $supId -clusterName "MyCluster" -checkInterval 15 -totalWaitTime 3600
+        Wait-SupervisorReady -SupervisorId $supId -ClusterName "MyCluster" -CheckInterval 15 -TotalWaitTime 3600
 
         Waits up to 1 hour, checking every 15 seconds.
 
@@ -2295,10 +2578,10 @@ Function Wait-SupervisorReady {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $false)] [Int]$checkInterval = 10,
-        [Parameter(Mandatory = $false)] [Int]$totalWaitTime = 1800
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 10,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime = 1800
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Wait-SupervisorReady function..."
@@ -2311,27 +2594,29 @@ Function Wait-SupervisorReady {
             $currentCheck++
 
             try {
-                $supervisorStatus = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $supervisorId
+                $supervisorStatus = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $SupervisorId
             }
             catch {
                 $errorMsg = $_.Exception.Message
 
-                # Check for common transient network/API errors
+                # Check for common transient network/API errors.
+
                 if ($errorMsg -match "An error occurred while sending the request|The operation has timed out") {
                     Write-LogMessage -Type DEBUG -Message "Transient API error during supervisor status check (attempt $currentCheck): $errorMsg"
 
-                    # Continue waiting if we haven't exceeded total wait time
-                    if ($elapsedTime -lt $totalWaitTime) {
+                    # Continue waiting if we haven't exceeded total wait time.
+
+                    if ($elapsedTime -lt $TotalWaitTime) {
                         $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: Waiting for API response..."
                         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status $statusMessage
-                        Start-Sleep $checkInterval
-                        $elapsedTime += $checkInterval
+                        Start-Sleep $CheckInterval
+                        $elapsedTime += $CheckInterval
                         continue
                     }
                     else {
                         # Timeout reached
                         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Timeout" -Completed
-                        Write-LogMessage -Type ERROR -Message "Timeout waiting for supervisor services API to respond on cluster `"$clusterName`" after $totalWaitTime seconds."
+                        Write-LogMessage -Type ERROR -Message "Timeout waiting for supervisor services API to respond on cluster `"$ClusterName`" after $TotalWaitTime seconds."
                         Write-LogMessage -Type ERROR -Message "The supervisor may still be initializing. Check vCenter UI for current status."
                         return [PSCustomObject]@{
                             Success = $false
@@ -2347,7 +2632,7 @@ Function Wait-SupervisorReady {
 
             if ((($supervisorStatus).ConfigStatus -eq "RUNNING") -and (($supervisorStatus).KubernetesStatus -eq "READY")) {
                 Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Complete" -Completed
-                Write-LogMessage -Type INFO -Message "Supervisor services on cluster `"$clusterName`" were successfully configured in $elapsedTime seconds."
+                Write-LogMessage -Type INFO -Message "Supervisor services on cluster `"$ClusterName`" were successfully configured in $elapsedTime seconds."
                 return [PSCustomObject]@{
                     Success = $true
                     ElapsedSeconds = $elapsedTime
@@ -2356,23 +2641,25 @@ Function Wait-SupervisorReady {
                 $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: $($supervisorStatus.ConfigStatus)"
                 $currentStatus = "Kubernetes Status: $($supervisorStatus.KubernetesStatus)"
                 Write-Progress -Activity "Waiting for Supervisor services to become available" -Status $statusMessage -CurrentOperation $currentStatus
-                Start-Sleep $checkInterval
-                $elapsedTime += $checkInterval
+                Start-Sleep $CheckInterval
+                $elapsedTime += $CheckInterval
             }
-        } while ($elapsedTime -lt $totalWaitTime)
+        } while ($elapsedTime -lt $TotalWaitTime)
 
-        # If we exit the loop without success, log timeout and clear progress
+        # If we exit the loop without success, log timeout and clear progress.
+
         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Timeout" -Completed
-        Write-LogMessage -Type ERROR -Message "Timeout waiting for supervisor services to become ready on cluster `"$clusterName`" after $totalWaitTime seconds ($elapsedTime seconds elapsed)."
+        Write-LogMessage -Type ERROR -Message "Timeout waiting for supervisor services to become ready on cluster `"$ClusterName`" after $TotalWaitTime seconds ($elapsedTime seconds elapsed)."
         return [PSCustomObject]@{
             Success = $false
             ElapsedSeconds = $elapsedTime
         }
     }
     catch {
-        # Log exception with context, then return failure with elapsed time
+        # Log exception with context, then return failure with elapsed time.
+
         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Error" -Completed
-        Write-LogMessage -Type ERROR -Message "Error checking supervisor services status on cluster `"$clusterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Error checking supervisor services status on cluster `"$ClusterName`": $_"
         Write-Host ""
         Write-LogMessage -Type ERROR -Message "This may indicate:"
         Write-LogMessage -Type ERROR -Message "  1. Network connectivity issues between the client and vCenter"
@@ -2386,7 +2673,9 @@ Function Wait-SupervisorReady {
         }
     }
 }
+
 Function Get-ManagementNetworkConfig {
+
     <#
         .SYNOPSIS
         Extracts and validates management network configuration from supervisor specification.
@@ -2453,7 +2742,9 @@ Function Get-ManagementNetworkConfig {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Get-WorkloadNetworkConfig {
+
     <#
         .SYNOPSIS
         Extracts and validates workload network configuration from supervisor specification.
@@ -2522,7 +2813,9 @@ Function Get-WorkloadNetworkConfig {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Get-FLBNetworkConfig {
+
     <#
         .SYNOPSIS
         Extracts Foundation Load Balancer network configuration.
@@ -2577,7 +2870,9 @@ Function Get-FLBNetworkConfig {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Get-LoadBalancerConfig {
+
     <#
         .SYNOPSIS
         Extracts Foundation Load Balancer configuration from supervisor specification.
@@ -2631,7 +2926,9 @@ Function Get-LoadBalancerConfig {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Get-SupervisorConfigurationFromJson {
+
     <#
         .SYNOPSIS
         Parses supervisor JSON configuration into a structured configuration object.
@@ -2707,7 +3004,9 @@ Function Get-SupervisorConfigurationFromJson {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Test-SupervisorConfiguration {
+
     <#
         .SYNOPSIS
         Validates supervisor configuration structure before deployment.
@@ -2719,7 +3018,7 @@ Function Test-SupervisorConfiguration {
         • Workload network configuration object exists
         • Foundation Load Balancer configuration object exists
         • Control plane configuration object exists
-        • Workload service count meets recommended minimum (16)
+        • Workload service count meets recommended minimum (configurable via MinimumServiceCount parameter, default 16)
 
         This function performs STRUCTURAL validation only. Value-level validation is handled by:
         • Test-JsonNullValues: Validates all properties have non-null values
@@ -2728,11 +3027,14 @@ Function Test-SupervisorConfiguration {
         .PARAMETER Config
         Complete supervisor configuration object from Get-SupervisorConfigurationFromJson.
 
+        .PARAMETER MinimumServiceCount
+        The minimum recommended service count for workload network. Default is 16.
+
         .OUTPUTS
         Boolean: $true if validation passes, $false if validation fails.
 
         .EXAMPLE
-        $config = Get-SupervisorConfigurationFromJson -JsonFilePath $infrastructureJson
+        $config = Get-SupervisorConfigurationFromJson -JsonFilePath $InfrastructureJson
         if (-not (Test-SupervisorConfiguration -Config $config)) {
             Write-LogMessage -Type ERROR -Message "Configuration validation failed"
             throw "Deployment failed. Check logs for details."
@@ -2749,7 +3051,8 @@ Function Test-SupervisorConfiguration {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCustomObject]$Config
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCustomObject]$Config,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$MinimumServiceCount = 16
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-SupervisorConfiguration function..."
@@ -2766,7 +3069,8 @@ Function Test-SupervisorConfiguration {
             $validationPassed = $false
         } else {
             Write-LogMessage -Type DEBUG -Message "  Validating management network..."
-            # Runtime validation passed - null value validation already performed by Test-JsonNullValues
+            # Runtime validation passed - null value validation already performed by Test-JsonNullValues.
+
         }
 
         # Validate workload network configuration.
@@ -2776,11 +3080,12 @@ Function Test-SupervisorConfiguration {
             $validationPassed = $false
         } else {
             Write-LogMessage -Type DEBUG -Message "  Validating workload network..."
-            # Runtime validation passed - null value validation already performed by Test-JsonNullValues
+            # Runtime validation passed - null value validation already performed by Test-JsonNullValues.
+
             # Note: Workload network IP count minimum (2) is validated in Test-JsonDeeperValidation
 
-            if ($Config.WorkloadNetwork.ServiceCount -lt 16) {
-                Write-LogMessage -Type WARNING -Message "    Workload network service count ($($Config.WorkloadNetwork.ServiceCount)) is low (recommended minimum 16)"
+            if ($Config.WorkloadNetwork.ServiceCount -lt $MinimumServiceCount) {
+                Write-LogMessage -Type WARNING -Message "    Workload network service count ($($Config.WorkloadNetwork.ServiceCount)) is low (recommended minimum $MinimumServiceCount)"
             }
         }
 
@@ -2791,7 +3096,8 @@ Function Test-SupervisorConfiguration {
             $validationPassed = $false
         } else {
             Write-LogMessage -Type DEBUG -Message "  Validating control plane..."
-            # Runtime validation passed - JSON validation already checked size and VM count
+            # Runtime validation passed - JSON validation already checked size and VM count.
+
         }
 
         # Validate load balancer configuration.
@@ -2828,7 +3134,9 @@ Function Test-SupervisorConfiguration {
         return $false
     }
 }
+
 Function New-SupervisorControlPlaneSpec {
+
     <#
         .SYNOPSIS
         Creates VCF PowerCLI 9 control plane specification for supervisor deployment.
@@ -2925,7 +3233,9 @@ Function New-SupervisorControlPlaneSpec {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function New-SupervisorWorkloadSpec {
+
     <#
         .SYNOPSIS
         Creates VCF PowerCLI 9 workload specification for supervisor deployment.
@@ -3016,7 +3326,9 @@ Function New-SupervisorWorkloadSpec {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function New-SupervisorLoadBalancerSpec {
+
     <#
         .SYNOPSIS
         Creates VCF PowerCLI 9 Foundation Load Balancer specification for supervisor deployment.
@@ -3051,11 +3363,11 @@ Function New-SupervisorLoadBalancerSpec {
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkPersona = "Management",
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$FlbWorkloadNetworkPersona = @("FRONTEND","WORKLOAD"),
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$LoadBalancerConfig,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorZone,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkPersona = "Management",
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$FlbWorkloadNetworkPersona = @("FRONTEND","WORKLOAD")
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorZone
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered New-SupervisorLoadBalancerSpec function..."
@@ -3154,7 +3466,9 @@ Function New-SupervisorLoadBalancerSpec {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Invoke-SupervisorCreation {
+
     <#
         .SYNOPSIS
         Invokes the VCF PowerCLI 9 API to create a supervisor on a compute cluster.
@@ -3210,7 +3524,7 @@ Function Invoke-SupervisorCreation {
         }
 
         .EXAMPLE
-        $result = Invoke-SupervisorCreation -ClusterId $clusterId -ClusterName $clusterName -SupervisorName $supervisorName -SupervisorSpec $spec -VcenterUser $vcUser -VcenterInsecurePassword $vcPass -InsecureTls
+        $result = Invoke-SupervisorCreation -ClusterId $ClusterId -ClusterName $ClusterName -SupervisorName $SupervisorName -SupervisorSpec $spec -VcenterUser $vcUser -VcenterInsecurePassword $vcPass -InsecureTls
         if ($result.IsExisting) {
             Write-Host "Using existing supervisor: $($result.SupervisorId)"
         }
@@ -3232,11 +3546,11 @@ Function Invoke-SupervisorCreation {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCustomObject]$SupervisorSpec,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$VcenterUser,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$VcenterInsecurePassword,
-        [Parameter(Mandatory = $false)] [Switch]$InsecureTls
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$VcenterUser
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Invoke-SupervisorCreation function..."
@@ -3256,20 +3570,20 @@ Function Invoke-SupervisorCreation {
         $SupervisorSpec.ToJson() | Set-Content $tempJsonPath
 
         # Step 2: Read back and convert to PSCustomObject for manipulation.
-        $json = Get-Content $tempJsonPath -Raw
-        $obj = $json | ConvertFrom-Json
+        $jsonFilePath = Get-Content $tempJsonPath -Raw
+        $obj = $jsonFilePath | ConvertFrom-Json
 
         # Step 3: Convert count properties to integers (VCF PowerCLI 9 requirement).
         # PowerShell may serialize numeric properties as strings, but VCF API requires integers.
         Convert-CountToInt $obj
 
         # Step 4: Serialize back to JSON with proper depth for complex nested objects.
-        $jsonPayload = $obj | ConvertTo-Json -Depth 10
+        $jsonFilePathPayload = $obj | ConvertTo-Json -Depth 10
 
         # Invoke the VCF PowerCLI 9 cmdlet to enable supervisor on cluster.
         $supervisorId = Invoke-EnableOnComputeClusterClusterSupervisors `
             -Cluster $ClusterId `
-            -vcenterNamespaceManagementSupervisorsEnableOnComputeClusterSpec $jsonPayload `
+            -vcenterNamespaceManagementSupervisorsEnableOnComputeClusterSpec $jsonFilePathPayload `
             -Confirm:$false `
             -ErrorAction Stop
 
@@ -3332,30 +3646,28 @@ Function Invoke-SupervisorCreation {
         else {
             # Unexpected error occurred - provide helpful context based on error type.
 
-            # Try to extract clean localized message from JSON error response
-            $cleanErrorMessage = $errorMessage
-            if ($errorMessage -match '"localized":"([^"]+)"') {
-                $cleanErrorMessage = $matches[1]
-            }
+            # Extract clean error message from JSON error response.
+            $cleanErrorMessage = Get-CleanErrorMessage -ErrorMessage $errorMessage
 
             # Check for zone association failure.
-            if ($errorMessage -match "Failed to associate zone|zone.*cluster") {
-                Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": Unable to associate Supervisor Zone with cluster."
-                Write-LogMessage -Type ERROR -Message "Error details: $cleanErrorMessage"
-                Write-LogMessage -Type ERROR -Message "This typically indicates:"
-                Write-LogMessage -Type ERROR -Message "  1. The specified zone does not exist or is misconfigured in vCenter."
-                Write-LogMessage -Type ERROR -Message "  2. The cluster is already associated with a different zone."
-                Write-LogMessage -Type ERROR -Message "  3. A previous supervisor enablement failed and left the system in an inconsistent state."
-                Write-LogMessage -Type ERROR -Message "Remediation: Remove stale zone to cluster mapping from vCenter and try again."
-            }
-            # Check for internal server errors with additional context.
-            elseif ($errorMessage -match "500.*Internal server error") {
-                Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": vCenter API internal server error."
-                Write-LogMessage -Type ERROR -Message "Error details: $cleanErrorMessage"
-            }
-            else {
-                # Generic unexpected error - show clean message.
-                Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": $cleanErrorMessage"
+            switch -Regex ($errorMessage) {
+                "Failed to associate zone|zone.*cluster" {
+                    Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": Unable to associate Supervisor Zone with cluster."
+                    Write-LogMessage -Type ERROR -Message "Error details: $cleanErrorMessage"
+                    Write-LogMessage -Type ERROR -Message "This typically indicates:"
+                    Write-LogMessage -Type ERROR -Message "  1. The specified zone does not exist or is misconfigured in vCenter."
+                    Write-LogMessage -Type ERROR -Message "  2. The cluster is already associated with a different zone."
+                    Write-LogMessage -Type ERROR -Message "  3. A previous supervisor enablement failed and left the system in an inconsistent state."
+                    Write-LogMessage -Type ERROR -Message "Remediation: Remove stale zone to cluster mapping from vCenter and try again."
+                }
+                "500.*Internal server error" {
+                    Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": vCenter API internal server error."
+                    Write-LogMessage -Type ERROR -Message "Error details: $cleanErrorMessage"
+                }
+                default {
+                    # Generic unexpected error - show clean message.
+                    Write-LogMessage -Type ERROR -Message "Failed to create supervisor on cluster `"$ClusterName`": $cleanErrorMessage"
+                }
             }
 
             # Return failure result with original error details for programmatic use.
@@ -3410,41 +3722,41 @@ Function Add-Supervisor {
         The monitoring phase uses configurable timeout and check interval parameters to provide flexible
         control over the waiting period.
 
-        .PARAMETER infrastructureJson
+        .PARAMETER InfrastructureJson
         Specifies the full path to the JSON configuration file containing supervisor deployment details.
         This file must contain all required supervisor specifications including vSphere zone, control plane
         configuration, network settings, and TKGS component specifications. The JSON structure must match
         the expected supervisor configuration schema.
 
-        .PARAMETER storagePolicyId
+        .PARAMETER StoragePolicyId
         Specifies the unique identifier of the vSphere storage policy to be used for the supervisor cluster.
         This storage policy will be applied to supervisor control plane VMs and determines the storage
         characteristics and placement rules for supervisor components.
 
-        .PARAMETER clusterId
+        .PARAMETER ClusterId
         Specifies the unique identifier of the vSphere cluster where the supervisor will be deployed.
         This cluster must be properly configured with distributed switches, storage policies, and
         appropriate resource allocations before supervisor deployment.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         Specifies the name of the vSphere cluster for logging and identification purposes.
         This parameter is used primarily for enhanced logging messages and progress tracking
         to provide clear context about which cluster is being configured.
 
-        .PARAMETER totalWaitTime
+        .PARAMETER TotalWaitTime
         Specifies the maximum time in seconds to wait for the supervisor to become ready.
         The function will monitor supervisor status and wait for both ConfigStatus (RUNNING)
         and KubernetesStatus (READY) before completion. Default value is 3600 seconds (1 hour).
         If the supervisor doesn't become ready within this time, the function will exit with error code 1.
 
-        .PARAMETER checkInterval
+        .PARAMETER CheckInterval
         Specifies the interval in seconds between status checks while waiting for the supervisor
-        to become ready. The function will check supervisor status every checkInterval seconds
+        to become ready. The function will check supervisor status every CheckInterval seconds
         during the monitoring phase. Default value is 15 seconds. Shorter intervals provide
         more frequent updates but may increase API load, while longer intervals reduce API calls
         but provide less frequent progress updates.
 
-        .PARAMETER insecureTls
+        .PARAMETER InsecureTls
         Optional switch parameter that bypasses SSL certificate validation for vCenter REST API connections.
         When specified, the function will pass this flag to Get-SupervisorId when checking for existing
         supervisors, which disables SSL certificate validation for all REST API calls to vCenter.
@@ -3458,7 +3770,7 @@ Function Add-Supervisor {
         making the connection vulnerable to man-in-the-middle attacks. Should NOT be used in production
         environments. When this flag is not specified, SSL certificate validation is enforced (secure by default).
 
-        .PARAMETER vCenterPasswordDecrypted
+        .PARAMETER VCenterPasswordDecrypted
         Optional parameter specifying the plain text vCenter password for authentication when
         retrieving existing supervisor IDs. This parameter is required when the function needs
         to handle cases where a supervisor already exists on the cluster and must return its ID.
@@ -3483,7 +3795,7 @@ Function Add-Supervisor {
         and check interval of 15 seconds. SSL certificate validation is enforced (secure default).
 
         .EXAMPLE
-        $supervisorId = Add-Supervisor -infrastructureJson $supervisorJson -storagePolicyId $policyId -clusterId $clusterId -clusterName $clusterName -vCenterPasswordDecrypted $vcPassword
+        $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $policyId -clusterId $ClusterId -clusterName $ClusterName -vCenterPasswordDecrypted $vcPassword
 
         Creates a supervisor and captures the returned supervisor ID for use in subsequent operations
         such as namespace creation or ArgoCD deployment. Includes vCenter password to handle cases where
@@ -3497,7 +3809,7 @@ Function Add-Supervisor {
         frequent status updates to reduce API load.
 
         .EXAMPLE
-        $supervisorId = Add-Supervisor -infrastructureJson $supervisorJson -storagePolicyId $policyId -clusterId $clusterId -clusterName $clusterName -vCenterPasswordDecrypted $password -insecureTls
+        $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $policyId -clusterId $ClusterId -clusterName $ClusterName -vCenterPasswordDecrypted $password -insecureTls
 
         Creates a supervisor in a lab environment with SSL certificate validation bypassed. The -insecureTls
         flag is passed to Get-SupervisorId when checking for existing supervisors. This is useful for
@@ -3561,31 +3873,32 @@ Function Add-Supervisor {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [Int]$checkInterval=15,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$flbMgmtNetworkPersona="Management",
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$flbWorkloadNetworkPersona=@("FRONTEND","WORKLOAD"),
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$infrastructureJson,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$insecureTls,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$storagePolicyId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$supervisorZone="zone-1",
-        [Parameter(Mandatory = $false)] [Int]$totalWaitTime=3600,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$vCenterPasswordDecrypted
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=15,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkPersona="Management",
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$FlbWorkloadNetworkPersona=@("FRONTEND","WORKLOAD"),
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$SupervisorZone="zone-1",
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$VCenterPasswordDecrypted
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-Supervisor function..."
 
-    Write-LogMessage -Type INFO -Message "Beginning Supervisor deployment to cluster `"$clusterName`"..."
+    Write-LogMessage -Type INFO -Message "Beginning Supervisor deployment to cluster `"$ClusterName`"..."
 
     try {
         # ========================================================================
-        # STEP 1: Parse Configuration from JSON
+        # STEP 1: Parse Configuration from JSON.
+
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Parsing configuration from JSON..." -PercentComplete 10
         Write-LogMessage -Type INFO -Message "[Step 1/5] Parsing supervisor configuration from JSON..."
-        $config = Get-SupervisorConfigurationFromJson -JsonFilePath $infrastructureJson
+        $config = Get-SupervisorConfigurationFromJson -JsonFilePath $InfrastructureJson
 
         # Validate configuration before proceeding.
         if (-not (Test-SupervisorConfiguration -Config $config)) {
@@ -3594,7 +3907,8 @@ Function Add-Supervisor {
         }
 
         # ========================================================================
-        # STEP 2: Build VCF PowerCLI 9 Specifications
+        # STEP 2: Build VCF PowerCLI 9 Specifications.
+
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Building Supervisor specifications..." -PercentComplete 30
         Write-LogMessage -Type INFO -Message "[Step 2/5] Building Supervisor specifications..."
@@ -3603,7 +3917,7 @@ Function Add-Supervisor {
         $controlPlaneParams = @{
             ControlPlaneConfig = $config.ControlPlane
             ManagementNetworkConfig = $config.ManagementNetwork
-            StoragePolicyId = $storagePolicyId
+            StoragePolicyId = $StoragePolicyId
         }
         $controlPlaneSpec = New-SupervisorControlPlaneSpec @controlPlaneParams
 
@@ -3616,15 +3930,16 @@ Function Add-Supervisor {
         # Build Foundation Load Balancer specification using parameter splatting.
         $loadBalancerParams = @{
             LoadBalancerConfig = $config.LoadBalancer
-            StoragePolicyId = $storagePolicyId
-            SupervisorZone = $supervisorZone
-            FlbMgmtNetworkPersona = $flbMgmtNetworkPersona
-            FlbWorkloadNetworkPersona = $flbWorkloadNetworkPersona
+            StoragePolicyId = $StoragePolicyId
+            SupervisorZone = $SupervisorZone
+            FlbMgmtNetworkPersona = $FlbMgmtNetworkPersona
+            FlbWorkloadNetworkPersona = $FlbWorkloadNetworkPersona
         }
         $edgeSpec = New-SupervisorLoadBalancerSpec @loadBalancerParams
 
         # ========================================================================
-        # STEP 3: Assemble Complete Supervisor Specification
+        # STEP 3: Assemble Complete Supervisor Specification.
+
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Assembling complete supervisor specification..." -PercentComplete 50
         Write-LogMessage -Type INFO -Message "[Step 3/5] Assembling complete supervisor specification..."
@@ -3640,42 +3955,39 @@ Function Add-Supervisor {
 
         # Build complete supervisor enablement specification.
         $supervisorSpec = Initialize-VcenterNamespaceManagementSupervisorsEnableOnComputeClusterSpec `
-            -Name $supervisorName `
-            -Zone $supervisorZone `
+            -Name $SupervisorName `
+            -Zone $SupervisorZone `
             -ControlPlane $controlPlaneSpec `
             -Workloads $workloadsSpec
 
         # ========================================================================
-        # STEP 4: Invoke Supervisor Creation
+        # STEP 4: Invoke Supervisor Creation.
+
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Invoking supervisor creation API..." -PercentComplete 70
         Write-LogMessage -Type INFO -Message "[Step 4/5] Invoking supervisor creation API..."
 
         # Invoke supervisor creation using parameter splatting.
         $creationParams = @{
-            ClusterId = $clusterId
-            ClusterName = $clusterName
-            SupervisorName = $supervisorName
+            ClusterId = $ClusterId
+            ClusterName = $ClusterName
+            SupervisorName = $SupervisorName
             SupervisorSpec = $supervisorSpec
             VcenterUser = $Script:VCenterUser
-            VcenterInsecurePassword = $vCenterPasswordDecrypted
-            InsecureTls = $insecureTls
+            VcenterInsecurePassword = $VCenterPasswordDecrypted
+            InsecureTls = $InsecureTls
         }
         $creationResult = Invoke-SupervisorCreation @creationParams
 
         # Check if creation was successful.
         if (-not $creationResult.Success) {
-            # Extract clean error message from the API response
+            # Extract clean error message from the API response.
+
             $errorMsg = $creationResult.ErrorMessage
 
-            # Try to extract localized message from JSON error response
-            if ($errorMsg -match '"localized":"([^"]+)"') {
-                $cleanError = $matches[1]
-                Write-LogMessage -Type ERROR -Message "Supervisor creation failed: $cleanError"
-            } else {
-                # Fallback to showing just the exception message without PowerShell metadata
-                Write-LogMessage -Type ERROR -Message "Supervisor creation failed: $errorMsg"
-            }
+            # Extract clean error message from JSON error response.
+            $cleanError = Get-CleanErrorMessage -ErrorMessage $errorMsg
+            Write-LogMessage -Type ERROR -Message "Supervisor creation failed: $cleanError"
             throw "Deployment failed. Check logs for details."
         }
 
@@ -3690,7 +4002,8 @@ Function Add-Supervisor {
         }
 
         # ========================================================================
-        # STEP 5: Monitor Supervisor Deployment Status
+        # STEP 5: Monitor Supervisor Deployment Status.
+
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Monitoring supervisor deployment status..." -PercentComplete 85
         Write-LogMessage -Type INFO -Message "[Step 5/5] Monitoring supervisor deployment status..."
@@ -3698,14 +4011,14 @@ Function Add-Supervisor {
         # Monitor supervisor readiness using parameter splatting.
         $waitParams = @{
             supervisorId = $supervisorId
-            clusterName = $clusterName
-            checkInterval = $checkInterval
-            totalWaitTime = $totalWaitTime
+            clusterName = $ClusterName
+            checkInterval = $CheckInterval
+            totalWaitTime = $TotalWaitTime
         }
         $waitResult = Wait-SupervisorReady @waitParams
 
         if (-not $waitResult.Success) {
-            Write-LogMessage -Type ERROR -Message "Supervisor did not become ready within $totalWaitTime seconds"
+            Write-LogMessage -Type ERROR -Message "Supervisor did not become ready within $TotalWaitTime seconds"
             throw "Deployment failed. Check logs for details."
         }
 
@@ -3717,11 +4030,13 @@ Function Add-Supervisor {
         return $supervisorId
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to create a Supervisor on cluster `"$clusterName`" attached to vCenter `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to create a Supervisor on cluster `"$ClusterName`" attached to vCenter `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Invoke-VDSCreation {
+
     <#
         .SYNOPSIS
         Creates a Virtual Distributed Switch or retrieves an existing one.
@@ -3798,7 +4113,9 @@ Function Invoke-VDSCreation {
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Add-HostToVDS {
+
     <#
         .SYNOPSIS
         Adds an ESX host to a Virtual Distributed Switch.
@@ -3814,7 +4131,7 @@ Function Add-HostToVDS {
         The name of the Virtual Distributed Switch.
 
         .EXAMPLE
-        Add-HostToVDS -Hostname $esxHost -VdsName "Production-VDS"
+        Add-HostToVDS -Hostname $EsxHost -VdsName "Production-VDS"
 
         .NOTES
         Error Handling: Helper function. Returns structured error object via Write-ErrorAndReturn
@@ -3841,7 +4158,9 @@ Function Add-HostToVDS {
         }
     }
 }
+
 Function New-VDSPortGroups {
+
     <#
         .SYNOPSIS
         Creates distributed port groups on a Virtual Distributed Switch.
@@ -3872,7 +4191,7 @@ Function New-VDSPortGroups {
 
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$PortGroups
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$portGroups
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered New-VDSPortGroups function..."
@@ -3884,7 +4203,7 @@ Function New-VDSPortGroups {
         throw "Deployment failed. Check logs for details."
     }
 
-    foreach ($portGroup in $PortGroups) {
+    foreach ($portGroup in $portGroups) {
         try {
             # Check if port group already exists before attempting to create it.
             $existingPortGroup = Get-VDPortgroup -Name $($portGroup.Name) -Server $Script:VCenterName -ErrorAction SilentlyContinue
@@ -3931,7 +4250,9 @@ Function New-VDSPortGroups {
         }
     }
 }
+
 Function Add-PhysicalAdaptersToVDS {
+
     <#
         .SYNOPSIS
         Assigns physical network adapters to Virtual Distributed Switch uplinks.
@@ -3958,7 +4279,7 @@ Function Add-PhysicalAdaptersToVDS {
             @{ Name = "vmnic0" },
             @{ Name = "vmnic1" }
         )
-        Add-PhysicalAdaptersToVDS -VdsObject $vds -VdsName "Production-VDS" -Hostname $esxHost -NicList $nicList
+        Add-PhysicalAdaptersToVDS -VdsObject $vds -VdsName "Production-VDS" -Hostname $EsxHost -NicList $nicList
 
         .NOTES
         Error Handling: Helper function. Returns structured error object via Write-ErrorAndReturn
@@ -3970,7 +4291,7 @@ Function Add-PhysicalAdaptersToVDS {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSObject]$VdsObject,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSObject]$Hostname,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$NicList
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$nicList
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-PhysicalAdaptersToVDS function..."
@@ -3995,7 +4316,7 @@ Function Add-PhysicalAdaptersToVDS {
         }
 
         # Add each physical adapter to the VDS.
-        foreach ($vmnicName in $NicList) {
+        foreach ($vmnicName in $nicList) {
             $nicName = $vmnicName.Name
 
             if ($assignedAdapters -contains $nicName) {
@@ -4045,40 +4366,40 @@ Function Set-VirtualDistributedSwitch {
         - Comprehensive error handling for authorization and timeout scenarios
         - Integration with vSphere datacenter and cluster objects
 
-        .PARAMETER vdsName
+        .PARAMETER VdsName
         The name of the Virtual Distributed Switch to create. This name must be unique within the
         datacenter and should follow standard vSphere naming conventions. The VDS name is used
         for identification and management operations throughout the vSphere environment.
 
-        .PARAMETER datacenterName
+        .PARAMETER DatacenterName
         The name of the vSphere datacenter where the VDS will be created. The datacenter must
         already exist and be accessible through the current vCenter connection. This parameter
         determines the scope and location of the distributed switch within the vSphere inventory.
 
-        .PARAMETER numUplinks
+        .PARAMETER NumUplinks
         The number of uplink ports to configure on the Virtual Distributed Switch. This determines
         how many physical network adapters can be connected to the switch for external connectivity.
         Common values are 2, 4, or 8 depending on the physical network configuration and redundancy
         requirements. Must be specified as a string value.
 
-        .PARAMETER vdsVersion
+        .PARAMETER VdsVersion
         The version of the Virtual Distributed Switch to create. This should match the vSphere
         version capabilities and feature requirements. Common versions include "6.0.0", "6.5.0",
         "6.6.0", "7.0.0", "8.0.0", and "9.0.0". Higher versions provide additional features but
         require compatible ESX host versions.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the vSphere cluster whose hosts will be added to the Virtual Distributed Switch.
         All hosts in the specified cluster will be configured to use the VDS for distributed
         network management. The cluster must exist and contain ESX hosts for the operation to succeed.
 
-        .PARAMETER portGroups
+        .PARAMETER PortGroups
         An array of objects containing port group configuration information. Each object should contain
         at minimum 'Name' and 'VlanId' properties. The function creates distributed port groups with
         128 static ports and the specified VLAN configuration. Port groups provide network segmentation
         and traffic isolation for virtual machines and infrastructure services.
 
-        .PARAMETER nicList
+        .PARAMETER NicList
         An array of objects containing physical network adapter information. Each object should contain
         a 'Name' property specifying the vmnic device name (e.g., "vmnic0", "vmnic1"). These adapters
         will be assigned to the VDS uplinks to provide physical network connectivity for the distributed
@@ -4109,13 +4430,13 @@ Function Set-VirtualDistributedSwitch {
 
         .EXAMPLE
         $vdsParams = @{
-            vdsName = $inputData.common.virtualDistributedSwitch.vdsName
-            datacenterName = $inputData.common.datacenterName
-            numUplinks = $inputData.common.virtualDistributedSwitch.numUplinks
-            vdsVersion = $inputData.common.virtualDistributedSwitch.vdsVersion
-            clusterName = $inputData.common.clusterName
-            portGroups = $inputData.common.virtualDistributedSwitch.portGroups
-            nicList = $inputData.common.virtualDistributedSwitch.nicList
+            vdsName = $InputData.common.virtualDistributedSwitch.vdsName
+            datacenterName = $InputData.common.datacenterName
+            numUplinks = $InputData.common.virtualDistributedSwitch.numUplinks
+            vdsVersion = $InputData.common.virtualDistributedSwitch.vdsVersion
+            clusterName = $InputData.common.clusterName
+            portGroups = $InputData.common.virtualDistributedSwitch.portGroups
+            nicList = $InputData.common.virtualDistributedSwitch.nicList
         }
         Set-VirtualDistributedSwitch @vdsParams
 
@@ -4177,13 +4498,13 @@ Function Set-VirtualDistributedSwitch {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datacenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatacenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$nicList,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$numUplinks,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$NumUplinks,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [System.Object[]]$portGroups,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vdsName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vdsVersion
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsVersion
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Set-VirtualDistributedSwitch function..."
@@ -4198,38 +4519,38 @@ Function Set-VirtualDistributedSwitch {
     try {
 
         # Get datacenter, cluster, and host objects.
-        $datacenterObject = Get-Datacenter -Name $datacenterName -Server $Script:VCenterName
-        $clusterObject = Get-Cluster -Name $clusterName -Server $Script:VCenterName
+        $datacenterObject = Get-Datacenter -Name $DatacenterName -Server $Script:VCenterName
+        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:VCenterName
         $hostname = Get-VMHost -Location $clusterObject -Server $Script:VCenterName
 
         # Create or retrieve VDS.
-        $vdsObject = Invoke-VDSCreation -VdsName $vdsName -DatacenterObject $datacenterObject -VdsVersion $vdsVersion -NumUplinks $numUplinks
+        $vdsObject = Invoke-VDSCreation -VdsName $VdsName -DatacenterObject $datacenterObject -VdsVersion $VdsVersion -NumUplinks $NumUplinks
 
         # Add ESX host to the VDS.
-        $result = Add-HostToVDS -Hostname $hostname -VdsName $vdsName
+        $result = Add-HostToVDS -Hostname $hostname -VdsName $VdsName
         if ($result -and -not $result.Success) {
             throw "Deployment failed. Check logs for details."
         }
 
         # Create distributed port groups.
-        $result = New-VDSPortGroups -VdsName $vdsName -PortGroups $portGroups
+        $result = New-VDSPortGroups -VdsName $VdsName -PortGroups $portGroups
         if ($result -and -not $result.Success) {
             throw "Deployment failed. Check logs for details."
         }
 
         # Add physical network adapters to VDS.
-        $result = Add-PhysicalAdaptersToVDS -VdsObject $vdsObject -VdsName $vdsName -Hostname $hostname -NicList $nicList
+        $result = Add-PhysicalAdaptersToVDS -VdsObject $vdsObject -VdsName $VdsName -Hostname $hostname -NicList $nicList
         if ($result -and -not $result.Success) {
             throw "Deployment failed. Check logs for details."
         }
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$vdsName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$VdsName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     } catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$vdsName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$VdsName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to configure distributed switch `"$vdsName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to configure distributed switch `"$VdsName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -4260,25 +4581,25 @@ Function Set-VMFSStoragePolicy {
 
         Creates a VMFS storage policy with fully initialized allocation rule and HighPerformance tag requirement, then applies it to "production-ds" datastore.
 
-        .PARAMETER policyName
+        .PARAMETER PolicyName
         The name of the storage policy to create. Must be a non-empty string.
 
-        .PARAMETER storageType
+        .PARAMETER StorageType
         The type of storage policy to create. Currently only supports "VMFS" storage type.
 
-        .PARAMETER ruleValue
+        .PARAMETER RuleValue
         The volume allocation rule to apply to the storage policy. Valid values are:
         - "Conserve space when possible" - Thin provisioning to save space
         - "Fully Initialized" - Thick provisioning with full initialization
         - "ReserveSpace" - Thick provisioning with space reservation
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         The name of the datastore to which the storage policy will be applied. Must be a non-empty string.
 
-        .PARAMETER tagName
+        .PARAMETER TagName
         The name of the vSphere tag that must be associated with storage for this policy. The tag must exist in the specified tag catalog.
 
-        .PARAMETER tagCatalog
+        .PARAMETER TagCatalog
         The name of the vSphere tag catalog/category that contains the required tag. The catalog must exist and contain the specified tag.
 
         .NOTES
@@ -4292,12 +4613,12 @@ Function Set-VMFSStoragePolicy {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datastoreName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$policyName,
-        [Parameter(Mandatory = $true)] [ValidateSet("Conserve space when possible", "Fully Initialized", "ReserveSpace")] [String]$ruleValue,
-        [Parameter(Mandatory = $true)] [ValidateSet("VMFS")] [String]$storageType,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagCatalog,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PolicyName,
+        [Parameter(Mandatory = $true)] [ValidateSet("Conserve space when possible", "Fully Initialized", "ReserveSpace")] [String]$RuleValue,
+        [Parameter(Mandatory = $true)] [ValidateSet("VMFS")] [String]$StorageType,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Set-VMFSStoragePolicy function..."
@@ -4310,41 +4631,41 @@ Function Set-VMFSStoragePolicy {
     }
 
     try {
-        $policy = Get-SpbmStoragePolicy -Name $policyName -Server $Script:VCenterName -ErrorAction SilentlyContinue
+        $policy = Get-SpbmStoragePolicy -Name $PolicyName -Server $Script:VCenterName -ErrorAction SilentlyContinue
         if($policy) {
-            Write-LogMessage -Type WARNING -Message "Storage policy `"$policyName`" using rule `"$ruleValue`" has already been created on vCenter `"$Script:VCenterName`"."
+            Write-LogMessage -Type WARNING -Message "Storage policy `"$PolicyName`" using rule `"$RuleValue`" has already been created on vCenter `"$Script:VCenterName`"."
             return
         }
 
         $volumeAllocationCapability = Get-SpbmCapability -Name "com.vmware.storage.volumeallocation.VolumeAllocationType" -Server $Script:VCenterName -ErrorAction Stop
-        $capabilityRule = New-SpbmRule -Capability $volumeAllocationCapability -Value $ruleValue -Server $Script:VCenterName -ErrorAction Stop
+        $capabilityRule = New-SpbmRule -Capability $volumeAllocationCapability -Value $RuleValue -Server $Script:VCenterName -ErrorAction Stop
 
-        $tagObject = Get-Tag -Name $tagName -Category $tagCatalog -Server $Script:VCenterName -ErrorAction Stop
+        $tagObject = Get-Tag -Name $TagName -Category $TagCatalog -Server $Script:VCenterName -ErrorAction Stop
         $tagRule = New-SpbmRule -AnyOfTags $tagObject -Server $Script:VCenterName -ErrorAction Stop
 
         # Create a rule set with the storage capability rule and tag rules.
         $ruleSet = New-SpbmRuleSet -AllOfRules $capabilityRule, $tagRule -ErrorAction Stop
 
         # Create policy
-        New-SpbmStoragePolicy -Name $policyName `
-        -Description "$storageType with $ruleValue'" `
+        New-SpbmStoragePolicy -Name $PolicyName `
+        -Description "$StorageType with $RuleValue'" `
         -AnyOfRuleSets $ruleSet -Server $Script:VCenterName | Out-Null
 
-        $policyCreated = Get-SpbmStoragePolicy -Name $policyName -Server $Script:VCenterName
+        $policyCreated = Get-SpbmStoragePolicy -Name $PolicyName -Server $Script:VCenterName
 
         if($policyCreated){
-            Write-LogMessage -Type INFO -Message "Successfully created storage policy `"$policyName`" using rule `"$ruleValue`"."
+            Write-LogMessage -Type INFO -Message "Successfully created storage policy `"$PolicyName`" using rule `"$RuleValue`"."
         }
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$policyName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$PolicyName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$policyName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$PolicyName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to create storage policy `"$policyName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to create storage policy `"$PolicyName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -4360,10 +4681,10 @@ Function Get-SupervisorControlPlaneIp {
         "SupervisorControlPlane" and extracts the primary IPv4 address from the VM's guest information.
 
         .EXAMPLE
-        Get-SupervisorControlPlaneIp -clusterName "MyCluster"
+        Get-SupervisorControlPlaneIp -ClusterName "MyCluster"
         Returns the IPv4 address of the Supervisor Control Plane VM in the "MyCluster" cluster.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the vSphere cluster where the Supervisor Control Plane VM is hosted.
         This parameter is optional but recommended for targeted searches.
 
@@ -4378,7 +4699,7 @@ Function Get-SupervisorControlPlaneIp {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$clusterName
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
     Write-LogMessage -Type DEBUG -Message "Entered Get-SupervisorControlPlaneIp function..."
 
@@ -4390,8 +4711,9 @@ Function Get-SupervisorControlPlaneIp {
     }
 
     try {
-        # Get all Supervisor Control Plane VMs in the given cluster
-        $controlPlaneVM = Get-Cluster -Name $clusterName -Server $Script:VCenterName |
+        # Get all Supervisor Control Plane VMs in the given cluster.
+
+        $controlPlaneVM = Get-Cluster -Name $ClusterName -Server $Script:VCenterName |
         Get-VM |
         Where-Object { $_.Name -like "*SupervisorControlPlane*" }  # Adjust pattern if needed
 
@@ -4402,15 +4724,15 @@ Function Get-SupervisorControlPlaneIp {
         return $ip
 
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$clusterName`" attached to vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$clusterName`" attached to vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Supervisor Control Plane VM details on cluster `"$clusterName`" attached to vCenter `"$Script:VCenterName`" could not be fetched: $_"
+        Write-LogMessage -Type ERROR -Message "Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:VCenterName`" could not be fetched: $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -4437,35 +4759,41 @@ Function Set-VCFContextCreate {
         - Checks for existing VCF contexts to prevent duplicates
         - Creates VCF CLI context with SSO authentication
         - Supports optional TLS certificate verification bypass
-        - Implements retry logic with configurable timeout (60 seconds)
+        - Implements retry logic with configurable timeout (default 60 seconds, configurable via TimeoutSeconds parameter)
         - Validates context creation through periodic availability checks
         - Automatically switches to the new context after creation
         - Comprehensive error handling with detailed logging
         - Handles context creation failures with automatic retry and cleanup
 
-        .PARAMETER contextName
+        .PARAMETER ContextName
         The name of the VCF context to create. This name will be used to identify and reference
         the context in subsequent VCF CLI operations. The context name should be unique and
         descriptive of the target environment.
 
-        .PARAMETER endpoint
+        .PARAMETER Endpoint
         The IP address or FQDN of the Supervisor Control Plane VM. This is the endpoint that
         the VCF CLI will use to communicate with the Kubernetes API server running on the
         Supervisor Control Plane. Typically obtained from Get-SupervisorControlPlaneIp function.
 
-        .PARAMETER ssoUsername
+        .PARAMETER SsoUsername
         The SSO username for authentication with the Supervisor Control Plane. This should be
         a valid vCenter SSO user account that has appropriate permissions to access the
         Supervisor Control Plane and manage Kubernetes resources.
 
-        .PARAMETER insecureTls
+        .PARAMETER InsecureTls
         Optional switch parameter that bypasses TLS certificate verification when connecting
         to the Supervisor Control Plane. Use this parameter when working with self-signed
         certificates or in development/testing environments where certificate validation
         may cause connection issues.
 
+        .PARAMETER TimeoutSeconds
+        The maximum time in seconds to wait for VCF context creation and validation. Default is 60.
+
+        .PARAMETER CheckIntervalSeconds
+        The interval in seconds between checks when waiting for VCF context to be available. Default is 5.
+
         .EXAMPLE
-        Set-VCFContextCreate -contextName "prod-supervisor" -endpoint "192.168.1.100" -ssoUsername "administrator@vsphere.local"
+        Set-VCFContextCreate -ContextName "prod-supervisor" -Endpoint "192.168.1.100" -SsoUsername "administrator@vsphere.local"
 
         Creates a VCF context named "prod-supervisor" connecting to the Supervisor Control Plane
         at IP address 192.168.1.100 using the administrator@vsphere.local SSO account. The function
@@ -4473,14 +4801,14 @@ Function Set-VCFContextCreate {
         context creation with retry logic before switching to it.
 
         .EXAMPLE
-        Set-VCFContextCreate -contextName "dev-supervisor" -endpoint "supervisor.dev.local" -ssoUsername "devuser@vsphere.local" -insecureTls
+        Set-VCFContextCreate -ContextName "dev-supervisor" -Endpoint "supervisor.dev.local" -SsoUsername "devuser@vsphere.local" -InsecureTls
 
         Creates a VCF context named "dev-supervisor" connecting to supervisor.dev.local with
         TLS certificate verification bypassed, useful for development environments. Includes
         context existence checking and retry logic with timeout handling.
 
         .EXAMPLE
-        Set-VCFContextCreate -contextName $contextName -endpoint $supervisorControlPlaneVmIp -ssoUsername $Script:VCenterUser -insecureTls
+        Set-VCFContextCreate -ContextName $ContextName -Endpoint $supervisorControlPlaneVmIp -SsoUsername $Script:VCenterUser -InsecureTls
 
         Creates a VCF context using variables, typically called during automated deployment
         scenarios where the context name, endpoint, and username are determined dynamically.
@@ -4494,7 +4822,7 @@ Function Set-VCFContextCreate {
         - Context information is stored by the VCF CLI tool for future use
         - This function is typically called before deploying ArgoCD instances or other Kubernetes resources
         - Implements context existence checking to prevent duplicate context creation
-        - Uses retry logic with 60-second timeout and 5-second intervals for context validation
+        - Uses retry logic with configurable timeout (default 60 seconds) and check interval (default 5 seconds) for context validation
         - Automatically deletes and recreates contexts if initial creation fails during validation
         - Constructs full context name using global $argocdNamespace variable for validation
         - Creates temporary JSON files for context list operations and cleans them up automatically
@@ -4506,23 +4834,26 @@ Function Set-VCFContextCreate {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$contextName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$endpoint,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ssoUsername,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$insecureTls
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckIntervalSeconds = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContextName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Endpoint,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SsoUsername,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TimeoutSeconds = 60
     )
     Write-LogMessage -Type DEBUG -Message "Entered Set-VCFContextCreate function..."
 
     try {
-        # Step 1: Create VCF context with SSO authentication
+        # Step 1: Create VCF context with SSO authentication.
+
         $createArgs = @(
-            "context", "create", $contextName,
-            "--endpoint", $endpoint,
-            "--username", $ssoUsername
+            "context", "create", $ContextName,
+            "--endpoint", $Endpoint,
+            "--username", $SsoUsername
         )
 
         # Add the insecure tls flag if the parameter is passed.
-        if ($insecureTls) {
+        if ($InsecureTls) {
             $createArgs += "--insecure-skip-tls-verify"
         }
 
@@ -4531,41 +4862,41 @@ Function Set-VCFContextCreate {
 
         # List VCF contexts and store the JSON object in the temporary data file.
         & $Script:VcfCmd context list -o json | Out-File -FilePath $temporaryDataFilePath
-        $JsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
+        $jsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
 
         # Remove the temporary data file.
         Remove-Item -Path $temporaryDataFilePath
 
         # Check if the VCF context already exists.
-        if ($JsonObject | Where-Object { $_.name -eq $contextName }) {
-            Write-LogMessage -Type WARNING -Message "VCF context `"$contextName`" already exists."
+        if ($jsonObject | Where-Object { $_.name -eq $ContextName }) {
+            Write-LogMessage -Type WARNING -Message "VCF context `"$ContextName`" already exists."
             return
         }
-        Write-LogMessage -Type INFO "Creating VCF context `"$contextName`" with SSO authentication..."
+        Write-LogMessage -Type INFO "Creating VCF context `"$ContextName`" with SSO authentication..."
         & $Script:VcfCmd $createArgs
 
         # Create a variable to store the VCF context name.
-        $vksNS = $contextName+":"+$argocdNamespace
+        $vksNS = $ContextName+":"+$argocdNamespace
 
          # Check if the VCF context was created successfully with timeout.
-        $timeoutSeconds = 60
-        $checkInterval = 5
         $elapsedTime = 0
         $contextFound = $false
 
-        Write-LogMessage -Type INFO -Message "Waiting for VCF context `"$contextName`" to be available (timeout: $timeoutSeconds seconds)..."
+        Write-LogMessage -Type INFO -Message "Waiting for VCF context `"$ContextName`" to be available (timeout: $TimeoutSeconds seconds)..."
 
-        while ($elapsedTime -lt $timeoutSeconds -and -not $contextFound) {
-            # Get fresh context list
+        while ($elapsedTime -lt $TimeoutSeconds -and -not $contextFound) {
+            # Get fresh context list.
+
             & $Script:VcfCmd context list -o json | Out-File -FilePath $temporaryDataFilePath
-            $JsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
+            $jsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
             Remove-Item -Path $temporaryDataFilePath
 
-            # Check if the context exists
-            foreach ($ns in $JsonObject) {
+            # Check if the context exists.
+
+            foreach ($ns in $jsonObject) {
                 Write-LogMessage -Type INFO -suppressOutputToScreen -Message "Discovered name space is `"$ns`"."
                 if ($($ns.name) -eq $vksNS) {
-                    Write-LogMessage -Type INFO -Message "VCF context `"$contextName`" created successfully."
+                    Write-LogMessage -Type INFO -Message "VCF context `"$ContextName`" created successfully."
                     $contextFound = $true
                     break
                 }
@@ -4573,22 +4904,23 @@ Function Set-VCFContextCreate {
 
             # If the context is not found, delete the context and create a new one.
             if (-not $contextFound) {
-                & $Script:VcfCmd context delete $contextName -y
-                Write-LogMessage -Type INFO -Message "VCF context not found yet, waiting $checkInterval before trying again... (elapsed: $elapsedTime seconds)"
-                Start-Sleep -Seconds $checkInterval
+                & $Script:VcfCmd context delete $ContextName -y
+                Write-LogMessage -Type INFO -Message "VCF context not found yet, waiting $CheckIntervalSeconds before trying again... (elapsed: $elapsedTime seconds)"
+                Start-Sleep -Seconds $CheckIntervalSeconds
                 & $Script:VcfCmd $createArgs | Out-Null
-                $elapsedTime += $checkInterval
+                $elapsedTime += $CheckIntervalSeconds
             }
         }
 
         if (-not $contextFound) {
-            Write-LogMessage -Type ERROR -Message "VCF context `"$contextName`" creation failed - timeout reached after $timeoutSeconds seconds."
+            Write-LogMessage -Type ERROR -Message "VCF context `"$ContextName`" creation failed - timeout reached after $TimeoutSeconds seconds."
             throw "Deployment failed. Check logs for details."
         }
 
-        # Step 2: Use the context
-        Write-LogMessage -Type INFO "Switching to VCF context `"$contextName`"..."
-        & $Script:VcfCmd context use $contextName
+        # Step 2: Use the context.
+
+        Write-LogMessage -Type INFO "Switching to VCF context `"$ContextName`"..."
+        & $Script:VcfCmd context use $ContextName
         if ($LASTEXITCODE -ne 0) {
             return Write-ErrorAndReturn -ErrorMessage "Failed to switch to VCF context" -ErrorCode "ERR_VCF_CONTEXT"
         }
@@ -4597,6 +4929,287 @@ Function Set-VCFContextCreate {
        Write-LogMessage -Type ERROR -Message "Supervisor Control Plane VM details could not be fetched: $_"
             throw "Deployment failed. Check logs for details."
     }
+}
+Function Test-WebhookServiceReady {
+
+    <#
+        .SYNOPSIS
+        Checks if the ArgoCD operator webhook service is ready with active endpoints.
+
+        .DESCRIPTION
+        The Test-WebhookServiceReady function checks if the webhook service exists and has
+        active endpoints (pods backing it). This is used to verify the webhook service
+        is ready before attempting to create ArgoCD instances.
+
+        .PARAMETER ServiceNamespace
+        The Kubernetes namespace where the webhook service is deployed.
+
+        .PARAMETER ServiceName
+        The name of the webhook service. Defaults to "argocd-service-webhook-service".
+
+        .OUTPUTS
+        System.Boolean
+        Returns $true if the webhook service exists and has active endpoints, $false otherwise.
+
+        .NOTES
+        This function uses kubectl to query the service and endpoints. Errors are caught
+        and logged at DEBUG level, returning $false to allow retry logic.
+
+    #>
+
+    Param(
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServiceNamespace,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServiceName = "argocd-service-webhook-service"
+    )
+
+    try {
+        # Check if the webhook service exists.
+        $webhookService = & $Script:KubectlCmd get service $ServiceName -n $ServiceNamespace -o json 2>$null | ConvertFrom-Json
+
+        if (-not $webhookService) {
+            return $false
+        }
+
+        # Service exists, now check if it has endpoints (pods backing it).
+        $webhookEndpoints = & $Script:KubectlCmd get endpoints $ServiceName -n $ServiceNamespace -o json 2>$null | ConvertFrom-Json
+
+        if ($webhookEndpoints.subsets.addresses.Count -gt 0) {
+            Write-LogMessage -Type INFO -Message "ArgoCD operator webhook service is ready with $($webhookEndpoints.subsets.addresses.Count) endpoint(s)."
+            return $true
+        }
+
+        return $false
+    }
+    catch {
+        Write-LogMessage -Type DEBUG -Message "Error checking webhook service: $($_.Exception.Message). Continuing to wait..."
+        return $false
+    }
+}
+Function Wait-WebhookServiceReady {
+
+    <#
+        .SYNOPSIS
+        Waits for the ArgoCD operator webhook service to become ready.
+
+        .DESCRIPTION
+        The Wait-WebhookServiceReady function polls the webhook service until it becomes
+        ready with active endpoints, or until a timeout is reached. This function provides
+        diagnostic information if the timeout is reached.
+
+        .PARAMETER ServiceNamespace
+        The Kubernetes namespace where the webhook service is deployed.
+
+        .PARAMETER ServiceName
+        The name of the webhook service. Defaults to "argocd-service-webhook-service".
+
+        .PARAMETER CheckInterval
+        Interval between webhook service availability checks, in seconds. Defaults to 5 seconds.
+
+        .PARAMETER TimeoutSeconds
+        Maximum time to wait for webhook service readiness, in seconds. Defaults to 180 seconds.
+
+        .OUTPUTS
+        PSCustomObject
+        Returns an object with Success property indicating if the webhook service became ready.
+
+        .NOTES
+        This function will return an error result if the timeout is reached, including
+        diagnostic information about pods and namespace status.
+
+    #>
+
+    Param(
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServiceName = "argocd-service-webhook-service",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServiceNamespace,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TimeoutSeconds = 180
+    )
+
+    Write-LogMessage -Type INFO -Message "Waiting for ArgoCD operator webhook service to be ready (timeout: $TimeoutSeconds seconds)..."
+
+    $elapsedTime = 0
+    $webhookReady = $false
+
+    do {
+        $webhookReady = Test-WebhookServiceReady -ServiceNamespace $ServiceNamespace -ServiceName $ServiceName
+
+        if (-not $webhookReady) {
+            Write-LogMessage -Type DEBUG -Message "Webhook service not ready yet. Waiting..."
+            Start-Sleep $CheckInterval
+            $elapsedTime += $CheckInterval
+        }
+
+        # Timeout check.
+        if ($elapsedTime -ge $TimeoutSeconds -and -not $webhookReady) {
+            Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD operator webhook service after $TimeoutSeconds seconds."
+            Write-LogMessage -Type ERROR -Message "The webhook service may not be properly installed in namespace `"$ServiceNamespace`"."
+
+            # Provide diagnostic information.
+            Write-LogMessage -Type INFO -Message "Diagnostic: Checking pods in operator namespace `"$ServiceNamespace`"..."
+            $operatorPods = & $Script:KubectlCmd get pods -n $ServiceNamespace -o json 2>$null | ConvertFrom-Json
+            if ($operatorPods.items.Count -gt 0) {
+                Write-LogMessage -Type INFO -Message "Found $($operatorPods.items.Count) pod(s) in namespace `"$ServiceNamespace`":"
+                foreach ($pod in $operatorPods.items) {
+                    Write-LogMessage -Type INFO -Message "  - Pod: $($pod.metadata.name), Phase: $($pod.status.phase)"
+                }
+            }
+            else {
+                Write-LogMessage -Type ERROR -Message "No pods found in namespace `"$ServiceNamespace`". The operator may not have been installed successfully."
+            }
+
+            # Check if the namespace itself exists.
+            Write-LogMessage -Type INFO -Message "Diagnostic: Verifying namespace `"$ServiceNamespace`" exists..."
+            $namespaceCheck = & $Script:KubectlCmd get namespace $ServiceNamespace -o json 2>$null | ConvertFrom-Json
+            if (-not $namespaceCheck) {
+                Write-LogMessage -Type ERROR -Message "Namespace `"$ServiceNamespace`" does not exist. The ArgoCD operator installation failed."
+            }
+            else {
+                Write-LogMessage -Type INFO -Message "Namespace `"$ServiceNamespace`" exists."
+            }
+
+            return Write-ErrorAndReturn -ErrorMessage "ArgoCD operator webhook service not ready after $TimeoutSeconds seconds" -ErrorCode "ERR_WEBHOOK_TIMEOUT"
+        }
+
+    } while (-not $webhookReady)
+
+    return @{
+        Success = $true
+        ErrorMessage = $null
+        ErrorCode = $null
+    }
+}
+Function Get-PodReadinessStatus {
+
+    <#
+        .SYNOPSIS
+        Retrieves the readiness status of pods in a Kubernetes namespace.
+
+        .DESCRIPTION
+        The Get-PodReadinessStatus function queries kubectl to get pod status information
+        and returns a structured object with total pod count, ready pod count, and readiness
+        status. This function is used to monitor pod deployment progress.
+
+        .PARAMETER Namespace
+        The Kubernetes namespace to query for pods.
+
+        .OUTPUTS
+        PSCustomObject
+        Returns an object with the following properties:
+        - TotalPods: Total number of pods in the namespace
+        - ReadyPods: Number of pods in Running or Succeeded state
+        - AllReady: Boolean indicating if all pods are ready
+        - ReadyPodNames: Array of names of ready pods
+
+        .NOTES
+        Pods are considered ready if their phase is "Running" or "Succeeded".
+
+    #>
+
+    Param(
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Namespace
+    )
+
+    # Get pod status directly without file I/O.
+    $jsonOutput = & $Script:KubectlCmd get pods -n $Namespace -o json | ConvertFrom-Json
+
+    $totalPods = $jsonOutput.items.Count
+
+    # Count ready pods.
+    $readyPods = @($jsonOutput.items | Where-Object {
+        $_.status.phase -eq "Running" -or $_.status.phase -eq "Succeeded"
+    })
+
+    return @{
+        TotalPods = $totalPods
+        ReadyPods = $readyPods.Count
+        AllReady = ($totalPods -gt 1 -and $readyPods.Count -eq $totalPods)
+        ReadyPodObjects = $readyPods
+    }
+}
+Function Wait-ArgoCDPodsReady {
+
+    <#
+        .SYNOPSIS
+        Waits for all ArgoCD pods to become ready in a namespace.
+
+        .DESCRIPTION
+        The Wait-ArgoCDPodsReady function monitors pod status and waits for all ArgoCD pods
+        to reach Running or Succeeded state. The function logs pod readiness progress and
+        handles timeout scenarios.
+
+        .PARAMETER Namespace
+        The Kubernetes namespace where ArgoCD pods are deployed.
+
+        .PARAMETER CheckInterval
+        Interval between pod status checks, in seconds. Defaults to 10 seconds.
+
+        .PARAMETER TimeoutSeconds
+        Maximum time to wait for all pods to become ready, in seconds. Defaults to 600 seconds.
+
+        .OUTPUTS
+        None
+        This function throws an exception if the timeout is reached or if pods fail to become ready.
+
+        .NOTES
+        The function requires at least 2 pods to be present (more than just the secret-generation pod)
+        before considering the deployment complete. Pods are logged only once when they become ready.
+
+    #>
+
+    Param(
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 10,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Namespace,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TimeoutSeconds = 600
+    )
+
+    $elapsedTime = 0
+    $loggedReadyPods = @()
+    $allPodsReady = $false
+
+    do {
+        $podStatus = Get-PodReadinessStatus -Namespace $Namespace
+        $totalPods = $podStatus.TotalPods
+        $readyPods = $podStatus.ReadyPods
+        $allPodsReady = $podStatus.AllReady
+
+        # Wait for pods to be created (more than just the secret-generation pod).
+        if ($totalPods -le 1) {
+            $allPodsReady = $false
+            Write-LogMessage -Type INFO -Message "Waiting for ArgoCD pods to be created. Found: $totalPods."
+            Start-Sleep $CheckInterval
+            $elapsedTime += $CheckInterval
+
+            # Timeout check.
+            if ($elapsedTime -ge $TimeoutSeconds) {
+                Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods to be created after $TimeoutSeconds seconds. Only $totalPods pod(s) found."
+                throw "Deployment failed. Check logs for details."
+            }
+            continue
+        }
+
+        # Log ready pods only once.
+        foreach ($pod in $podStatus.ReadyPodObjects) {
+            if ($pod.metadata.name -notin $loggedReadyPods) {
+                Write-LogMessage -Type INFO -Message "ArgoCD pod `"$($pod.metadata.name)`" is now $($pod.status.phase)."
+                $loggedReadyPods += $pod.metadata.name
+            }
+        }
+
+        if (-not $allPodsReady) {
+            Write-LogMessage -Type INFO -Message "Waiting for ArgoCD pods to be ready. Ready: $readyPods, Total: $totalPods."
+            Start-Sleep $CheckInterval
+            $elapsedTime += $CheckInterval
+
+            # Timeout check.
+            if ($elapsedTime -ge $TimeoutSeconds) {
+                Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods after $TimeoutSeconds seconds. Ready: $readyPods/$totalPods."
+                throw "Deployment failed. Check logs for details."
+            }
+        }
+
+    } while (-not $allPodsReady)
+
+    Write-LogMessage -Type INFO -Message "All $totalPods ArgoCD pods are ready."
 }
 Function Add-ArgoCDInstance {
 
@@ -4631,84 +5244,84 @@ Function Add-ArgoCDInstance {
         - Comprehensive error handling with detailed logging
         - Configurable TLS verification for both development and production environments
 
-        .PARAMETER argoCdNamespace
+        .PARAMETER ArgoCdNamespace
         The name of the vSphere Supervisor namespace where the ArgoCD instance will be deployed.
         This namespace must already exist and be properly configured with storage policies, VM classes,
         and the ArgoCD operator. The namespace serves as both the deployment target and the kubectl
         context for all operations performed by this function. Must follow Kubernetes naming conventions.
 
-        .PARAMETER argoCdDeploymentYamlPath
+        .PARAMETER ArgoCdDeploymentYamlPath
         The file system path where the ArgoCD deployment YAML configuration will be written and applied.
         This parameter is optional with a default value that can be provided by calling functions.
         The function expects the $yamlContent variable to be available in the calling scope containing
         valid ArgoCD deployment YAML. The file will be created or overwritten with UTF-8 encoding.
 
-        .PARAMETER contextName
+        .PARAMETER ContextName
         The name of the VCF CLI context to use for the deployment. This context must be previously
         created using Set-VCFContextCreate and should correspond to the target supervisor cluster
         where the ArgoCD instance will be deployed.
 
-        .PARAMETER clusterId
+        .PARAMETER ClusterId
         The vCenter cluster MoRef identifier (e.g., "domain-c462") where the supervisor is enabled.
         This is used to dynamically construct the service namespace for webhook validation checks.
         The cluster ID is obtained from Get-ClusterId and is required because the service namespace
         format is "svc-<service>-<cluster-id>", not "svc-<service>-<supervisor-uuid>".
 
-        .PARAMETER service
+        .PARAMETER Service
         The service identifier (reference name) for the ArgoCD operator supervisor service.
         This is used to dynamically construct the service namespace for webhook validation checks.
         Should match the format "argocd-service.vsphere.vmware.com" or similar naming convention.
 
-        .PARAMETER insecureTls
+        .PARAMETER InsecureTls
         When specified, enables insecure TLS verification for VCF CLI operations by adding the
         --insecure-skip-tls-verify flag. This is useful for development and lab environments
         with self-signed certificates. When not specified, uses secure TLS verification suitable
         for production environments.
 
-        .PARAMETER authCheckInterval
+        .PARAMETER AuthCheckInterval
         Interval between kubectl authentication retry attempts, in seconds.
         Defaults to 5 seconds. Lower values provide faster retry but increase system load.
 
-        .PARAMETER authTimeoutSeconds
+        .PARAMETER AuthTimeoutSeconds
         Maximum time to wait for kubectl authentication to succeed, in seconds.
         Defaults to 60 seconds. The function will retry authentication at regular intervals
         until either authentication succeeds or the timeout is reached.
 
-        .PARAMETER podReadyCheckInterval
+        .PARAMETER PodReadyCheckInterval
         Interval between pod status checks while waiting for ArgoCD pods to become ready, in seconds.
         Defaults to 10 seconds. Lower values provide more frequent updates but increase API load.
 
-        .PARAMETER podReadyTimeoutSeconds
+        .PARAMETER PodReadyTimeoutSeconds
         Maximum time to wait for all ArgoCD pods to become ready, in seconds.
         Defaults to 600 seconds (10 minutes). The function will monitor pod status and wait
         for all pods to reach Running or Succeeded state before completion.
 
-        .PARAMETER webhookReadyCheckInterval
+        .PARAMETER WebhookReadyCheckInterval
         Interval between webhook service availability checks, in seconds.
         Defaults to 5 seconds. Lower values provide faster detection but increase API load.
 
-        .PARAMETER webhookReadyTimeoutSeconds
+        .PARAMETER WebhookReadyTimeoutSeconds
         Maximum time to wait for the ArgoCD operator webhook service to become ready, in seconds.
         Defaults to 180 seconds (3 minutes). The function will check for webhook service availability
         before attempting to create ArgoCD instances to avoid webhook validation failures.
 
         .EXAMPLE
-        Add-ArgoCDInstance -argoCdNamespace "argocd-system" -argoCdDeploymentYamlPath "C:\configs\argocd-deployment.yaml" -contextName "prod-context"
+        Add-ArgoCDInstance -ArgoCdNamespace "argocd-system" -ArgoCdDeploymentYamlPath "C:\configs\argocd-deployment.yaml" -ContextName "prod-context"
 
         Deploys an ArgoCD instance to the "argocd-system" namespace using secure TLS verification.
         The function writes the YAML content and applies it using kubectl, then verifies the deployment.
 
         .EXAMPLE
-        Add-ArgoCDInstance -argoCdNamespace "dev-argocd" -argoCdDeploymentYamlPath "/tmp/argocd-dev-config.yaml" -contextName "dev-context" -insecureTls
+        Add-ArgoCDInstance -ArgoCdNamespace "dev-argocd" -ArgoCdDeploymentYamlPath "/tmp/argocd-dev-config.yaml" -ContextName "dev-context" -InsecureTls
 
         Creates an ArgoCD instance in the "dev-argocd" namespace with insecure TLS verification,
         suitable for development and testing environments with self-signed certificates.
 
         .EXAMPLE
         $deploymentParams = @{
-            argoCdNamespace = $inputData.common.argoCD.nameSpace
-            argoCdDeploymentYamlPath = $inputData.common.argoCD.argoCdDeploymentYamlPath
-            contextName = $inputData.common.argoCD.contextName
+            argoCdNamespace = $InputData.common.argoCD.nameSpace
+            argoCdDeploymentYamlPath = $InputData.common.argoCD.argoCdDeploymentYamlPath
+            contextName = $InputData.common.argoCD.contextName
             insecureTls = $true
         }
         Add-ArgoCDInstance @deploymentParams
@@ -4759,18 +5372,18 @@ Function Add-ArgoCDInstance {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$argoCdDeploymentYamlPath,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$argoCdNamespace,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$authCheckInterval = 5,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$authTimeoutSeconds = 60,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$contextName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$insecureTls,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$podReadyCheckInterval = 10,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$podReadyTimeoutSeconds = 600,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$service,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$webhookReadyCheckInterval = 5,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$webhookReadyTimeoutSeconds = 180
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCdDeploymentYamlPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCdNamespace,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$AuthCheckInterval = 5,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$AuthTimeoutSeconds = 60,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContextName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$PodReadyCheckInterval = 10,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$PodReadyTimeoutSeconds = 600,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Service,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$WebhookReadyCheckInterval = 5,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$WebhookReadyTimeoutSeconds = 180
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-ArgoCDInstance function..."
@@ -4778,10 +5391,10 @@ Function Add-ArgoCDInstance {
     # Construct the service namespace (format: svc-<service-slug>-<cluster-id>).
     # The service slug is derived from the service name by removing the domain suffix.
     # The cluster ID (e.g., domain-c462) is used, NOT the supervisor UUID.
-    $serviceSlug = $service -replace '\.vsphere\.vmware\.com$', ''
-    $serviceNamespace = "svc-$serviceSlug-$clusterId"
+    $serviceSlug = $Service -replace '\.vsphere\.vmware\.com$', ''
+    $serviceNamespace = "svc-$serviceSlug-$ClusterId"
 
-    if ($insecureTls) {
+    if ($InsecureTls) {
         $insecureTlsFlag = "--insecure-skip-tls-verify"
     } else {
         $insecureTlsFlag = ""
@@ -4790,87 +5403,27 @@ Function Add-ArgoCDInstance {
     try {
         # Naive approach to switch to VCF context.
         if ($insecureTlsFlag) {
-            & $Script:VcfCmd context use $contextName --insecure-skip-tls-verify
+            & $Script:VcfCmd context use $ContextName --insecure-skip-tls-verify
         } else {
-            & $Script:VcfCmd context use $contextName
+            & $Script:VcfCmd context use $ContextName
         }
 
         if ($LASTEXITCODE -ne 0) {
-            return Write-ErrorAndReturn -ErrorMessage "Failed to switch to VCF context `"$contextName`"" -ErrorCode "ERR_VCF_CONTEXT"
+            return Write-ErrorAndReturn -ErrorMessage "Failed to switch to VCF context `"$ContextName`"" -ErrorCode "ERR_VCF_CONTEXT"
         }
 
         # Wait for ArgoCD operator webhook service to be ready before applying YAML.
-        Write-LogMessage -Type INFO -Message "Waiting for ArgoCD operator webhook service to be ready (timeout: $webhookReadyTimeoutSeconds seconds)..."
-
-        $webhookElapsedTime = 0
-        $webhookReady = $false
-
-        do {
-            try {
-                # Check if the webhook service exists and has endpoints.
-                $webhookService = & $Script:KubectlCmd get service argocd-service-webhook-service -n $serviceNamespace -o json 2>$null | ConvertFrom-Json
-
-                if ($webhookService) {
-                    # Service exists, now check if it has endpoints (pods backing it).
-                    $webhookEndpoints = & $Script:KubectlCmd get endpoints argocd-service-webhook-service -n $serviceNamespace -o json 2>$null | ConvertFrom-Json
-
-                    if ($webhookEndpoints.subsets.addresses.Count -gt 0) {
-                        $webhookReady = $true
-                        Write-LogMessage -Type INFO -Message "ArgoCD operator webhook service is ready with $($webhookEndpoints.subsets.addresses.Count) endpoint(s)."
-                    } else {
-                        Write-LogMessage -Type DEBUG -Message "Webhook service exists but has no ready endpoints yet. Waiting..."
-                        Start-Sleep $webhookReadyCheckInterval
-                        $webhookElapsedTime += $webhookReadyCheckInterval
-                    }
-                } else {
-                    Write-LogMessage -Type DEBUG -Message "Webhook service not found yet. Waiting..."
-                    Start-Sleep $webhookReadyCheckInterval
-                    $webhookElapsedTime += $webhookReadyCheckInterval
-                }
-            } catch {
-                # Service or endpoints not found yet, continue waiting.
-                Write-LogMessage -Type DEBUG -Message "Error checking webhook service: $($_.Exception.Message). Continuing to wait..."
-                Start-Sleep $webhookReadyCheckInterval
-                $webhookElapsedTime += $webhookReadyCheckInterval
-            }
-
-            # Timeout check.
-            if ($webhookElapsedTime -ge $webhookReadyTimeoutSeconds -and -not $webhookReady) {
-                Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD operator webhook service after $webhookReadyTimeoutSeconds seconds."
-                Write-LogMessage -Type ERROR -Message "The webhook service may not be properly installed in namespace `"$serviceNamespace`"."
-
-                # Provide diagnostic information.
-                Write-LogMessage -Type INFO -Message "Diagnostic: Checking pods in operator namespace `"$serviceNamespace`"..."
-                $operatorPods = & $Script:KubectlCmd get pods -n $serviceNamespace -o json 2>$null | ConvertFrom-Json
-                if ($operatorPods.items.Count -gt 0) {
-                    Write-LogMessage -Type INFO -Message "Found $($operatorPods.items.Count) pod(s) in namespace `"$serviceNamespace`":"
-                    foreach ($pod in $operatorPods.items) {
-                        Write-LogMessage -Type INFO -Message "  - Pod: $($pod.metadata.name), Phase: $($pod.status.phase)"
-                    }
-                } else {
-                    Write-LogMessage -Type ERROR -Message "No pods found in namespace `"$serviceNamespace`". The operator may not have been installed successfully."
-                }
-
-                # Check if the namespace itself exists.
-                Write-LogMessage -Type INFO -Message "Diagnostic: Verifying namespace `"$serviceNamespace`" exists..."
-                $namespaceCheck = & $Script:KubectlCmd get namespace $serviceNamespace -o json 2>$null | ConvertFrom-Json
-                if (-not $namespaceCheck) {
-                    Write-LogMessage -Type ERROR -Message "Namespace `"$serviceNamespace`" does not exist. The ArgoCD operator installation failed."
-                } else {
-                    Write-LogMessage -Type INFO -Message "Namespace `"$serviceNamespace`" exists."
-                }
-
-                return Write-ErrorAndReturn -ErrorMessage "ArgoCD operator webhook service not ready after $webhookReadyTimeoutSeconds seconds" -ErrorCode "ERR_WEBHOOK_TIMEOUT"
-            }
-
-        } while (-not $webhookReady)
-
-        & $Script:KubectlCmd apply -f $argoCdDeploymentYamlPath
-        if ($LASTEXITCODE -ne 0) {
-            return Write-ErrorAndReturn -ErrorMessage "Failed to apply ArgoCD deployment YAML file `"$argoCdDeploymentYamlPath`"" -ErrorCode "ERR_KUBECTL_APPLY"
+        $webhookResult = Wait-WebhookServiceReady -ServiceNamespace $serviceNamespace -ServiceName "argocd-service-webhook-service" -CheckInterval $WebhookReadyCheckInterval -TimeoutSeconds $WebhookReadyTimeoutSeconds
+        if (-not $webhookResult.Success) {
+            return $webhookResult
         }
 
-        $vksNs = $contextName+":"+$argoCdNamespace
+        & $Script:KubectlCmd apply -f $ArgoCdDeploymentYamlPath
+        if ($LASTEXITCODE -ne 0) {
+            return Write-ErrorAndReturn -ErrorMessage "Failed to apply ArgoCD deployment YAML file `"$ArgoCdDeploymentYamlPath`"" -ErrorCode "ERR_KUBECTL_APPLY"
+        }
+
+        $vksNs = $ContextName+":"+$ArgoCdNamespace
 
         & $Script:KubectlCmd config use-context $vksNs
         if ($LASTEXITCODE -ne 0) {
@@ -4878,7 +5431,7 @@ Function Add-ArgoCDInstance {
         }
 
         # Wait for kubectl authentication with retry logic.
-        Write-LogMessage -Type INFO -Message "Verifying kubectl authentication for namespace `"$argoCdNamespace`" (timeout: $authTimeoutSeconds seconds)..."
+        Write-LogMessage -Type INFO -Message "Verifying kubectl authentication for namespace `"$ArgoCdNamespace`" (timeout: $AuthTimeoutSeconds seconds)..."
 
         $elapsedTime = 0
         $authSuccess = $false
@@ -4886,27 +5439,27 @@ Function Add-ArgoCDInstance {
         do {
             try {
                 # Check if we have permission to get pods in ArgoCD namespace.
-                $canGetPods = & $Script:KubectlCmd auth can-i get pods -n $argoCdNamespace 2>&1
+                $canGetPods = & $Script:KubectlCmd auth can-i get pods -n $ArgoCdNamespace 2>&1
                 $authExitCode = $LASTEXITCODE
 
                 if ($authExitCode -eq 0 -and $canGetPods -eq "yes") {
                     # Authentication successful.
                     $authSuccess = $true
-                    Write-LogMessage -Type INFO -Message "kubectl authentication verified for namespace `"$argoCdNamespace`" after $elapsedTime seconds"
+                    Write-LogMessage -Type INFO -Message "kubectl authentication verified for namespace `"$ArgoCdNamespace`" after $elapsedTime seconds"
                     break
                 }
 
                 # Authentication failed - try to re-authenticate.
                 if ($elapsedTime -eq 0) {
                     Write-LogMessage -Type WARNING -Message "kubectl authentication failed: $canGetPods"
-                    Write-LogMessage -Type INFO -Message "Attempting to re-authenticate using: vcf context use $contextName"
+                    Write-LogMessage -Type INFO -Message "Attempting to re-authenticate using: vcf context use $ContextName"
                 }
 
                 # Re-authenticate using vcf context.
                 if ($insecureTlsFlag) {
-                    $null = & $Script:VcfCmd context use $contextName --insecure-skip-tls-verify 2>&1
+                    $null = & $Script:VcfCmd context use $ContextName --insecure-skip-tls-verify 2>&1
                 } else {
-                    $null = & $Script:VcfCmd context use $contextName 2>&1
+                    $null = & $Script:VcfCmd context use $ContextName 2>&1
                 }
 
                 # Update progress.
@@ -4915,8 +5468,8 @@ Function Add-ArgoCDInstance {
                 Write-Progress -Activity "Waiting for kubectl authentication" -Status $statusMessage -CurrentOperation $currentOperation
 
                 # Wait before next check.
-                Start-Sleep $authCheckInterval
-                $elapsedTime += $authCheckInterval
+                Start-Sleep $AuthCheckInterval
+                $elapsedTime += $AuthCheckInterval
 
             } catch {
                 $errorMessage = $_.Exception.Message
@@ -4924,75 +5477,20 @@ Function Add-ArgoCDInstance {
                 Write-Progress -Activity "Waiting for kubectl authentication" -Status "Error" -Completed
                 throw "Deployment failed. Check logs for details."
             }
-        } while ($elapsedTime -lt $authTimeoutSeconds)
+        } while ($elapsedTime -lt $AuthTimeoutSeconds)
 
         # Check if authentication succeeded.
         if (-not $authSuccess) {
             Write-Progress -Activity "Waiting for kubectl authentication" -Status "Timeout" -Completed
-            Write-LogMessage -Type ERROR -Message "kubectl authentication failed after $authTimeoutSeconds seconds"
-            Write-LogMessage -Type ERROR -Message "You may need to manually re-authenticate using: vcf context use $contextName"
+            Write-LogMessage -Type ERROR -Message "kubectl authentication failed after $AuthTimeoutSeconds seconds"
+            Write-LogMessage -Type ERROR -Message "You may need to manually re-authenticate using: vcf context use $ContextName"
             throw "Deployment failed. Check logs for details."
         }
 
         Write-Progress -Activity "Waiting for kubectl authentication" -Status "Authenticated" -Completed
 
         # Wait for all ArgoCD pods to be ready.
-        $elapsedTime = 0
-        $loggedReadyPods = @()
-        $allPodsReady = $false
-
-        do {
-            # Get pod status directly without file I/O.
-            $jsonOutput = & $Script:KubectlCmd get pods -n $argoCdNamespace -o json | ConvertFrom-Json
-
-            $totalPods = $jsonOutput.items.Count
-
-            # Wait for pods to be created (more than just the secret-generation pod).
-            if ($totalPods -le 1) {
-                $allPodsReady = $false
-                Write-LogMessage -Type INFO -Message "Waiting for ArgoCD pods to be created. Found: $totalPods"
-                Start-Sleep $podReadyCheckInterval
-                $elapsedTime += $podReadyCheckInterval
-
-                # Timeout check.
-                if ($elapsedTime -ge $podReadyTimeoutSeconds) {
-                    Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods to be created after $podReadyTimeoutSeconds seconds. Only $totalPods pod(s) found."
-                    throw "Deployment failed. Check logs for details."
-                }
-                continue
-            }
-
-            # Count ready pods.
-            $readyPods = @($jsonOutput.items | Where-Object {
-                $_.status.phase -eq "Running" -or $_.status.phase -eq "Succeeded"
-            })
-
-            # Log ready pods only once.
-            foreach ($pod in $readyPods) {
-                if ($pod.metadata.name -notin $loggedReadyPods) {
-                    Write-LogMessage -Type INFO -Message "ArgoCD pod `"$($pod.metadata.name)`" is now $($pod.status.phase)."
-                    $loggedReadyPods += $pod.metadata.name
-                }
-            }
-
-            # All pods are ready when we have at least 2 pods and all are in ready state.
-            $allPodsReady = ($totalPods -gt 1 -and $readyPods.Count -eq $totalPods)
-
-            if (-not $allPodsReady) {
-                Write-LogMessage -Type INFO -Message "Waiting for ArgoCD pods to be ready. Ready: $($readyPods.Count), Total: $totalPods"
-                Start-Sleep $podReadyCheckInterval
-                $elapsedTime += $podReadyCheckInterval
-
-                # Timeout check.
-                if ($elapsedTime -ge $podReadyTimeoutSeconds) {
-                    Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods after $podReadyTimeoutSeconds seconds. Ready: $($readyPods.Count)/$totalPods"
-                    throw "Deployment failed. Check logs for details."
-                }
-            }
-
-        } while (-not $allPodsReady)
-
-        Write-LogMessage -Type INFO -Message "All $totalPods ArgoCD pods are ready."
+        Wait-ArgoCDPodsReady -Namespace $ArgoCdNamespace -CheckInterval $PodReadyCheckInterval -TimeoutSeconds $PodReadyTimeoutSeconds
 
         Write-LogMessage -Type INFO -Message "ArgoCD namespace `"$vksNs`" is now available with all pods ready."
 
@@ -5000,8 +5498,78 @@ Function Add-ArgoCDInstance {
         Write-LogMessage -Type ERROR -Message "Failed to add ArgoCD instance: $_"
         throw "Deployment failed. Check logs for details."
     }
+}
 
+Function Show-ArgoCDInstanceDetails {
 
+    <#
+        .SYNOPSIS
+        Displays ArgoCD instance connection details including login URL and initial admin password.
+
+        .DESCRIPTION
+        The Show-ArgoCDInstanceDetails function retrieves and displays the ArgoCD instance connection information
+        for a deployed ArgoCD service. It fetches the load balancer IP address from the argocd-server service
+        and retrieves the initial admin password from the Kubernetes secret. The function then displays login
+        instructions and provides the command to update the admin password.
+
+        This function is typically called after successfully deploying an ArgoCD instance to provide the user
+        with the necessary information to access and configure the ArgoCD web interface.
+
+        .PARAMETER ArgoCdNamespace
+        The Kubernetes namespace where the ArgoCD instance is deployed. This parameter is mandatory and cannot
+        be null or empty.
+
+        .EXAMPLE
+        Show-ArgoCDInstanceDetails -ArgoCdNamespace "vks-ns-12345"
+        Displays the ArgoCD login URL and initial admin password for the instance in the specified namespace.
+
+        .OUTPUTS
+        None
+        This function writes informational messages to the log but does not return any output.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCdNamespace
+    )
+
+    # Derive IP address from external load balancer for ArgoCD namespace.
+    $svcJson = & $Script:KubectlCmd get svc argocd-server -n $ArgoCdNamespace -o json | ConvertFrom-Json
+    $ipAddr = $svcJson.status.loadBalancer.ingress[0].ip
+    if ($null -eq $ipAddr) {
+        Write-LogMessage -Type ERROR -Message "Failed to retrieve IP address for ArgoCD server service in namespace `"$ArgoCdNamespace`"."
+        throw "Deployment failed. Check logs for details."
+    }
+
+    # Retrieve initial admin password from Kubernetes secret.
+    $encodedPassword = & $Script:KubectlCmd get secret -n $ArgoCdNamespace argocd-initial-admin-secret -o jsonpath='{.data.password}'
+    if ($null -eq $encodedPassword) {
+        Write-LogMessage -Type ERROR -Message "Failed to retrieve initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`"."
+        throw "Deployment failed. Check logs for details."
+    }
+
+    # Decode initial admin password from Base64 encoded string.
+    $decodedPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encodedPassword))
+    if ($null -eq $decodedPassword) {
+        Write-LogMessage -Type ERROR -Message "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`"."
+        throw "Deployment failed. Check logs for details."
+    }
+
+    # In order to ensure the user can login to ArgoCD, we need to display the login instructions to the user regardless of the log level threshold.
+    Write-Host -ForegroundColor Green "`n[INFO]To login to ArgoCD:"
+    Write-Host -ForegroundColor Green "[INFO] Go to https://${ipAddr}/"
+    Write-Host -ForegroundColor Green "[INFO] Login as user `"admin`" using temporary password: $decodedPassword"
+    Write-Host -ForegroundColor Green "[INFO] To update your password run: `"$Script:ArgocdCmd account update-password --server $ipAddr --account admin --insecure`""
+
+    # Write output to log file, except for the decoded password which is only logged to the screen.
+    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "To login to ArgoCD:"
+    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Go to https://${ipAddr}/"
+    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "To update your password run: `"$Script:ArgocdCmd account update-password --server $ipAddr --account admin --insecure`""
+
+    # Cleanup credentials.
+    Remove-Variable -Name decodedPassword -Force
+    Remove-Variable -Name encodedPassword -Force
+    [System.GC]::Collect()
+    [System.GC]::WaitForPendingFinalizers()
 }
 Function Get-Base64FromYml {
 
@@ -5122,23 +5690,23 @@ Function Test-YamlPropertyConsistency {
         This function serves as a general-purpose YAML validation framework that can be adapted for various
         deployment validation scenarios including Kubernetes manifests, configuration files, and service definitions.
 
-        .PARAMETER yamlFilePath
+        .PARAMETER YamlFilePath
         The full path to the YAML file to validate. This file should contain valid YAML content that needs
         to be validated against specified criteria.
 
-        .PARAMETER propertyPaths
+        .PARAMETER PropertyPaths
         An array of property paths to search for in the YAML documents. Each path can be:
         - Simple property name (e.g., "namespace")
         - Nested property path using dot notation (e.g., "metadata.namespace")
         - Multiple paths for comprehensive validation
         Property paths are case-sensitive and follow standard PowerShell object property access patterns.
 
-        .PARAMETER expectedValues
+        .PARAMETER ExpectedValues
         An array of expected values corresponding to the property paths. The validation will check if found
-        property values match these expected values. The array should have the same length as propertyPaths,
+        property values match these expected values. The array should have the same length as PropertyPaths,
         or provide a single value to validate against all properties.
 
-        .PARAMETER validationScriptBlock
+        .PARAMETER ValidationScriptBlock
         Optional custom validation logic as a scriptblock. The scriptblock receives the following parameters:
         - $foundValue: The actual value found in the YAML
         - $expectedValue: The expected value for comparison
@@ -5146,30 +5714,30 @@ Function Test-YamlPropertyConsistency {
         - $documentIndex: The document number being processed
         The scriptblock should return $true for valid values, $false for invalid values.
 
-        .PARAMETER validationName
+        .PARAMETER ValidationName
         A descriptive name for the validation operation, used in logging messages to provide context
         about what type of validation is being performed (e.g., "namespace consistency", "version validation").
 
-        .PARAMETER allowMissingProperties
+        .PARAMETER AllowMissingProperties
         Switch parameter that controls behavior when properties are not found. When specified, missing
         properties are treated as acceptable and logged as warnings rather than errors.
 
         .EXAMPLE
-        Test-YamlPropertyConsistency -yamlFilePath "/path/to/deployment.yml" -propertyPaths @("metadata.namespace") -expectedValues @("argocd") -validationName "namespace consistency"
+        Test-YamlPropertyConsistency -YamlFilePath "/path/to/deployment.yml" -PropertyPaths @("metadata.namespace") -ExpectedValues @("argocd") -ValidationName "namespace consistency"
 
         Validates that all metadata.namespace values in the YAML file match "argocd".
 
         .EXAMPLE
         $validationScript = {
-            param($foundValue, $expectedValue, $propertyPath, $documentIndex)
+            param($documentIndex, $expectedValue, $foundValue, $propertyPath)
             return $foundValue -eq $expectedValue -and $foundValue -match '^[a-z0-9-]+$'
         }
-        Test-YamlPropertyConsistency -yamlFilePath $yamlPath -propertyPaths @("metadata.namespace", "spec.namespace") -expectedValues @("production") -validationScriptBlock $validationScript -validationName "namespace format validation"
+        Test-YamlPropertyConsistency -YamlFilePath $yamlPath -PropertyPaths @("metadata.namespace", "spec.namespace") -ExpectedValues @("production") -ValidationScriptBlock $validationScript -ValidationName "namespace format validation"
 
         Uses custom validation logic to check both value equality and format compliance.
 
         .EXAMPLE
-        Test-YamlPropertyConsistency -yamlFilePath $configFile -propertyPaths @("spec.version", "metadata.labels.version") -expectedValues @("1.0.0", "1.0.0") -validationName "version consistency" -allowMissingProperties
+        Test-YamlPropertyConsistency -YamlFilePath $configFile -PropertyPaths @("spec.version", "metadata.labels.version") -ExpectedValues @("1.0.0", "1.0.0") -ValidationName "version consistency" -AllowMissingProperties
 
         Validates version consistency across multiple properties, treating missing properties as acceptable.
 
@@ -5208,35 +5776,37 @@ Function Test-YamlPropertyConsistency {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$yamlFilePath,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$propertyPaths,
-        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String[]]$expectedValues,
-        [Parameter(Mandatory = $false)] [ScriptBlock]$validationScriptBlock = $null,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$validationName,
-        [Parameter(Mandatory = $false)] [Switch]$allowMissingProperties
+        [Parameter(Mandatory = $false)] [Switch]$AllowMissingProperties,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String[]]$ExpectedValues,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$PropertyPaths,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ValidationName,
+        [Parameter(Mandatory = $false)] [ScriptBlock]$ValidationScriptBlock = $null,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$YamlFilePath
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-YamlPropertyConsistency function..."
 
     try {
-        # Validate that the YAML file exists
-        if (-not (Test-Path -Path $yamlFilePath -PathType Leaf)) {
+        # Validate that the YAML file exists.
+
+        if (-not (Test-Path -Path $YamlFilePath -PathType Leaf)) {
             $currentDir = Get-Location
             # Detect if path is a Windows absolute path (starts with drive letter like C:\ or C:/)
-            $isWindowsAbsolutePath = $yamlFilePath -match '^[A-Za-z]:[\\/]'
+            $isWindowsAbsolutePath = $YamlFilePath -match '^[A-Za-z]:[\\/]'
             # Detect if path is Unix absolute path (starts with /)
-            $isUnixAbsolutePath = $yamlFilePath -match '^/'
+            $isUnixAbsolutePath = $YamlFilePath -match '^/'
             # Detect if path is absolute (either Windows or Unix style)
             $isAbsolutePath = $isWindowsAbsolutePath -or $isUnixAbsolutePath
 
-            Write-LogMessage -Type ERROR -Message "YAML file not found for $validationName validation."
-            Write-LogMessage -Type ERROR -Message "  Specified path: '$yamlFilePath'"
+            Write-LogMessage -Type ERROR -Message "YAML file not found for $ValidationName validation."
+            Write-LogMessage -Type ERROR -Message "  Specified path: '$YamlFilePath'"
 
             if ($isWindowsAbsolutePath) {
                 Write-LogMessage -Type ERROR -Message "  Note: The specified path is a Windows absolute path. On non-Windows systems, please update your configuration file (infrastructure.json) to use a relative path or a Unix-style absolute path."
             } elseif (-not $isAbsolutePath) {
-                # Only show resolved path for relative paths
-                $resolvedPath = Join-Path $currentDir $yamlFilePath
+                # Only show resolved path for relative paths.
+
+                $resolvedPath = Join-Path $currentDir $YamlFilePath
                 Write-LogMessage -Type ERROR -Message "  Resolved path: '$resolvedPath'"
             }
 
@@ -5246,18 +5816,19 @@ Function Test-YamlPropertyConsistency {
         }
 
         # Validate parameter consistency
-        if ($expectedValues.Count -ne 1 -and $expectedValues.Count -ne $propertyPaths.Count) {
-            Write-LogMessage -Type ERROR -Message "Expected values count must be 1 (for all properties) or match property paths count. PropertyPaths: $($propertyPaths.Count), ExpectedValues: $($expectedValues.Count)"
+        if ($ExpectedValues.Count -ne 1 -and $ExpectedValues.Count -ne $PropertyPaths.Count) {
+            Write-LogMessage -Type ERROR -Message "Expected values count must be 1 (for all properties) or match property paths count. PropertyPaths: $($PropertyPaths.Count), ExpectedValues: $($ExpectedValues.Count)"
             return $false
         }
 
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Starting $validationName validation for YAML file: '$yamlFilePath'"
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Property paths to validate: $($propertyPaths -join ', ')"
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Expected values: $($expectedValues -join ', ')"
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Starting $ValidationName validation for YAML file: '$YamlFilePath'"
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Property paths to validate: $($PropertyPaths -join ', ')"
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Expected values: $($ExpectedValues -join ', ')"
 
-        $yamlContent = Get-Content -Raw -Path $yamlFilePath
+        $yamlContent = Get-Content -Raw -Path $YamlFilePath
 
-        # Split multi-document YAML by --- separator
+        # Split multi-document YAML by --- separator.
+
         # Use regex to handle different line endings (Unix: \n, Windows: \r\n)
         $documents = $yamlContent -split '(?m)^---\s*$'
 
@@ -5268,10 +5839,12 @@ Function Test-YamlPropertyConsistency {
                 $doc = ConvertFrom-Yaml -YamlContent $docContent
 
                 if ($doc -is [hashtable]) {
-                    # YAML parser returned a hashtable directly
+                    # YAML parser returned a hashtable directly.
+
                     $config += $doc
                 } elseif ($doc.Count -gt 0 -and $null -ne $doc[0]) {
-                    # YAML parser returned an array with hashtable
+                    # YAML parser returned an array with hashtable.
+
                     $config += $doc[0]
                 }
             }
@@ -5282,16 +5855,18 @@ Function Test-YamlPropertyConsistency {
         $propertiesFound = 0
         $validationResults = @()
 
-        # Check each document for the specified properties
+        # Check each document for the specified properties.
+
         foreach ($doc in $config) {
             if ($null -eq $doc) { continue }
             $documentsChecked++
 
-            for ($i = 0; $i -lt $propertyPaths.Count; $i++) {
-                $propertyPath = $propertyPaths[$i]
-                $expectedValue = if ($expectedValues.Count -eq 1) { $expectedValues[0] } else { $expectedValues[$i] }
+            for ($i = 0; $i -lt $PropertyPaths.Count; $i++) {
+                $propertyPath = $PropertyPaths[$i]
+                $expectedValue = if ($ExpectedValues.Count -eq 1) { $ExpectedValues[0] } else { $ExpectedValues[$i] }
 
-                # Navigate to the property using dot notation
+                # Navigate to the property using dot notation.
+
                 $foundValue = $null
                 $propertyFound = $false
                 $currentObject = $doc
@@ -5315,24 +5890,26 @@ Function Test-YamlPropertyConsistency {
 
                     # Apply validation logic
                     $isValid = $false
-                    if ($null -ne $validationScriptBlock) {
-                        # Use custom validation scriptblock
+                    if ($null -ne $ValidationScriptBlock) {
+                        # Use custom validation scriptblock.
+
                         try {
-                            $isValid = & $validationScriptBlock -foundValue $foundValue -expectedValue $expectedValue -propertyPath $propertyPath -documentIndex $documentsChecked
+                            $isValid = & $ValidationScriptBlock -foundValue $foundValue -expectedValue $expectedValue -propertyPath $propertyPath -documentIndex $documentsChecked
                         } catch {
                             Write-LogMessage -Type ERROR -Message "Custom validation scriptblock failed for property '$propertyPath' in document $documentsChecked : $_"
                             $isValid = $false
                         }
                     } else {
-                        # Use default equality validation
+                        # Use default equality validation.
+
                         $isValid = ($foundValue -eq $expectedValue)
                     }
 
                     if (-not $isValid) {
-                        Write-LogMessage -Type ERROR -Message "$validationName validation failed in file `"$yamlFilePath`" for property `"$propertyPath`". Expected: `"$expectedValue`", Found: `"$foundValue`"."
+                        Write-LogMessage -Type ERROR -Message "$ValidationName validation failed in file `"$YamlFilePath`" for property `"$propertyPath`". Expected: `"$expectedValue`", Found: `"$foundValue`"."
                         $validationFailed = $true
                     } else {
-                        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$validationName validation on YAML file `"$yamlFilePath`": for property `"$propertyPath`"."
+                        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$ValidationName validation on YAML file `"$YamlFilePath`": for property `"$propertyPath`"."
                     }
 
                     $validationResults += @{
@@ -5345,7 +5922,7 @@ Function Test-YamlPropertyConsistency {
                 } else {
                     # Property not found
                     $message = "Property '$propertyPath' not found in document $documentsChecked"
-                    if ($allowMissingProperties) {
+                    if ($AllowMissingProperties) {
                         Write-LogMessage -Type WARNING -Message "$message - treating as acceptable due to allowMissingProperties flag"
                     } else {
                         Write-LogMessage -Type ERROR -Message "$message - this is considered a validation failure"
@@ -5357,29 +5934,29 @@ Function Test-YamlPropertyConsistency {
                         PropertyPath = $propertyPath
                         FoundValue = $null
                         ExpectedValue = $expectedValue
-                        IsValid = $allowMissingProperties
+                        IsValid = $AllowMissingProperties
                     }
                 }
             }
         }
 
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$validationName validation completed - Documents checked: $documentsChecked, Properties found: $propertiesFound"
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$ValidationName validation completed - Documents checked: $documentsChecked, Properties found: $propertiesFound"
 
-        if ($propertiesFound -eq 0 -and -not $allowMissingProperties) {
+        if ($propertiesFound -eq 0 -and -not $AllowMissingProperties) {
             Write-LogMessage -Type ERROR -Message "No properties matching the specified paths were found in the YAML file"
             return $false
         }
 
         if ($validationFailed) {
-            Write-LogMessage -Type ERROR -Message "$validationName validation failed - One or more property values did not meet the validation criteria"
+            Write-LogMessage -Type ERROR -Message "$ValidationName validation failed - One or more property values did not meet the validation criteria"
             return $false
         } else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$validationName validation successful - All property values passed validation"
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$ValidationName validation successful - All property values passed validation"
             return $true
         }
 
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to perform $validationName validation on YAML file '$yamlFilePath': $_"
+        Write-LogMessage -Type ERROR -Message "Failed to perform $ValidationName validation on YAML file '$YamlFilePath': $_"
         return $false
     }
 }
@@ -5415,7 +5992,7 @@ Function Get-ArgoCDServiceDetail {
         Returns: "argocd-service.vsphere.vmware.com", "1.0.0-24815986"
 
         .EXAMPLE
-        $serviceName, $serviceVersion = Get-ArgoCDServiceDetail -Path $argoCDyaml
+        $ServiceName, $serviceVersion = Get-ArgoCDServiceDetail -Path $argoCDyaml
 
         Extracts service details and assigns them to separate variables for use in service deployment.
 
@@ -5442,7 +6019,8 @@ Function Get-ArgoCDServiceDetail {
     try {
         $yamlContent = Get-Content -Raw -Path $Path
 
-        # Split multi-document YAML by --- separator
+        # Split multi-document YAML by --- separator.
+
         # Use regex to handle different line endings (Unix: \n, Windows: \r\n)
         $documents = $yamlContent -split '(?m)^---\s*$'
 
@@ -5455,11 +6033,13 @@ Function Get-ArgoCDServiceDetail {
                 $doc = ConvertFrom-Yaml -YamlContent $docContent
 
                 if ($doc -is [hashtable]) {
-                    # YAML parser returned a hashtable directly
+                    # YAML parser returned a hashtable directly.
+
                     $config += $doc
                     Write-LogMessage -Type DEBUG -Message "Parsed document as hashtable with keys: $($doc.Keys -join ', ')"
                 } elseif ($doc.Count -gt 0 -and $null -ne $doc[0]) {
-                    # YAML parser returned an array with hashtable
+                    # YAML parser returned an array with hashtable.
+
                     $config += $doc[0]
                     Write-LogMessage -Type DEBUG -Message "Parsed document as array, extracted first element with keys: $($doc[0].Keys -join ', ')"
                 }
@@ -5529,23 +6109,23 @@ Function Get-ContentLibraryId {
         If the specified content library is not found, the function will exit the script with an
         error code to prevent subsequent operations from proceeding with invalid library references.
 
-        .PARAMETER libraryName
+        .PARAMETER LibraryName
         The name of the content library for which to retrieve the unique identifier.
         This parameter is mandatory and performs a case-sensitive match against existing
         content library names on the vCenter.
 
         .EXAMPLE
-        Get-ContentLibraryId -libraryName "VCF-ContentLibrary"
+        Get-ContentLibraryId -LibraryName "VCF-ContentLibrary"
 
         Retrieves the unique identifier for the content library named "VCF-ContentLibrary".
 
         .EXAMPLE
-        $libraryId = Get-ContentLibraryId -libraryName "Production-Templates"
+        $libraryId = Get-ContentLibraryId -LibraryName "Production-Templates"
 
         Stores the content library ID in a variable for use in subsequent operations.
 
         .EXAMPLE
-        Get-ContentLibraryId -libraryName $inputData.common.contentLibrary.libraryName
+        Get-ContentLibraryId -LibraryName $InputData.common.contentLibrary.libraryName
 
         Retrieves the content library ID using a name from configuration data.
 
@@ -5569,7 +6149,7 @@ Function Get-ContentLibraryId {
 
     # Get the content library id from the content library name.
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$libraryName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryName
     )
     Write-LogMessage -Type DEBUG -Message "Entered Get-ContentLibraryId function..."
 
@@ -5584,12 +6164,12 @@ Function Get-ContentLibraryId {
         $contentList = Invoke-ListContentLocalLibrary -Server $Script:VCenterName
         foreach ($lib in $contentList) {
             $libDetails = Invoke-GetLibraryIdContentLocalLibrary -LibraryId $lib -Server $Script:VCenterName
-            if ( $libDetails.Name -eq $libraryName) {
+            if ( $libDetails.Name -eq $LibraryName) {
                 return $libDetails.Id
             }
         }
     } catch {
-        Write-LogMessage  -TYPE "ERROR" -Message "Failed to create content library `"$libraryName`" on `"$Script:VCenterName`": $_"
+        Write-LogMessage  -TYPE "ERROR" -Message "Failed to create content library `"$LibraryName`" on `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -5614,33 +6194,33 @@ Function New-LocalContentLibrary {
         and other potential failures during content library creation. All operations are logged using
         the Write-LogMessage system for audit trail and troubleshooting purposes.
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         The name of the datastore where the content library will store its content. This datastore
         must already exist and be accessible from the connected vCenter. The datastore will
         be used to store VM templates, ISO files, and other content library items.
 
-        .PARAMETER libraryName
+        .PARAMETER LibraryName
         The name for the new content library. This name must be unique within the vCenter
         and should follow standard naming conventions. The name will be used to identify and
         manage the content library through the vSphere Client and API operations.
 
-        .PARAMETER libraryDescription
+        .PARAMETER LibraryDescription
         A descriptive text that explains the purpose and contents of the content library. This
         description helps administrators understand the library's intended use and is displayed
         in the vSphere Client interface.
 
         .EXAMPLE
-        New-LocalContentLibrary -datastoreName "datastore1" -libraryName "VCF-ContentLibrary" -libraryDescription "Content library for VCF deployment templates"
+        New-LocalContentLibrary -DatastoreName "datastore1" -LibraryName "VCF-ContentLibrary" -LibraryDescription "Content library for VCF deployment templates"
 
         Creates a new local content library named "VCF-ContentLibrary" stored on "datastore1" with the specified description.
 
         .EXAMPLE
-        $libraryId = New-LocalContentLibrary -datastoreName "shared-storage" -libraryName "Production-Templates" -libraryDescription "Production VM templates and ISOs"
+        $libraryId = New-LocalContentLibrary -DatastoreName "shared-storage" -LibraryName "Production-Templates" -LibraryDescription "Production VM templates and ISOs"
 
         Creates a content library and stores the returned library ID in a variable for later use.
 
         .EXAMPLE
-        New-LocalContentLibrary -datastoreName $datastoreName -libraryName $libraryName -libraryDescription $libraryDescription
+        New-LocalContentLibrary -DatastoreName $DatastoreName -LibraryName $LibraryName -LibraryDescription $LibraryDescription
 
         Creates a content library using variables for dynamic deployment scenarios.
 
@@ -5665,9 +6245,9 @@ Function New-LocalContentLibrary {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datastoreName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$libraryName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$libraryDescription
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryDescription
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered New-LocalContentLibrary function..."
@@ -5680,40 +6260,42 @@ Function New-LocalContentLibrary {
     }
 
     # Check if the content library already exists and if so, return the id.
-    $contentLibraryId = Get-ContentLibraryId -libraryName $libraryName
+    $contentLibraryId = Get-ContentLibraryId -libraryName $LibraryName
     if ($contentLibraryId) {
-        Write-LogMessage -Type WARNING -Message "Content library `"$libraryName`" already exists on vCenter `"$Script:VCenterName`"."
+        Write-LogMessage -Type WARNING -Message "Content library `"$LibraryName`" already exists on vCenter `"$Script:VCenterName`"."
         return $contentLibraryId
     }
 
     try {
         # Get Datastore object. Using the datastore name.
-        $datastoreObject = Get-Datastore -Name $datastoreName -Server $Script:VCenterName
+        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:VCenterName
 
         # Create local content library. Using the datastore object.
         New-ContentLibrary `
-            -Name $libraryName `
+            -Name $LibraryName `
             -Datastore $datastoreObject `
-            -Description $libraryDescription `
+            -Description $LibraryDescription `
             -Server $Script:VCenterName | Out-Null
     }
     catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$libraryName`" (`"$libraryDescription`") on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:VCenterName`" due to authorization issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$libraryName`" (`"$libraryDescription`") on vCenter`"$Script:VCenterName`" due to network/timeout issues: $_"
+        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter`"$Script:VCenterName`" due to network/timeout issues: $_"
         throw "Deployment failed. Check logs for details."
     }
     catch {
-        Write-LogMessage -Type ERROR -Message "Failed to create content library `"$libraryName`" (`"$libraryDescription`") on vCenter`"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Failed to create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter`"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
-    Write-LogMessage -Type INFO -Message "Successfully created content library `"$libraryName`" on vCenter `"$Script:VCenterName`"."
-    $contentLibraryId = Get-ContentLibraryId -libraryName $libraryName
+    Write-LogMessage -Type INFO -Message "Successfully created content library `"$LibraryName`" on vCenter `"$Script:VCenterName`"."
+    $contentLibraryId = Get-ContentLibraryId -libraryName $LibraryName
     return $contentLibraryId
 }
+
 Function New-VCenterRestApiSession {
+
     <#
         .SYNOPSIS
         Creates an authenticated REST API session with vCenter.
@@ -5787,9 +6369,9 @@ Function New-VCenterRestApiSession {
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterUser,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterInsecurePassword,
-        [Parameter(Mandatory = $false)] [Switch]$InsecureTls
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterInsecurePassword
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered New-VCenterRestApiSession function..."
@@ -5836,7 +6418,9 @@ Function New-VCenterRestApiSession {
         }
     }
 }
+
 Function Find-SupervisorByName {
+
     <#
         .SYNOPSIS
         Searches for a supervisor cluster by name using vCenter REST API.
@@ -5878,7 +6462,7 @@ Function Find-SupervisorByName {
 
         .EXAMPLE
         $findParams = @{
-            SupervisorName = $supervisorName
+            SupervisorName = $SupervisorName
             SessionHeaders = $session.SessionHeaders
             InsecureTls = $true
         }
@@ -5900,9 +6484,9 @@ Function Find-SupervisorByName {
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$SessionHeaders,
-        [Parameter(Mandatory = $false)] [Switch]$InsecureTls
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$SessionHeaders
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Find-SupervisorByName function..."
@@ -5957,7 +6541,9 @@ Function Find-SupervisorByName {
         }
     }
 }
+
 Function Wait-SupervisorDiscoverable {
+
     <#
         .SYNOPSIS
         Waits for a supervisor cluster to become discoverable and reach READY status.
@@ -6036,11 +6622,11 @@ Function Wait-SupervisorDiscoverable {
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TimeoutSeconds = 3600,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 15,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$SessionHeaders,
-        [Parameter(Mandatory = $false)] [Int]$TimeoutSeconds = 3600,
-        [Parameter(Mandatory = $false)] [Int]$CheckInterval = 15,
-        [Parameter(Mandatory = $false)] [Switch]$InsecureTls
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$SessionHeaders
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Wait-SupervisorDiscoverable function..."
@@ -6176,13 +6762,13 @@ Function Get-SupervisorId {
         - Credentials are encoded but transmitted over potentially insecure connections
         - Session tokens are used for subsequent API calls to minimize credential exposure
 
-        .PARAMETER silence
+        .PARAMETER Silence
         Optional switch parameter that suppresses informational log messages when the supervisor
         becomes ready. When specified, the function will only output error messages and not success
         messages. Useful for silent operations or when integrating with automated workflows where
         verbose output is not desired.
 
-        .PARAMETER supervisorName
+        .PARAMETER SupervisorName
         The name of the vSphere Supervisor cluster for which to retrieve the unique identifier.
         This should match the supervisor cluster name as configured in vCenter and must
         correspond to an existing, properly configured supervisor cluster. The name is case-sensitive
@@ -6200,21 +6786,21 @@ Function Get-SupervisorId {
         The password is used for Basic authentication with the vCenter REST API and should be
         protected appropriately in production environments.
 
-        .PARAMETER totalWaitTime
+        .PARAMETER TotalWaitTime
         Optional integer parameter specifying the maximum time to wait for the supervisor to become
         ready, in seconds. Defaults to 3600 seconds (1 hour) if not specified. The function will
-        continuously check the supervisor status at the specified checkInterval until either the
+        continuously check the supervisor status at the specified CheckInterval until either the
         supervisor becomes ready or this timeout is reached. Setting this to a lower value will
         cause the function to fail faster if the supervisor takes longer than expected to become ready.
 
-        .PARAMETER checkInterval
+        .PARAMETER CheckInterval
         Optional integer parameter specifying the interval between status checks, in seconds.
         Defaults to 15 seconds if not specified. The function will query the supervisor status
-        every checkInterval seconds during the wait period. Lower values provide more frequent
+        every CheckInterval seconds during the wait period. Lower values provide more frequent
         updates but may increase API load, while higher values reduce API calls but provide
         less frequent status updates.
 
-        .PARAMETER insecureTls
+        .PARAMETER InsecureTls
         Optional switch parameter that bypasses SSL certificate validation for the vCenter connection.
         When specified, the function will not validate the SSL certificate of the vCenter.
         This is intended for use in development and lab environments where valid certificates
@@ -6222,14 +6808,14 @@ Function Get-SupervisorId {
         production environments.
 
         .EXAMPLE
-        Get-SupervisorId -supervisorName "Production-Supervisor" -VcenterUser "administrator@vsphere.local" -VcenterInsecurePassword "VMware1!"
+        Get-SupervisorId -SupervisorName "Production-Supervisor" -VcenterUser "administrator@vsphere.local" -VcenterInsecurePassword "VMware1!"
 
         Retrieves the unique identifier for the supervisor cluster named "Production-Supervisor" using
         administrator credentials. The function will authenticate with vCenter and return the supervisor ID
         if the cluster exists and is accessible.
 
         .EXAMPLE
-        $supervisorId = Get-SupervisorId -supervisorName $Script:SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $vCenterPasswordDecrypted
+        $supervisorId = Get-SupervisorId -supervisorName $Script:SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $VCenterPasswordDecrypted
 
         Uses script-scoped variables to retrieve the supervisor ID, demonstrating integration with
         larger deployment workflows where credentials and names are managed centrally.
@@ -6325,48 +6911,50 @@ Function Get-SupervisorId {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [Int]$checkInterval=15,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$insecureTls,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$silence,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorName,
-        [Parameter(Mandatory = $false)] [Int]$totalWaitTime=3600,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=15,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterInsecurePassword,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterUser
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-SupervisorId function..."
 
-    Write-LogMessage -Type INFO -Message "Retrieving supervisor ID for `"$supervisorName`" on vCenter `"$Script:VCenterName`"..."
+    Write-LogMessage -Type INFO -Message "Retrieving supervisor ID for `"$SupervisorName`" on vCenter `"$Script:VCenterName`"..."
 
     # Initialize session variable for cleanup in finally block.
     $session = $null
 
     try {
         # ========================================================================
-        # STEP 1: Validate Parameters
+        # STEP 1: Validate Parameters.
+
         # ========================================================================
-        if ($totalWaitTime -le 0) {
-            Write-LogMessage -Type ERROR -Message "totalWaitTime must be greater than 0, got: $totalWaitTime"
+        if ($TotalWaitTime -le 0) {
+            Write-LogMessage -Type ERROR -Message "totalWaitTime must be greater than 0, got: $TotalWaitTime"
             return $null
         }
-        if ($checkInterval -le 0) {
-            Write-LogMessage -Type ERROR -Message "checkInterval must be greater than 0, got: $checkInterval"
+        if ($CheckInterval -le 0) {
+            Write-LogMessage -Type ERROR -Message "checkInterval must be greater than 0, got: $CheckInterval"
             return $null
         }
-        if ($checkInterval -ge $totalWaitTime) {
-            Write-LogMessage -Type ERROR -Message "checkInterval ($checkInterval) must be less than totalWaitTime ($totalWaitTime)"
+        if ($CheckInterval -ge $TotalWaitTime) {
+            Write-LogMessage -Type ERROR -Message "checkInterval ($CheckInterval) must be less than totalWaitTime ($TotalWaitTime)"
             return $null
         }
 
         # ========================================================================
-        # STEP 2: Create REST API Session
+        # STEP 2: Create REST API Session.
+
         # ========================================================================
         Write-LogMessage -Type INFO -Message "[Step 1/3] Creating REST API session..."
 
         $sessionParams = @{
             VcenterUser = $VcenterUser
             VcenterInsecurePassword = $VcenterInsecurePassword
-            InsecureTls = $insecureTls
+            InsecureTls = $InsecureTls
         }
         $session = New-VCenterRestApiSession @sessionParams
 
@@ -6376,14 +6964,15 @@ Function Get-SupervisorId {
         }
 
         # ========================================================================
-        # STEP 3: Search for Supervisor and Wait for Ready
+        # STEP 3: Search for Supervisor and Wait for Ready.
+
         # ========================================================================
         Write-LogMessage -Type INFO -Message "[Step 2/3] Searching for supervisor cluster..."
 
         $findParams = @{
-            SupervisorName = $supervisorName
+            SupervisorName = $SupervisorName
             SessionHeaders = $session.SessionHeaders
-            InsecureTls = $insecureTls
+            InsecureTls = $InsecureTls
         }
         $findResult = Find-SupervisorByName @findParams
 
@@ -6394,7 +6983,7 @@ Function Get-SupervisorId {
 
         # If supervisor not found, return null (may not be created yet).
         if (-not $findResult.Found) {
-            Write-LogMessage -Type INFO -Message "Supervisor instance `"$supervisorName`" not found on vCenter `"$Script:VCenterName`". Proceeding to create it."
+            Write-LogMessage -Type INFO -Message "Supervisor instance `"$SupervisorName`" not found on vCenter `"$Script:VCenterName`". Proceeding to create it."
             return $null
         }
 
@@ -6402,11 +6991,11 @@ Function Get-SupervisorId {
         Write-LogMessage -Type INFO -Message "[Step 3/3] Waiting for supervisor to become ready..."
 
         $waitParams = @{
-            SupervisorName = $supervisorName
+            SupervisorName = $SupervisorName
             SessionHeaders = $session.SessionHeaders
-            TimeoutSeconds = $totalWaitTime
-            CheckInterval = $checkInterval
-            InsecureTls = $insecureTls
+            TimeoutSeconds = $TotalWaitTime
+            CheckInterval = $CheckInterval
+            InsecureTls = $InsecureTls
         }
         $waitResult = Wait-SupervisorDiscoverable @waitParams
 
@@ -6416,14 +7005,14 @@ Function Get-SupervisorId {
         }
 
         # Supervisor is ready.
-        if (-not $silence) {
-            Write-LogMessage -Type INFO -Message "Supervisor instance `"$supervisorName`" reported status ready, after waiting for $($waitResult.ElapsedSeconds) seconds."
+        if (-not $Silence) {
+            Write-LogMessage -Type INFO -Message "Supervisor instance `"$SupervisorName`" reported status ready, after waiting for $($waitResult.ElapsedSeconds) seconds."
         }
 
         return $waitResult.SupervisorId
 
     } catch {
-        Write-LogMessage -Type ERROR -Message "Unable to fetch supervisor ID for `"$supervisorName`" on vCenter `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type ERROR -Message "Unable to fetch supervisor ID for `"$SupervisorName`" on vCenter `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     } finally {
         # Cleanup the vCenter REST API session.
@@ -6432,10 +7021,11 @@ Function Get-SupervisorId {
                 Invoke-RestMethod -Method DELETE `
                     -Uri "https://$Script:VCenterName/rest/com/vmware/cis/session" `
                     -Headers $session.SessionHeaders `
-                    -SkipCertificateCheck:$insecureTls `
+                    -SkipCertificateCheck:$InsecureTls `
                     -ErrorAction SilentlyContinue | Out-Null
             } catch {
-                # Silently ignore cleanup errors
+                # Silently ignore cleanup errors.
+
             }
         }
     }
@@ -6460,24 +7050,24 @@ Function Get-StoragePolicyId {
         process. All operations are logged using the Write-LogMessage system for consistent
         error reporting and troubleshooting.
 
-        .PARAMETER storagePolicyName
+        .PARAMETER StoragePolicyName
         The name of the storage policy for which to retrieve the unique identifier. This parameter
         is mandatory and must match an existing storage policy name in the connected vCenter.
         Common examples include "vSAN Default Storage Policy", "VM Storage Policy - Thick Provision",
         or custom storage policies created for specific deployment requirements.
 
         .EXAMPLE
-        Get-StoragePolicyId -storagePolicyName "vSAN Default Storage Policy"
+        Get-StoragePolicyId -StoragePolicyName "vSAN Default Storage Policy"
 
         Retrieves the unique identifier for the default vSAN storage policy.
 
         .EXAMPLE
-        $policyId = Get-StoragePolicyId -storagePolicyName "VM Storage Policy - Thick Provision"
+        $policyId = Get-StoragePolicyId -StoragePolicyName "VM Storage Policy - Thick Provision"
 
         Stores the storage policy ID in a variable for use in subsequent operations.
 
         .EXAMPLE
-        Get-StoragePolicyId -storagePolicyName $inputData.common.storagePolicy.storagePolicyName
+        Get-StoragePolicyId -StoragePolicyName $InputData.common.storagePolicy.storagePolicyName
 
         Retrieves the storage policy ID using a policy name from configuration data.
 
@@ -6495,7 +7085,7 @@ Function Get-StoragePolicyId {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$storagePolicyName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-StoragePolicyId function..."
@@ -6509,11 +7099,11 @@ Function Get-StoragePolicyId {
 
     # Get storage policy id from the storage policy name.
     try {
-        $policy = Get-SpbmStoragePolicy -Name $storagePolicyName -Server $Script:VCenterName
+        $policy = Get-SpbmStoragePolicy -Name $StoragePolicyName -Server $Script:VCenterName
         $storagePolicyId = $($policy.Id)
         return $storagePolicyId
     } catch {
-        Write-LogMessage -Type "ERROR" -Message "Unable to fetch storage policy id `"$storagePolicyName`" on `"$Script:VCenterName`": $_"
+        Write-LogMessage -Type "ERROR" -Message "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:VCenterName`": $_"
         throw "Deployment failed. Check logs for details."
     }
 }
@@ -6536,47 +7126,47 @@ Function Get-OrCreateSupervisor {
         which is passed through to both Get-SupervisorId and Add-Supervisor functions. When the insecureTls
         switch is not specified, TLS certificate validation is enforced (secure by default).
 
-        .PARAMETER clusterId
+        .PARAMETER ClusterId
         The ID of the vSphere cluster where the supervisor should be created or verified to exist.
         Format example: "domain-c123" or similar vCenter managed object reference.
 
-        .PARAMETER clusterName
+        .PARAMETER ClusterName
         The name of the vSphere cluster. This is used for logging and identification purposes
-        when creating a supervisor. The cluster must exist and match the clusterId.
+        when creating a supervisor. The cluster must exist and match the ClusterId.
 
-        .PARAMETER insecureTls
+        .PARAMETER InsecureTls
         Optional switch parameter that bypasses SSL certificate validation for vCenter connections.
         When specified, this flag is passed to both Get-SupervisorId and Add-Supervisor functions,
         allowing operations in development and lab environments where valid certificates may not be
         available. If not specified, TLS certificate validation is enforced (secure by default).
         This parameter should not be used in production environments.
 
-        .PARAMETER storagePolicyId
+        .PARAMETER StoragePolicyId
         The id of the storage policy. This policy will be used for the supervisor configuration.
         The storage policy must exist and be compatible with the target cluster infrastructure.
 
-        .PARAMETER supervisorJson
+        .PARAMETER SupervisorJson
         The JSON configuration file path or content for supervisor creation. This configuration is used
         when creating a new supervisor and must contain all required supervisor specifications including
         vSphere zone, control plane configuration, network settings, and TKGS component specifications.
 
-        .PARAMETER supervisorName
+        .PARAMETER SupervisorName
         The name of the supervisor to check for existence or create if it doesn't exist. This name must
         follow vSphere supervisor naming conventions and should be unique within the vCenter environment.
 
-        .PARAMETER vCenterPasswordDecrypted
+        .PARAMETER VCenterPasswordDecrypted
         The decrypted password for vCenter authentication. Used to authenticate with vCenter when checking
         for existing supervisors and when creating new supervisors. This should be provided as a plain
         text string (decrypted from SecureString).
 
         .EXAMPLE
-        Get-OrCreateSupervisor -storagePolicyId "policy-123" -supervisorName "supervisor-01" -vCenterPasswordDecrypted "VMware1!" -supervisorJson $supervisorJson -clusterId "domain-c123" -clusterName "Cluster-01"
+        Get-OrCreateSupervisor -StoragePolicyId "policy-123" -SupervisorName "supervisor-01" -VCenterPasswordDecrypted "VMware1!" -SupervisorJson $SupervisorJson -ClusterId "domain-c123" -ClusterName "Cluster-01"
 
         Checks if supervisor "supervisor-01" exists, creates it if it doesn't, and returns the supervisor ID.
         TLS certificate validation is enforced (secure mode).
 
         .EXAMPLE
-        Get-OrCreateSupervisor -storagePolicyId "policy-123" -supervisorName "supervisor-01" -vCenterPasswordDecrypted "VMware1!" -supervisorJson $supervisorJson -clusterId "domain-c123" -clusterName "Cluster-01" -insecureTls
+        Get-OrCreateSupervisor -StoragePolicyId "policy-123" -SupervisorName "supervisor-01" -VCenterPasswordDecrypted "VMware1!" -SupervisorJson $SupervisorJson -ClusterId "domain-c123" -ClusterName "Cluster-01" -InsecureTls
 
         Checks if supervisor "supervisor-01" exists, creates it if it doesn't, and returns the supervisor ID.
         TLS certificate validation is bypassed for development/lab environments.
@@ -6604,29 +7194,29 @@ Function Get-OrCreateSupervisor {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$insecureTls,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$storagePolicyId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorJson,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vCenterPasswordDecrypted
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VCenterPasswordDecrypted
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-OrCreateSupervisor function..."
 
     # Check if supervisor already exists, if not create it.
-    if ($insecureTls) {
-        if (-not (Get-SupervisorId -supervisorName $supervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $vCenterPasswordDecrypted -insecureTls)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $supervisorJson -storagePolicyId $storagePolicyId -clusterId $clusterId -clusterName $clusterName -supervisorName $supervisorName -vCenterPasswordDecrypted $vCenterPasswordDecrypted -insecureTls
+    if ($InsecureTls) {
+        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $VCenterPasswordDecrypted -insecureTls)) {
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -vCenterPasswordDecrypted $VCenterPasswordDecrypted -insecureTls
         } else {
-            $supervisorId = Get-SupervisorId -supervisorName $supervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $vCenterPasswordDecrypted -silence -insecureTls
+            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $VCenterPasswordDecrypted -silence -insecureTls
         }
     } else {
-        if (-not (Get-SupervisorId -supervisorName $supervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $vCenterPasswordDecrypted)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $supervisorJson -storagePolicyId $storagePolicyId -clusterId $clusterId -clusterName $clusterName -supervisorName $supervisorName -vCenterPasswordDecrypted $vCenterPasswordDecrypted
+        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $VCenterPasswordDecrypted)) {
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -vCenterPasswordDecrypted $VCenterPasswordDecrypted
         } else {
-            $supervisorId = Get-SupervisorId -supervisorName $supervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $vCenterPasswordDecrypted -silence
+            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $VCenterPasswordDecrypted -silence
         }
     }
 
@@ -6660,25 +7250,25 @@ Function Add-ArgoCDNamespace {
         This function integrates with vSphere with Tanzu infrastructure and serves as a foundational step
         for ArgoCD deployment, ensuring proper resource allocation and configuration for GitOps workflows.
 
-        .PARAMETER supervisorId
+        .PARAMETER SupervisorId
         The unique identifier of the vSphere Supervisor cluster where the namespace will be created.
         This ID is typically obtained from the Get-SupervisorId function or supervisor creation process.
         The supervisor cluster must be in a ready state and properly configured for namespace creation.
         Format example: "domain-c123" or similar vCenter managed object reference.
 
-        .PARAMETER argoCdNamespace
+        .PARAMETER ArgoCdNamespace
         The name for the ArgoCD namespace to be created. This name must follow Kubernetes namespace
         naming conventions (lowercase alphanumeric characters and hyphens only, maximum 63 characters).
         The namespace provides resource isolation and serves as the deployment target for ArgoCD
         operator and instance resources. Common examples: "argocd", "argocd-prod", "gitops-system".
 
-        .PARAMETER storagePolicyId
+        .PARAMETER StoragePolicyId
         The unique identifier of the vSphere storage policy to be applied to the namespace.
         This policy defines storage characteristics including performance tier, availability requirements,
         and placement rules for all persistent volumes created within the ArgoCD namespace.
         The storage policy must exist and be compatible with the target datastore infrastructure.
 
-        .PARAMETER vmClasses
+        .PARAMETER VmClasses
         Array of VM class names that define compute resource specifications (CPU cores, memory allocation,
         storage capacity) for virtual machines and pods running within the ArgoCD namespace.
         VM classes control resource allocation and performance characteristics for ArgoCD workloads.
@@ -6688,23 +7278,23 @@ Function Add-ArgoCDNamespace {
         Supports both single string and array input formats.
 
         .EXAMPLE
-        Add-ArgoCDNamespace -supervisorId "domain-c123" -argoCdNamespace "argocd" -storagePolicyId "policy-456" -vmClasses @("best-effort-medium")
+        Add-ArgoCDNamespace -SupervisorId "domain-c123" -ArgoCdNamespace "argocd" -StoragePolicyId "policy-456" -VmClasses @("best-effort-medium")
 
         Creates an ArgoCD namespace named "argocd" on supervisor cluster "domain-c123" with a single VM class.
         Uses storage policy "policy-456" for persistent volumes.
 
         .EXAMPLE
-        Add-ArgoCDNamespace -supervisorId $supervisorId -argoCdNamespace "argocd-production" -storagePolicyId $storagePolicyId -vmClasses @("guaranteed-large", "best-effort-2xlarge")
+        Add-ArgoCDNamespace -SupervisorId $SupervisorId -ArgoCdNamespace "argocd-production" -StoragePolicyId $StoragePolicyId -VmClasses @("guaranteed-large", "best-effort-2xlarge")
 
         Creates a production ArgoCD namespace with multiple VM classes to support different workload types.
         The namespace can deploy pods using either guaranteed or best-effort resource allocation.
 
         .EXAMPLE
         $namespaceParams = @{
-            supervisorId = Get-SupervisorId -clusterName $clusterName
-            argoCdNamespace = $inputData.common.argoCD.nameSpace
-            storagePolicyId = Get-StoragePolicyId -policyName $inputData.common.storagePolicy.storagePolicyName
-            vmClasses = $inputData.common.argoCD.vmClass
+            SupervisorId = Get-SupervisorId -SupervisorName $SupervisorName
+            ArgoCdNamespace = $InputData.common.argoCD.nameSpace
+            StoragePolicyId = Get-StoragePolicyId -StoragePolicyName $InputData.common.storagePolicy.storagePolicyName
+            VmClasses = $InputData.common.argoCD.vmClass
         }
         Add-ArgoCDNamespace @namespaceParams
 
@@ -6765,58 +7355,56 @@ Function Add-ArgoCDNamespace {
         Get-StoragePolicyId
         Install-ArgoCDOperator
         Add-ArgoCDInstance
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$argoCdNamespace,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$storagePolicyId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$vmClasses
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCdNamespace,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
+
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$VmClasses
     )
     Write-LogMessage -Type DEBUG -Message "Entered Add-ArgoCDNamespace function..."
 
     try {
-        if ((Invoke-ListNamespacesInstances).Namespace -contains $argoCdNamespace) {
-            Write-LogMessage -Type WARNING -Message "The ArgoCD namespace `"$argoCdNamespace`" has already been created on vCenter `"$Script:VCenterName`"."
+        if ((Invoke-ListNamespacesInstances).Namespace -contains $ArgoCdNamespace) {
+            Write-LogMessage -Type WARNING -Message "The ArgoCD namespace `"$ArgoCdNamespace`" has already been created on vCenter `"$Script:VCenterName`"."
             return
         }
 
-        # Create the namespace on the supervisor
-        Write-LogMessage -Type DEBUG -Message "Creating namespace '$argoCdNamespace' on supervisor '$supervisorId'..."
+        # Create the namespace on the supervisor.
+
+        Write-LogMessage -Type DEBUG -Message "Creating namespace '$ArgoCdNamespace' on supervisor '$SupervisorId'..."
         try {
-            $vcenterNamespacesInstancesCreateSpecV2 = Initialize-VcenterNamespacesInstancesCreateSpecV2 -supervisor $supervisorId -Namespace $argoCdNamespace
+            $vcenterNamespacesInstancesCreateSpecV2 = Initialize-VcenterNamespacesInstancesCreateSpecV2 -supervisor $SupervisorId -Namespace $ArgoCdNamespace
             Invoke-CreateNamespacesInstancesV2 -VcenterNamespacesInstancesCreateSpecV2 $vcenterNamespacesInstancesCreateSpecV2 -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type DEBUG -Message "Namespace creation initiated successfully"
         }
         catch {
-            # Extract clean error message from API response
+            # Extract clean error message from API response.
+
             $errorMessage = $_.Exception.Message
 
-            # Try to extract error details from JSON error response
+            # Try to extract error details from JSON error response.
+
             if ($errorMessage -match '"error_type":"([^"]+)"') {
                 $errorType = $matches[1]
-                Write-LogMessage -Type ERROR -Message "Failed to create namespace '$argoCdNamespace': Error type: $errorType"
+                Write-LogMessage -Type ERROR -Message "Failed to create namespace '$ArgoCdNamespace': Error type: $errorType"
             }
             else {
-                Write-LogMessage -Type ERROR -Message "Failed to create namespace '$argoCdNamespace'"
+                Write-LogMessage -Type ERROR -Message "Failed to create namespace '$ArgoCdNamespace'"
             }
 
-            # Try to extract the localized message from JSON
-            if ($errorMessage -match '"default_message":"([^"]+)"') {
-                $cleanMessage = $matches[1]
-                Write-LogMessage -Type ERROR -Message "Reason: $cleanMessage"
-            }
-            elseif ($errorMessage -match '"localized":"([^"]+)"') {
-                $cleanMessage = $matches[1]
-                Write-LogMessage -Type ERROR -Message "Reason: $cleanMessage"
-            }
-            else {
-                Write-LogMessage -Type ERROR -Message "Error details: $errorMessage"
-            }
+            # Extract clean error message from JSON error response.
+            $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errorMessage
+            Write-LogMessage -Type ERROR -Message "Reason: $cleanMessage"
 
-            Write-LogMessage -Type ERROR -Message "Supervisor ID: $supervisorId"
-            Write-LogMessage -Type ERROR -Message "Namespace: $argoCdNamespace"
+            Write-LogMessage -Type ERROR -Message "Supervisor ID: $SupervisorId"
+            Write-LogMessage -Type ERROR -Message "Namespace: $ArgoCdNamespace"
 
-            # Provide helpful context based on error type
+            # Provide helpful context based on error type.
+
             if ($errorMessage -match 'NOT_ALLOWED_IN_CURRENT_STATE') {
                 Write-LogMessage -Type ERROR -Message ""
                 Write-LogMessage -Type ERROR -Message "TROUBLESHOOTING: The supervisor cluster is not in a valid state for namespace creation."
@@ -6832,32 +7420,32 @@ Function Add-ArgoCDNamespace {
         Start-Sleep 5
 
         # Set the storage limit to unlimited (by not specifying -Limit parameter)
-        Write-LogMessage -Type DEBUG -Message "Initializing storage specification with policy ID: $storagePolicyId"
-        $vcenterNamespacesInstancesStorageSpec = Initialize-VcenterNamespacesInstancesStorageSpec -Policy $storagePolicyId -ErrorAction Stop
+        Write-LogMessage -Type DEBUG -Message "Initializing storage specification with policy ID: $StoragePolicyId"
+        $vcenterNamespacesInstancesStorageSpec = Initialize-VcenterNamespacesInstancesStorageSpec -Policy $StoragePolicyId -ErrorAction Stop
         Write-LogMessage -Type DEBUG -Message "Storage specification initialized successfully"
 
         # Pass VM classes as array (API expects List<string>, not comma-separated string)
-        Write-LogMessage -Type INFO -Message "Configuring VM classes: $($vmClasses -join ', ')"
-        Write-LogMessage -Type DEBUG -Message "VM classes count: $($vmClasses.Count)"
-        Write-LogMessage -Type DEBUG -Message "VM classes array: $($vmClasses | ForEach-Object { "'$_'" } | Join-String -Separator ', ')"
+        Write-LogMessage -Type INFO -Message "Configuring VM classes: $($VmClasses -join ', ')"
+        Write-LogMessage -Type DEBUG -Message "VM classes count: $($VmClasses.Count)"
+        Write-LogMessage -Type DEBUG -Message "VM classes array: $($VmClasses | ForEach-Object { "'$_'" } | Join-String -Separator ', ')"
 
         # Initialize the VM service specification (without content library)
         Write-LogMessage -Type DEBUG -Message "Attempting to initialize VM service specification with VM classes..."
         try {
-            $VcenterNamespacesInstancesVMServiceSpec = Initialize-VcenterNamespacesInstancesVMServiceSpec -VmClasses $vmClasses -ErrorAction Stop
+            $vcenterNamespacesInstancesVMServiceSpec = Initialize-VcenterNamespacesInstancesVMServiceSpec -VmClasses $VmClasses -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "VM service specification initialized successfully"
         }
         catch {
             Write-LogMessage -Type ERROR -Message "Failed to initialize VM service specification"
             Write-LogMessage -Type ERROR -Message "Error details: $($_.Exception.Message)"
-            Write-LogMessage -Type ERROR -Message "VM classes attempted: $($vmClasses -join ', ')"
+            Write-LogMessage -Type ERROR -Message "VM classes attempted: $($VmClasses -join ', ')"
             throw "Deployment failed. Check logs for details."
         }
 
         # Initialize the namespace set specification (with storage and VM service specifications)
         Write-LogMessage -Type DEBUG -Message "Initializing namespace set specification..."
         try {
-            $vcenterNamespacesInstancesSetSpec = Initialize-NamespacesInstancesSetSpec -StorageSpecs $vcenterNamespacesInstancesStorageSpec -VmServiceSpec $VcenterNamespacesInstancesVMServiceSpec -ErrorAction Stop
+            $vcenterNamespacesInstancesSetSpec = Initialize-NamespacesInstancesSetSpec -StorageSpecs $vcenterNamespacesInstancesStorageSpec -VmServiceSpec $vcenterNamespacesInstancesVMServiceSpec -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "Namespace set specification initialized successfully"
         }
         catch {
@@ -6868,28 +7456,24 @@ Function Add-ArgoCDNamespace {
 
         # Apply the namespace configuration (this is where VM classes are actually assigned)
         Write-LogMessage -Type DEBUG -Message "Applying namespace configuration to '$argocdNameSpace'..."
-        Write-LogMessage -Type DEBUG -Message "This step assigns VM classes: $($vmClasses -join ', ')"
+        Write-LogMessage -Type DEBUG -Message "This step assigns VM classes: $($VmClasses -join ', ')"
         try {
             Invoke-SetNamespaceInstances -Namespace $argocdNameSpace -VcenterNamespacesInstancesSetSpec $vcenterNamespacesInstancesSetSpec -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type DEBUG -Message "Namespace configuration applied successfully"
         }
         catch {
-            # Extract clean error message from API response
+            # Extract clean error message from API response.
             $errorMessage = $_.Exception.Message
 
-            # Try to extract default_message from JSON error response
-            if ($errorMessage -match '"default_message":"([^"]+)"') {
-                $cleanMessage = $matches[1]
-                Write-LogMessage -Type ERROR -Message "Failed to apply namespace configuration: $cleanMessage"
-            }
-            else {
-                Write-LogMessage -Type ERROR -Message "Failed to apply namespace configuration: $errorMessage"
-            }
+            # Extract clean error message from JSON error response.
+            $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errorMessage
+            Write-LogMessage -Type ERROR -Message "Failed to apply namespace configuration: $cleanMessage"
 
-            Write-LogMessage -Type ERROR -Message "VM classes attempted: $($vmClasses -join ', ')"
+            Write-LogMessage -Type ERROR -Message "VM classes attempted: $($VmClasses -join ', ')"
             Write-LogMessage -Type ERROR -Message "Namespace: $argocdNameSpace"
 
-            # Clean up: Delete the namespace since configuration failed
+            # Clean up: Delete the namespace since configuration failed.
+
             Write-LogMessage -Type INFO -Message "Cleaning up: Deleting namespace '$argocdNameSpace' due to configuration failure..."
             try {
                 Invoke-DeleteNamespaceInstances -Namespace $argocdNameSpace -Confirm:$false -ErrorAction Stop | Out-Null
@@ -6904,8 +7488,8 @@ Function Add-ArgoCDNamespace {
         }
 
         Start-Sleep 5
-        Write-LogMessage -Type INFO -Message "The ArgoCD namespace `"$argoCdNamespace`" was created successfully."
-        Write-LogMessage -Type INFO -Message "VM classes assigned: $($vmClasses -join ', ')"
+        Write-LogMessage -Type INFO -Message "The ArgoCD namespace `"$ArgoCdNamespace`" was created successfully."
+        Write-LogMessage -Type INFO -Message "VM classes assigned: $($VmClasses -join ', ')"
     } catch {
         Write-LogMessage -Type "ERROR" -Message "The namespace could not be created: $_"
         throw "Deployment failed. Check logs for details."
@@ -6944,32 +7528,32 @@ Function Install-ArgoCDOperator {
         - Integration with vSphere Supervisor cluster infrastructure
         - Support for version-specific ArgoCD operator deployments
 
-        .PARAMETER clusterId
+        .PARAMETER ClusterId
         The vCenter cluster MoRef identifier (e.g., "domain-c462") where the supervisor is enabled.
         This is used to dynamically construct the service namespace for error messages and diagnostics.
         The cluster ID is obtained from Get-ClusterId.
 
-        .PARAMETER supervisorId
+        .PARAMETER SupervisorId
         The unique identifier of the vSphere Supervisor cluster where the ArgoCD operator will be installed.
         This should be the supervisor cluster ID obtained from supervisor creation or discovery operations.
         The supervisor cluster must be in a running state and have the necessary prerequisites configured
         including storage policies, content libraries, and network configurations. This is used for the
         actual API call to create the supervisor service.
 
-        .PARAMETER service
+        .PARAMETER Service
         The service identifier (reference name) for the ArgoCD operator supervisor service. This is typically
         extracted from the ArgoCD service YAML package file and identifies the specific service to be deployed.
         The service identifier must match the spec.refName from the ArgoCD service package definition and
         should follow the format "argocd-service.vsphere.vmware.com" or similar naming convention.
 
-        .PARAMETER version
+        .PARAMETER Version
         The version of the ArgoCD operator service to install. This should match the spec.version from the
         ArgoCD service package definition and determines the specific operator version and capabilities.
         Version format typically follows semantic versioning with build identifiers (e.g., "1.0.0-24815986").
         The version must be compatible with the supervisor cluster version and capabilities.
 
         .EXAMPLE
-        Install-ArgoCDOperator -clusterId "domain-c462" -supervisorId "domain-s123" -service "argocd-service.vsphere.vmware.com" -version "1.0.0-24815986"
+        Install-ArgoCDOperator -ClusterId "domain-c462" -SupervisorId "domain-s123" -Service "argocd-service.vsphere.vmware.com" -Version "1.0.0-24815986"
 
         Installs the ArgoCD operator version 1.0.0-24815986 on supervisor cluster "domain-s123" using the
         standard ArgoCD service identifier. The function will monitor the installation progress and report
@@ -6977,14 +7561,15 @@ Function Install-ArgoCDOperator {
 
         .EXAMPLE
         $argoServiceName, $argoServiceVersion = Get-ArgoCDServiceDetail -Path $argoCDyaml
-        Install-ArgoCDOperator -clusterId $clusterId -supervisorId $supervisorId -service $argoServiceName -version $argoServiceVersion
+        Install-ArgoCDOperator -clusterId $ClusterId -supervisorId $SupervisorId -service $argoServiceName -version $argoServiceVersion
 
         Installs the ArgoCD operator using service details extracted from a YAML package file, demonstrating
         integration with service discovery functions for dynamic deployment scenarios.
 
         .EXAMPLE
-        Install-ArgoCDOperator -clusterId $clusterId -supervisorId $supervisorId -service $serviceName -version $serviceVersion
-        # Function will handle existing service gracefully and monitor configuration status
+        Install-ArgoCDOperator -clusterId $ClusterId -supervisorId $SupervisorId -service $ServiceName -version $ServiceVersion
+        # Function will handle existing service gracefully and monitor configuration status.
+
 
         Shows the function's ability to handle existing services and provide appropriate feedback for
         various deployment states including already configured services.
@@ -7044,12 +7629,12 @@ Function Install-ArgoCDOperator {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [Int]$checkInterval = 5,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$clusterId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$service,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$supervisorId,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$version,
-        [Parameter(Mandatory = $false)] [Int]$totalWaitTime = 300
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Service,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime = 300,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Version
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Install-ArgoCDOperator function..."
@@ -7057,110 +7642,99 @@ Function Install-ArgoCDOperator {
     # Construct the service namespace (format: svc-<service-slug>-<cluster-id>).
     # The service slug is derived from the service name by removing the domain suffix.
     # The cluster ID (e.g., domain-c462) is used, NOT the supervisor UUID.
-    $serviceSlug = $service -replace '\.vsphere\.vmware\.com$', ''
-    $serviceNamespace = "svc-$serviceSlug-$clusterId"
+    $serviceSlug = $Service -replace '\.vsphere\.vmware\.com$', ''
+    $serviceNamespace = "svc-$serviceSlug-$ClusterId"
 
     try {
-        $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec = Initialize-VcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -SupervisorService $service -Version $version
+        $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec = Initialize-VcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -SupervisorService $Service -Version $Version
         try {
-            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $supervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -Confirm:$false -ErrorAction:Stop
+            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -Confirm:$false -ErrorAction:Stop
             Write-LogMessage -TYPE INFO -Message "The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete."
-            Start-Sleep $checkInterval
+            Start-Sleep $CheckInterval
         } catch {
             $errMsg = $_.Exception.Message
 
-            if ($errMsg -match "a Supervisor Service with the identifier (.*) already exists") {
-                Write-LogMessage -TYPE WARNING -Message "A supervisor service was already created. Checking configuration status."
-            }
-            elseif ($errMsg -match "Supervisor Service is not in activated state") {
-                # Service exists but is in a non-activated state (likely failed previous installation).
-                Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: Failed to create Supervisor Service ($service) version ($version) on cluster ($supervisorId). Supervisor Service is not in activated state."
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "This error indicates the ArgoCD service already exists but is in a broken or deactivated state."
-                Write-LogMessage -TYPE ERROR -Message "SOLUTION: Delete and recreate the ArgoCD operator service:"
-                Write-LogMessage -TYPE ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
-                Write-LogMessage -TYPE ERROR -Message "  2. Find `"$service`" in the list."
-                Write-LogMessage -TYPE ERROR -Message "  3. Click the Actions dropdown menu for this service."
-                Write-LogMessage -TYPE ERROR -Message "  4. If available, click `"Deactivate Service`" and wait for completion."
-                Write-LogMessage -TYPE ERROR -Message "  5. Click the Actions dropdown menu again."
-                Write-LogMessage -TYPE ERROR -Message "  6. Click `"Delete`" to remove the service."
-                Write-LogMessage -TYPE ERROR -Message "  7. Wait for the service to be fully deleted."
-                Write-LogMessage -TYPE ERROR -Message "  8. Re-run this script to install a clean ArgoCD operator."
-                Write-Host ""
-                Write-LogMessage -TYPE WARNING -Message "If the service is stuck and cannot be deleted via UI:"
-                Write-LogMessage -TYPE WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
-                Write-LogMessage -TYPE WARNING -Message "  Then manually remove the service via vCenter REST API or contact VMware support."
-                throw "Deployment failed. Check logs for details."
-            }
-            elseif ($errMsg -match "Signature verification result for Service Version ([0-9.-]+) not found") {
-                # Service version not available on this supervisor (signature verification failed)
-                $requestedVersion = $matches[1]
+            switch -Regex ($errMsg) {
+                "a Supervisor Service with the identifier (.*) already exists" {
+                    Write-LogMessage -TYPE WARNING -Message "A supervisor service was already created. Checking configuration status."
+                }
+                "Supervisor Service is not in activated state" {
+                    # Service exists but is in a non-activated state (likely failed previous installation).
+                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: Failed to create Supervisor Service ($Service) version ($Version) on cluster ($SupervisorId). Supervisor Service is not in activated state."
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "This error indicates the ArgoCD service already exists but is in a broken or deactivated state."
+                    Write-LogMessage -TYPE ERROR -Message "SOLUTION: Delete and recreate the ArgoCD operator service:"
+                    Write-LogMessage -TYPE ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
+                    Write-LogMessage -TYPE ERROR -Message "  2. Find `"$Service`" in the list."
+                    Write-LogMessage -TYPE ERROR -Message "  3. Click the Actions dropdown menu for this service."
+                    Write-LogMessage -TYPE ERROR -Message "  4. If available, click `"Deactivate Service`" and wait for completion."
+                    Write-LogMessage -TYPE ERROR -Message "  5. Click the Actions dropdown menu again."
+                    Write-LogMessage -TYPE ERROR -Message "  6. Click `"Delete`" to remove the service."
+                    Write-LogMessage -TYPE ERROR -Message "  7. Wait for the service to be fully deleted."
+                    Write-LogMessage -TYPE ERROR -Message "  8. Re-run this script to install a clean ArgoCD operator."
+                    Write-Host ""
+                    Write-LogMessage -TYPE WARNING -Message "If the service is stuck and cannot be deleted via UI:"
+                    Write-LogMessage -TYPE WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
+                    Write-LogMessage -TYPE WARNING -Message "  Then manually remove the service via vCenter REST API or contact VMware support."
+                    throw "Deployment failed. Check logs for details."
+                }
+                "Signature verification result for Service Version ([0-9.-]+) not found" {
+                    # Service version not available on this supervisor (signature verification failed)
+                    $requestedVersion = $matches[1]
 
-                # Extract clean error message
-                $cleanErrorMessage = "ArgoCD service version $requestedVersion is not available on this supervisor."
-                if ($errMsg -match '"localized":"([^"]+)"') {
-                    $cleanErrorMessage = $matches[1]
-                }
-                elseif ($errMsg -match '"default_message":"([^"]+)"') {
-                    $cleanErrorMessage = $matches[1]
-                }
+                    # Extract clean error message.
+                    $cleanErrorMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
+                    if ($cleanErrorMessage -eq $errMsg) {
+                        # No clean message found, use default message.
+                        $cleanErrorMessage = "ArgoCD service version $requestedVersion is not available on this supervisor."
+                    }
 
-                Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
-                Write-LogMessage -TYPE ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
-                Write-LogMessage -TYPE ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
-                throw "Deployment failed. Check logs for details."
-            }
-            elseif ($errMsg -match "Supervisor Service \(argocd-service\.vsphere\.vmware\.com\) version \(([^)]+)\) has not been found") {
-                # Generic "version not found" error
-                $requestedVersion = $matches[1]
-                Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: ArgoCD service version $requestedVersion is not available on this supervisor."
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
-                Write-LogMessage -TYPE ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
-                Write-LogMessage -TYPE ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
-                throw "Deployment failed. Check logs for details."
-            }
-            elseif ($errMsg -match "Failed to run compatibility check for Supervisor Service") {
-                # Only catch compatibility check errors that are NOT about version availability
-                # Extract the localized error message from JSON response
-                $cleanErrorMessage = $errMsg
-                if ($errMsg -match '"localized":"([^"]+)"') {
-                    $cleanErrorMessage = $matches[1]
+                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
+                    Write-LogMessage -TYPE ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
+                    Write-LogMessage -TYPE ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
+                    throw "Deployment failed. Check logs for details."
                 }
-                elseif ($errMsg -match '"default_message":"([^"]+)"') {
-                    $cleanErrorMessage = $matches[1]
+                "Supervisor Service \(argocd-service\.vsphere\.vmware\.com\) version \(([^)]+)\) has not been found" {
+                    # Generic "version not found" error.
+                    $requestedVersion = $matches[1]
+                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: ArgoCD service version $requestedVersion is not available on this supervisor."
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
+                    Write-LogMessage -TYPE ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
+                    Write-LogMessage -TYPE ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
+                    throw "Deployment failed. Check logs for details."
                 }
+                "Failed to run compatibility check for Supervisor Service" {
+                    # Only catch compatibility check errors that are NOT about version availability.
 
-                Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
-                Write-Host ""
-                Write-LogMessage -TYPE ERROR -Message "SOLUTION: Upgrade your supervisor to version 9.0.0.0-0100-24847555 or higher and try again."
-                Write-LogMessage -TYPE ERROR -Message "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
-                throw "Deployment failed. Check logs for details."
-            }
-            else {
-                # Try to extract clean error message from JSON response
-                $cleanMessage = $null
-                if ($errMsg -match '"default_message":"([^"]+)"') {
-                    $cleanMessage = $matches[1]
-                }
-                elseif ($errMsg -match '"localized":"([^"]+)"') {
-                    $cleanMessage = $matches[1]
-                }
+                    # Extract clean error message from JSON response.
+                    $cleanErrorMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
 
-                if ($cleanMessage) {
-                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanMessage"
+                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
+                    Write-Host ""
+                    Write-LogMessage -TYPE ERROR -Message "SOLUTION: Upgrade your supervisor to version 9.0.0.0-0100-24847555 or higher and try again."
+                    Write-LogMessage -TYPE ERROR -Message "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
+                    throw "Deployment failed. Check logs for details."
                 }
-                else {
-                    Write-LogMessage -TYPE ERROR -Message "Unexpected error in Install-ArgoCDOperator: $errMsg"
-                }
+                default {
+                    # Extract clean error message from JSON response.
+                    $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
 
-                throw "Deployment failed. Check logs for details."
+                    if ($cleanMessage -ne $errMsg) {
+                        Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanMessage"
+                    }
+                    else {
+                        Write-LogMessage -TYPE ERROR -Message "Unexpected error in Install-ArgoCDOperator: $errMsg"
+                    }
+
+                    throw "Deployment failed. Check logs for details."
+                }
             }
         }
 
@@ -7168,15 +7742,16 @@ Function Install-ArgoCDOperator {
 
         do {
             try {
-                $serviceOutput = Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesGet -supervisor $supervisorId -supervisorService $service
+                $serviceOutput = Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesGet -supervisor $SupervisorId -supervisorService $Service
             } catch {
-                # Handle JSON deserialization errors when config_status is empty or invalid
+                # Handle JSON deserialization errors when config_status is empty or invalid.
+
                 if ($_.Exception.Message -match "Error converting value.*config_status") {
                     Write-LogMessage -TYPE DEBUG -Message "Supervisor service status not yet available (empty config_status). Waiting..."
                     $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: Initializing (config status not yet available)"
                     Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status $statusMessage
-                    Start-Sleep $checkInterval
-                    $elapsedTime += $checkInterval
+                    Start-Sleep $CheckInterval
+                    $elapsedTime += $CheckInterval
                     continue
                 } else {
                     # Re-throw unexpected errors
@@ -7184,60 +7759,63 @@ Function Install-ArgoCDOperator {
                 }
             }
 
-            if ($serviceOutput.ConfigStatus -eq "CONFIGURED") {
-                Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Complete" -Completed
-                Write-LogMessage -TYPE INFO -Message "The ArgoCD operator has been successfully installed on vCenter `"$Script:VCenterName`" in $elapsedTime seconds."
-                return
-            } elseif ($serviceOutput.ConfigStatus -eq "ERROR") {
-                Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Error" -Completed
-
-                # Extract error messages for analysis.
-                $errorMessages = $serviceOutput.Messages
-
-                # Check for specific reconciliation failures that indicate leftover resources.
-                if ($errorMessages -match "ReconcileFailed|already exists|AlreadyExists") {
-                    Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed due to conflicting resources from a previous installation."
-                    Write-LogMessage -TYPE ERROR -Message "Error details: $errorMessages"
-                    Write-Host ""
-                    Write-LogMessage -TYPE ERROR -Message "SOLUTION: Clean up the existing ArgoCD operator and retry:"
-                    Write-LogMessage -TYPE ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
-                    Write-LogMessage -TYPE ERROR -Message "  2. Find `"ArgoCD Service`" and the Actions dropdown menu."
-                    Write-LogMessage -TYPE ERROR -Message "  3. Click on Delete."
-                    Write-LogMessage -TYPE ERROR -Message "  4. Click on Deactivate Service."
-                    Write-LogMessage -TYPE ERROR -Message "  5. Click on Confirm."
-                    Write-LogMessage -TYPE ERROR -Message "  6. Click on Delete."
-                    Write-LogMessage -TYPE ERROR -Message "  7. Wait for the service to be deleted."
-                    Write-LogMessage -TYPE ERROR -Message "  8. Re-run this script to install a clean ArgoCD operator."
-                    Write-LogMessage -TYPE WARNING -Message "If the service is stuck in ERROR state and cannot be deleted via UI:"
-                    Write-LogMessage -TYPE WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
-                } else {
-                    Write-LogMessage -TYPE ERROR -Message "The ArgoCD operator service has the following error message: $errorMessages"
+            switch ($serviceOutput.ConfigStatus) {
+                "CONFIGURED" {
+                    Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Complete" -Completed
+                    Write-LogMessage -TYPE INFO -Message "The ArgoCD operator has been successfully installed on vCenter `"$Script:VCenterName`" in $elapsedTime seconds."
+                    return
                 }
-                throw "Deployment failed. Check logs for details."
-            } else {
-                $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: $($serviceOutput.ConfigStatus)"
-                Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status $statusMessage
-                Start-Sleep $checkInterval
-                $elapsedTime += $checkInterval
+                "ERROR" {
+                    Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Error" -Completed
+
+                    # Extract error messages for analysis.
+                    $errorMessages = $serviceOutput.Messages
+
+                    # Check for specific reconciliation failures that indicate leftover resources.
+                    switch -Regex ($errorMessages) {
+                        "ReconcileFailed|already exists|AlreadyExists" {
+                            Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed due to conflicting resources from a previous installation."
+                            Write-LogMessage -TYPE ERROR -Message "Error details: $errorMessages"
+                            Write-Host ""
+                            Write-LogMessage -TYPE ERROR -Message "SOLUTION: Clean up the existing ArgoCD operator and retry:"
+                            Write-LogMessage -TYPE ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
+                            Write-LogMessage -TYPE ERROR -Message "  2. Find `"ArgoCD Service`" and the Actions dropdown menu."
+                            Write-LogMessage -TYPE ERROR -Message "  3. Click on Delete."
+                            Write-LogMessage -TYPE ERROR -Message "  4. Click on Deactivate Service."
+                            Write-LogMessage -TYPE ERROR -Message "  5. Click on Confirm."
+                            Write-LogMessage -TYPE ERROR -Message "  6. Click on Delete."
+                            Write-LogMessage -TYPE ERROR -Message "  7. Wait for the service to be deleted."
+                            Write-LogMessage -TYPE ERROR -Message "  8. Re-run this script to install a clean ArgoCD operator."
+                            Write-LogMessage -TYPE WARNING -Message "If the service is stuck in ERROR state and cannot be deleted via UI:"
+                            Write-LogMessage -TYPE WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
+                        }
+                        default {
+                            Write-LogMessage -TYPE ERROR -Message "The ArgoCD operator service has the following error message: $errorMessages"
+                        }
+                    }
+                    throw "Deployment failed. Check logs for details."
+                }
+                default {
+                    $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: $($serviceOutput.ConfigStatus)"
+                    Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status $statusMessage
+                    Start-Sleep $CheckInterval
+                    $elapsedTime += $CheckInterval
+                }
             }
-        } while ($elapsedTime -lt $totalWaitTime)
+        } while ($elapsedTime -lt $TotalWaitTime)
 
         Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Timeout" -Completed
-        Write-LogMessage -TYPE ERROR -Message "The service install request has timed out after $totalWaitTime seconds. Please check the service logs for more information."
+        Write-LogMessage -TYPE ERROR -Message "The service install request has timed out after $TotalWaitTime seconds. Please check the service logs for more information."
         throw "Deployment failed. Check logs for details."
     } catch {
-        # Try to extract clean error message from JSON response
+        # Try to extract clean error message from JSON response.
+
         $errMsg = $_.Exception.Message
-        $cleanMessage = $null
 
-        if ($errMsg -match '"default_message":"([^"]+)"') {
-            $cleanMessage = $matches[1]
-        }
-        elseif ($errMsg -match '"localized":"([^"]+)"') {
-            $cleanMessage = $matches[1]
-        }
+        # Extract clean error message from JSON response.
+        $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
 
-        if ($cleanMessage) {
+        if ($cleanMessage -ne $errMsg) {
             Write-LogMessage -TYPE ERROR -Message "ArgoCD operator installation failed: $cleanMessage"
         }
         elseif ($errMsg -match "vcenter.wcp.appplatform.supervisorservice.cluster.not_running") {
@@ -7274,7 +7852,7 @@ Function Convert-CountToInt {
         - Culture-invariant string parsing for consistent results
         - Truncation toward zero for floating-point to integer conversion
 
-        .PARAMETER item
+        .PARAMETER Item
         The PowerShell object to process. This can be any type of object including:
         - PSCustomObject with properties that may contain 'count' fields
         - Hashtable or IDictionary with 'count' keys
@@ -7284,7 +7862,7 @@ Function Convert-CountToInt {
         The parameter accepts pipeline input, allowing for easy processing of multiple objects.
 
         .EXAMPLE
-        $jsonObject = @{
+        $jsonFilePathObject = @{
             name = "example"
             count = 5.0
             items = @(
@@ -7292,7 +7870,7 @@ Function Convert-CountToInt {
                 @{ count = 3.14; value = "item2" }
             )
         }
-        Convert-CountToInt $jsonObject
+        Convert-CountToInt $jsonFilePathObject
 
         Converts the floating-point 'count' values to integers throughout the nested structure.
         After conversion: count = 5, items[0].count = 10, items[1].count = 3
@@ -7337,33 +7915,35 @@ Function Convert-CountToInt {
     #>
 
     Param (
-        [Parameter(ValueFromPipeline = $true)] $item
+        [Parameter(ValueFromPipeline = $true)] $Item
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Convert-CountToInt function..."
 
     # Return immediately if the input item is null to avoid processing null values.
-    if ($null -eq $item) { return }
+    if ($null -eq $Item) { return }
 
     # Process enumerable collections (arrays, lists, etc.) but exclude strings.
     # Recursively call Convert-CountToInt on each element in the collection.
-    if ($item -is [System.Collections.IEnumerable] -and $item -isnot [string]) {
-        foreach ($elem in $item) { Convert-CountToInt $elem }
+    if ($Item -is [System.Collections.IEnumerable] -and $Item -isnot [string]) {
+        foreach ($elem in $Item) { Convert-CountToInt $elem }
         return
     }
 
     # Process PSCustomObject properties.
     # Walk through all properties and convert any named 'count' from numeric types to integers.
-    if ($item -is [pscustomobject]) {
-        foreach ($prop in $item.PSObject.Properties) {
-            # Case-insensitive check for 'count' property name
+    if ($Item -is [pscustomobject]) {
+        foreach ($prop in $Item.PSObject.Properties) {
+            # Case-insensitive check for 'count' property name.
+
             if ($prop.Name -ieq 'count') {
                 $val = $prop.Value
                 # Convert floating-point numbers (double, single, decimal) to integers
                 if ($val -is [double] -or $val -is [single] -or $val -is [decimal]) {
                     $prop.Value = [int][double]$val       # Truncate toward zero
                 }
-                # Convert numeric strings to integers using culture-invariant parsing
+                # Convert numeric strings to integers using culture-invariant parsing.
+
                 elseif ($val -is [string]) {
                     $parsed = 0.0
                     if ([double]::TryParse(
@@ -7376,7 +7956,8 @@ Function Convert-CountToInt {
                     }
                 }
             }
-            # Recursively process nested property values
+            # Recursively process nested property values.
+
             Convert-CountToInt $prop.Value
         }
         return
@@ -7384,29 +7965,34 @@ Function Convert-CountToInt {
 
     # Process hashtables and other dictionary types (IDictionary interface)
     # This provides support for hashtables created with -AsHashtable parameter in ConvertFrom-Json.
-    if ($item -is [System.Collections.IDictionary]) {
-        # Create a copy of keys to avoid modification during enumeration
-        foreach ($key in @($item.Keys)) {
-            # Case-insensitive check for 'count' key in hashtables
+    if ($Item -is [System.Collections.IDictionary]) {
+        # Create a copy of keys to avoid modification during enumeration.
+
+        foreach ($key in @($Item.Keys)) {
+            # Case-insensitive check for 'count' key in hashtables.
+
             if ($key -is [string] -and $key.Equals('count',[System.StringComparison]::OrdinalIgnoreCase)) {
-                $val = $item[$key]
-                # Convert floating-point numbers to integers
+                $val = $Item[$key]
+                # Convert floating-point numbers to integers.
+
                 if ($val -is [double] -or $val -is [single] -or $val -is [decimal]) {
-                    $item[$key] = [int][double]$val
+                    $Item[$key] = [int][double]$val
                 }
-                # Convert numeric strings to integers using culture-invariant parsing
+                # Convert numeric strings to integers using culture-invariant parsing.
+
                 elseif ($val -is [string]) {
                     $parsed = 0.0
                     if ([double]::TryParse($val,
                         [System.Globalization.NumberStyles]::Float,
                         [System.Globalization.CultureInfo]::InvariantCulture,
                         [ref] $parsed)) {
-                        $item[$key] = [int][double]$parsed
+                        $Item[$key] = [int][double]$parsed
                     }
                 }
             }
-            # Recursively process nested dictionary values
-            Convert-CountToInt $item[$key]
+            # Recursively process nested dictionary values.
+
+            Convert-CountToInt $Item[$key]
         }
     }
 }
@@ -7430,41 +8016,47 @@ Function Get-InteractiveInput {
         cannot proceed without valid data, providing a consistent user experience across
         the VCF PowerShell Toolbox.
 
-        .PARAMETER promptMessage
+        .PARAMETER AsSecureString
+        When specified, the input will be collected as a secure string with masked
+        characters (asterisks) displayed instead of the actual input. This is
+        recommended for passwords and other sensitive information. The returned
+        value will be a System.Security.SecureString object.
+
+        .PARAMETER PromptMessage
         The message displayed to the user when requesting input. This should be a clear,
         descriptive prompt that explains what information is being requested. The message
         will be displayed repeatedly until valid input is provided.
-
-        .PARAMETER asSecureString
         When specified, the input will be collected as a secure string with masked
         characters (asterisks) displayed instead of the actual input. This is
         recommended for passwords and other sensitive information. The returned
         value will be a System.Security.SecureString object.
 
         .EXAMPLE
-        $Domain = Get-InteractiveInput -PromptMessage "Enter your domain (or press Enter for default)"
+        $domain = Get-InteractiveInput -PromptMessage "Enter your domain (or press Enter for default)"
 
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$promptMessage,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$asSecureString
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AsSecureString,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PromptMessage
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-InteractiveInput function..."
 
     do {
-        if ($asSecureString) {
-            $value = Read-Host $promptMessage -asSecureString
+        if ($AsSecureString) {
+            $value = Read-Host $PromptMessage -asSecureString
         } else {
-            $value = Read-Host $promptMessage
+            $value = Read-Host $PromptMessage
         }
     } while ($value.Length -eq 0)
 
     return $value
 }
 
+
 Function Get-JsonDataWithValidation {
+
     <#
         .SYNOPSIS
         Loads and validates JSON file existence and parseability with consistent error handling.
@@ -7498,8 +8090,8 @@ Function Get-JsonDataWithValidation {
         PSCustomObject - Parsed JSON data on success, or $null if validation failed.
 
         .EXAMPLE
-        $jsonData = Get-JsonDataWithValidation -JsonFilePath $jsonFilePath -JsonObjectName $jsonObjectName -ValidationResult ([ref]$validationResult)
-        if ($null -eq $jsonData) {
+        $jsonFilePathData = Get-JsonDataWithValidation -JsonFilePath $JsonFilePath -JsonObjectName $JsonObjectName -ValidationResult ([ref]$validationResult)
+        if ($null -eq $jsonFilePathData) {
             return $validationResult
         }
 
@@ -7534,9 +8126,9 @@ Function Get-JsonDataWithValidation {
 
     # Load and parse the JSON file.
     try {
-        $jsonData = ConvertFrom-JsonSafely -JsonFilePath $JsonFilePath
-        $ValidationResult.Value.JsonData = $jsonData
-        return $jsonData
+        $jsonFilePathData = ConvertFrom-JsonSafely -JsonFilePath $JsonFilePath
+        $ValidationResult.Value.JsonData = $jsonFilePathData
+        return $jsonFilePathData
     }
     catch {
         $ValidationResult.Value.IsValid = $false
@@ -7570,16 +8162,16 @@ Function Test-JsonFile {
         All errors are logged using the Write-LogMessage system for consistent error reporting.
 
         .EXAMPLE
-        Test-JsonFile -json "C:\config\settings.json"
+        Test-JsonFile -JsonFilePath "C:\config\settings.json"
         Returns $true if the file exists and contains valid JSON, $false otherwise.
 
         .EXAMPLE
-        if (Test-JsonFile -json $configPath) {
+        if (Test-JsonFile -JsonFilePath $configPath) {
             Write-Host "Configuration file is valid"
             $config = Get-Content $configPath | ConvertFrom-Json
         }
 
-        .PARAMETER json
+        .PARAMETER JsonFilePath
         The absolute path to the JSON file to be validated. This parameter is mandatory and must
         point to an existing file. The path can be either a local file path or a UNC path.
 
@@ -7596,108 +8188,102 @@ Function Test-JsonFile {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)]
-        [ValidateScript({
-            if ([string]::IsNullOrWhiteSpace($_)) {
-                throw "JSON file path cannot be null, empty, or contain only whitespace characters."
-            }
-            if ($_.Length -gt 260) {
-                throw "JSON file path cannot exceed 260 characters. Current length: $($_.Length)"
-            }
-            # Validate path format (basic validation for obviously invalid paths)
-            if ($_ -match '[<>"|?*]') {
-                throw "JSON file path contains invalid characters: $($matches[0])"
-            }
-            return $true
-        })]
-        [ValidateNotNullOrEmpty()]
-        [String]$json
+        [Parameter(Mandatory = $true)] [ValidateScript({ if ([string]::IsNullOrWhiteSpace($_)) { throw "JSON file path cannot be null, empty, or contain only whitespace characters." }; if ($_.Length -gt 260) { throw "JSON file path cannot exceed 260 characters. Current length: $($_.Length)" }; if ($_ -match '[<>"|?*]') { throw "JSON file path contains invalid characters: $($matches[0])" }; return $true })] [ValidateNotNullOrEmpty()] [String]$JsonFilePath
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-JsonFile function..."
 
     # Validate file existence first.
-    if (-not (Test-Path -Path $json -PathType Leaf)) {
-        Write-LogMessage -Type ERROR -Message "JSON file not found: '$json'"
+    if (-not (Test-Path -Path $JsonFilePath -PathType Leaf)) {
+        Write-LogMessage -Type ERROR -Message "JSON file not found: '$JsonFilePath'"
         return $false
     }
 
     # Validate file is actually a file (not a directory)
-    $fileInfo = Get-Item -Path $json -ErrorAction SilentlyContinue
+    $fileInfo = Get-Item -Path $JsonFilePath -ErrorAction SilentlyContinue
     if ($fileInfo -and $fileInfo.PSIsContainer) {
-        Write-LogMessage -Type ERROR -Message "Specified path is a directory, not a file: '$json'"
+        Write-LogMessage -Type ERROR -Message "Specified path is a directory, not a file: '$JsonFilePath'"
         return $false
     }
 
     # Check if file is readable.
     try {
-        $null = Get-Content -Path $json -TotalCount 1 -ErrorAction Stop
+        $null = Get-Content -Path $JsonFilePath -TotalCount 1 -ErrorAction Stop
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Access denied reading JSON file: '$json'. Please check file permissions."
+        Write-LogMessage -Type ERROR -Message "Access denied reading JSON file: '$JsonFilePath'. Please check file permissions."
         return $false
     } catch [System.IO.IOException] {
-        Write-LogMessage -Type ERROR -Message "I/O error reading JSON file: '$json'. File may be locked or corrupted."
+        Write-LogMessage -Type ERROR -Message "I/O error reading JSON file: '$JsonFilePath'. File may be locked or corrupted."
         return $false
     } catch {
-        Write-LogMessage -Type ERROR -Message "Unexpected error reading JSON file: '$json': $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message "Unexpected error reading JSON file: '$JsonFilePath': $($_.Exception.Message)"
         return $false
     }
 
     # Validate JSON content.
-    $jsonDocument = $null
+    $jsonFilePathDocument = $null
     try {
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating JSON content in file: '$json'"
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating JSON content in file: '$JsonFilePath'"
 
         # Read file content
-        $content = Get-Content -Path $json -Raw -ErrorAction Stop
+        $content = Get-Content -Path $JsonFilePath -Raw -ErrorAction Stop
 
-        # Check for empty file
+        # Check for empty file.
+
         if ([string]::IsNullOrWhiteSpace($content)) {
-            Write-LogMessage -Type ERROR -Message "JSON file is empty or contains only whitespace: '$json'"
+            Write-LogMessage -Type ERROR -Message "JSON file is empty or contains only whitespace: '$JsonFilePath'"
             return $false
         }
 
-        # Load and validate JSON using System.Text.Json for strict parsing
+        # Load and validate JSON using System.Text.Json for strict parsing.
+
         Add-Type -AssemblyName System.Text.Json -ErrorAction Stop
 
-        # Parse JSON with strict validation
-        $jsonDocument = [System.Text.Json.JsonDocument]::Parse($content)
+        # Parse JSON with strict validation.
 
-        # If we reach here, JSON is valid
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "JSON file validation successful: '$json'"
+        $jsonFilePathDocument = [System.Text.Json.JsonDocument]::Parse($content)
+
+        # If we reach here, JSON is valid.
+
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "JSON file validation successful: '$JsonFilePath'"
         return $true
 
     } catch [System.Text.Json.JsonException] {
-        # Handle JSON parsing errors specifically
-        Write-LogMessage -Type ERROR -Message "Invalid JSON format in file: '$json'"
+        # Handle JSON parsing errors specifically.
+
+        Write-LogMessage -Type ERROR -Message "Invalid JSON format in file: '$JsonFilePath'"
         Write-LogMessage -Type ERROR -Message "JSON parsing error: $($_.Exception.Message)"
         return $false
     } catch [System.ArgumentException] {
         # Handle argument exceptions (e.g., invalid UTF-8 encoding)
-        Write-LogMessage -Type ERROR -Message "Invalid content encoding in JSON file: '$json'"
+        Write-LogMessage -Type ERROR -Message "Invalid content encoding in JSON file: '$JsonFilePath'"
         Write-LogMessage -Type ERROR -Message "Encoding error: $($_.Exception.Message)"
         return $false
     } catch [System.IO.FileNotFoundException] {
-        # Handle case where file was deleted between existence check and read
-        Write-LogMessage -Type ERROR -Message "JSON file was deleted during validation: '$json'"
+        # Handle case where file was deleted between existence check and read.
+
+        Write-LogMessage -Type ERROR -Message "JSON file was deleted during validation: '$JsonFilePath'"
         return $false
     } catch [System.OutOfMemoryException] {
-        # Handle very large files that exceed memory limits
-        Write-LogMessage -Type ERROR -Message "JSON file too large to process: '$json'. File may exceed available memory."
+        # Handle very large files that exceed memory limits.
+
+        Write-LogMessage -Type ERROR -Message "JSON file too large to process: '$JsonFilePath'. File may exceed available memory."
         return $false
     } catch {
-        # Handle any other unexpected exceptions
-        Write-LogMessage -Type ERROR -Message "Unexpected error during JSON validation for file: '$json'"
+        # Handle any other unexpected exceptions.
+
+        Write-LogMessage -Type ERROR -Message "Unexpected error during JSON validation for file: '$JsonFilePath'"
         Write-LogMessage -Type ERROR -Message "Error details: $($_.Exception.Message)"
         return $false
     } finally {
-        # Ensure proper resource disposal
-        if ($jsonDocument) {
+        # Ensure proper resource disposal.
+
+        if ($jsonFilePathDocument) {
             try {
-                $jsonDocument.Dispose()
-                Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "JSON document resources properly disposed for: '$json'"
+                $jsonFilePathDocument.Dispose()
+                Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "JSON document resources properly disposed for: '$JsonFilePath'"
             } catch {
-                Write-LogMessage -Type WARNING -SuppressOutputToScreen -Message "Warning: Could not dispose JSON document resources for: '$json': $($_.Exception.Message)"
+                Write-LogMessage -Type WARNING -SuppressOutputToScreen -Message "Warning: Could not dispose JSON document resources for: '$JsonFilePath': $($_.Exception.Message)"
             }
         }
     }
@@ -7724,7 +8310,7 @@ Function ConvertFrom-JsonSafely {
         contain valid JSON content.
 
         .EXAMPLE
-        $Config = ConvertFrom-JsonSafely -JsonFilePath "C:\configs\settings.json"
+        $config = ConvertFrom-JsonSafely -JsonFilePath "C:\configs\settings.json"
         Loads application settings from a JSON file with error handling.
 
         .NOTES
@@ -7734,32 +8320,35 @@ Function ConvertFrom-JsonSafely {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$jsonFilePath
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonFilePath
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered ConvertFrom-JsonSafely function..."
 
     try {
-        # Read file content, filter out empty lines, and convert from JSON,
-        # Empty line filtering prevents JSON parsing issues with poorly formatted files,
-        return (Get-Content $jsonFilePath) | Select-String -Pattern "^\s*$" -NotMatch | ConvertFrom-Json -ErrorVariable ErrorMessage
+        # Read file content, filter out empty lines, and convert from JSON,.
+
+        # Empty line filtering prevents JSON parsing issues with poorly formatted files,.
+
+        return (Get-Content $JsonFilePath) | Select-String -Pattern "^\s*$" -NotMatch | ConvertFrom-Json -ErrorVariable ErrorMessage
 
     }
     catch {
         # Handle JSON parsing errors with detailed, user-friendly logging.
         $errorMessage = $_.Exception.Message
 
-        Write-LogMessage -Type ERROR -Message "JSON validation failed for file: $jsonFilePath"
+        Write-LogMessage -Type ERROR -Message "JSON validation failed for file: $JsonFilePath"
         Write-Host ""
 
-        # Extract the specific JSON error and location
+        # Extract the specific JSON error and location.
+
         if ($errorMessage -match "Bad JSON escape sequence: \\([A-Za-z])\..*'([^']+)'.*line (\d+).*position (\d+)") {
             $badChar = $matches[1]
-            $jsonPath = $matches[2]
+            $jsonFilePathPath = $matches[2]
             $lineNum = $matches[3]
             $position = $matches[4]
 
-            Write-LogMessage -Type ERROR -Message "Invalid escape sequence: '\$badChar' in JSON property '$jsonPath'"
+            Write-LogMessage -Type ERROR -Message "Invalid escape sequence: '\$badChar' in JSON property '$jsonFilePathPath'"
             Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
             Write-Host ""
             Write-LogMessage -Type ERROR -Message "Common causes:"
@@ -7767,22 +8356,23 @@ Function ConvertFrom-JsonSafely {
             Write-LogMessage -Type ERROR -Message "     Example: `"C:/Users/Admin/file.yml`" or `"C:\\\\Users\\\\Admin\\\\file.yml`""
             Write-LogMessage -Type ERROR -Message "  2. Backslash (\) is a special character in JSON and must be escaped"
             Write-Host ""
-            Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$jsonFilePath' at line $lineNum and try again."
+            Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$JsonFilePath' at line $lineNum and try again."
         }
         elseif ($errorMessage -match "Conversion from JSON failed with error: (.+?)\. Path '([^']+)'.*line (\d+).*position (\d+)") {
-            $jsonError = $matches[1]
-            $jsonPath = $matches[2]
+            $jsonFilePathError = $matches[1]
+            $jsonFilePathPath = $matches[2]
             $lineNum = $matches[3]
             $position = $matches[4]
 
-            Write-LogMessage -Type ERROR -Message "JSON parsing error: $jsonError"
-            Write-LogMessage -Type ERROR -Message "Property: '$jsonPath'"
+            Write-LogMessage -Type ERROR -Message "JSON parsing error: $jsonFilePathError"
+            Write-LogMessage -Type ERROR -Message "Property: '$jsonFilePathPath'"
             Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
             Write-Host ""
-            Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$jsonFilePath' and try again."
+            Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$JsonFilePath' and try again."
         }
         else {
-            # Fallback for unexpected error formats
+            # Fallback for unexpected error formats.
+
             Write-LogMessage -Type ERROR -Message "JSON parsing error: $errorMessage"
         }
 
@@ -7811,10 +8401,13 @@ Function Test-CommandAvailability {
         .PARAMETER Description
         A human-readable description of the command for use in error messages
 
+
     #>
+
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Command,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Description
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-CommandAvailability function..."
@@ -7838,29 +8431,34 @@ Function Test-Filepath {
         it logs an error message and exits the script with code 1.
 
         .EXAMPLE
-        Test-Filepath -filePath "c:\\argocd.yml" -Description "ArgoCD configuration"
+        Test-Filepath -FilePath "c:\\argocd.yml" -Description "ArgoCD configuration"
 
-        .PARAMETER filePath
+        .PARAMETER FilePath
         The absolute path to the file that needs to be validated for existence.
 
         .PARAMETER Description
         A descriptive name for the file being tested, used in log messages.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$filePath,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$description
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FilePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Description
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-Filepath function..."
 
-    if (Test-Path -Path $filePath -PathType Leaf) {
-        Write-LogMessage -Type INFO -Message "Found the `"$description`" file on disk: `"$filePath`"."
+    if (Test-Path -Path $FilePath -PathType Leaf) {
+        Write-LogMessage -Type INFO -Message "Found the `"$Description`" file on disk: `"$FilePath`"."
     } else {
-        Write-LogMessage -Type ERROR -Message "Failed to find `"$description`" file on disk: `"$filePath`" not found. Exiting."
+        Write-LogMessage -Type ERROR -Message "Failed to find `"$Description`" file on disk: `"$FilePath`" not found. Exiting."
         throw "Deployment failed. Check logs for details."
     }
 }
+
 Function Test-JsonMissingProperties {
+
     <#
         .SYNOPSIS
         Validates JSON file content for missing required properties with support for nested properties.
@@ -7911,7 +8509,7 @@ Function Test-JsonMissingProperties {
             Write-Host "Validation failed: $($validationResult.Summary)"
             return
         }
-        $Config = $validationResult.JsonData
+        $config = $validationResult.JsonData
 
         .EXAMPLE
         $requiredProps = @(
@@ -7921,7 +8519,7 @@ Function Test-JsonMissingProperties {
             "common.argoCD.argoCdOperatorYamlPath",
             "common.datastore.lunId"
         )
-        $Result = Test-JsonMissingProperties -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration" -ShowExpectedStructure
+        $result = Test-JsonMissingProperties -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration" -ShowExpectedStructure
 
         .NOTES
         This function uses the existing ConvertFrom-JsonSafely function for safe JSON loading
@@ -7931,11 +8529,11 @@ Function Test-JsonMissingProperties {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$jsonFilePath,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$requiredProperties,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$jsonObjectName,
         [Parameter(Mandatory = $false)] [Switch]$StopOnFirstError,
-        [Parameter(Mandatory = $false)] [Switch]$showExpectedStructure
+        [Parameter(Mandatory = $false)] [Switch]$ShowExpectedStructure,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonFilePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$RequiredProperties,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonObjectName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-JsonMissingProperties function..."
@@ -7950,11 +8548,11 @@ Function Test-JsonMissingProperties {
         JsonData = $null
     }
 
-    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating $($requiredProperties.Count) required properties: $($requiredProperties -join ', ')"
+    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating $($RequiredProperties.Count) required properties: $($RequiredProperties -join ', ')"
 
     # Load and validate the JSON file using helper function.
-    $jsonData = Get-JsonDataWithValidation -JsonFilePath $jsonFilePath -JsonObjectName $jsonObjectName -ValidationResult ([ref]$validationResult)
-    if ($null -eq $jsonData) {
+    $jsonFilePathData = Get-JsonDataWithValidation -JsonFilePath $JsonFilePath -JsonObjectName $JsonObjectName -ValidationResult ([ref]$validationResult)
+    if ($null -eq $jsonFilePathData) {
         return $validationResult
     }
 
@@ -7982,14 +8580,14 @@ Function Test-JsonMissingProperties {
             The root object to search within. Can be a PowerShell custom object, hashtable,
             or any object that supports property access.
 
-            .PARAMETER propertyPath
+            .PARAMETER PropertyPath
             A string representing the property path using dot notation (e.g., "level1.level2.property").
             Each segment separated by dots represents a nested level in the object hierarchy.
 
             .EXAMPLE
-            Test-NestedProperty -Object $jsonConfig -propertyPath "database.connection.host"
+            Test-NestedProperty -Object $JsonFilePathConfig -PropertyPath "database.connection.host"
 
-            Tests if the $jsonConfig object contains the nested property path database.connection.host.
+            Tests if the $JsonFilePathConfig object contains the nested property path database.connection.host.
             Returns $true if the entire path exists, $false otherwise.
 
             .EXAMPLE
@@ -8020,40 +8618,51 @@ Function Test-JsonMissingProperties {
             - Does not throw exceptions for missing properties, always returns a boolean result
         #>
 
-        Param ($Object, $propertyPath)
+        param($Object, $PropertyPath)
 
-        # Split the property path into individual segments using dot as delimiter
-        $properties = $propertyPath -split '\.'
-        # Start traversal from the root object
+        # Split the property path into individual segments using dot as delimiter.
+
+        $properties = $PropertyPath -split '\.'
+        # Start traversal from the root object.
+
         $currentObject = $Object
 
-        # Iterate through each property segment in the path
+        # Iterate through each property segment in the path.
+
         foreach ($Property in $properties) {
-            # Handle hashtable objects - use ContainsKey for property existence check
+            # Handle hashtable objects - use ContainsKey for property existence check.
+
             if ($currentObject -is [System.Collections.Hashtable]) {
                 if (-not $currentObject.ContainsKey($Property)) {
                     return $false
                 }
-                # Move to the next level in the hierarchy
+                # Move to the next level in the hierarchy.
+
                 $currentObject = $currentObject[$Property]
             }
-            # Handle PowerShell custom objects - check PSObject.Properties collection
+            # Handle PowerShell custom objects - check PSObject.Properties collection.
+
             elseif ($currentObject.PSObject.Properties[$Property]) {
-                # Move to the next level in the hierarchy
+                # Move to the next level in the hierarchy.
+
                 $currentObject = $currentObject.$Property
             }
-            # Property doesn't exist in current object - path is invalid
+            # Property doesn't exist in current object - path is invalid.
+
             else {
                 return $false
             }
         }
 
-        # Successfully traversed the entire path
+        # Successfully traversed the entire path.
+
         return $true
     }
 
     # Helper function to generate expected JSON structure for missing properties.
+
 Function Get-ExpectedStructure {
+
         <#
             .SYNOPSIS
             Generates a nested JSON structure template for a missing property path.
@@ -8105,57 +8714,66 @@ Function Get-ExpectedStructure {
         #>
 
         Param (
-            [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$propertyPath
+            [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PropertyPath
         )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-ExpectedStructure function..."
 
-        # Split the property path into individual property names
-        $properties = $propertyPath -split '\.'
+        # Split the property path into individual property names.
 
-        # Initialize the root structure as an empty hashtable
-        $Structure = @{}
+        $properties = $PropertyPath -split '\.'
 
-        # Keep a reference to the current level for building nested structure
-        $currentLevel = $Structure
+        # Initialize the root structure as an empty hashtable.
 
-        # Build the nested structure by iterating through each property in the path
+        $structure = @{}
+
+        # Keep a reference to the current level for building nested structure.
+
+        $currentLevel = $structure
+
+        # Build the nested structure by iterating through each property in the path.
+
         for ($i = 0; $i -lt $properties.Count; $i++) {
-            $Property = $properties[$i]
+            $property = $properties[$i]
 
             if ($i -eq ($properties.Count - 1)) {
-                # Last property in the path - add placeholder value to indicate expected data
-                $currentLevel[$Property] = "<value>"
+                # Last property in the path - add placeholder value to indicate expected data.
+
+                $currentLevel[$property] = "<value>"
             }
             else {
-                # Intermediate property - create nested hashtable and move reference deeper
-                $currentLevel[$Property] = @{}
-                $currentLevel = $currentLevel[$Property]
+                # Intermediate property - create nested hashtable and move reference deeper.
+
+                $currentLevel[$property] = @{}
+                $currentLevel = $currentLevel[$property]
             }
         }
 
-        # Return the complete nested structure
-        return $Structure
+        # Return the complete nested structure.
+
+        return $structure
     }
 
     # Validate each required property.
-    foreach ($Property in $requiredProperties) {
-        $propertyExists = Test-NestedProperty -Object $jsonData -PropertyPath $Property
+    foreach ($property in $RequiredProperties) {
+        $propertyExists = Test-NestedProperty -Object $JsonFilePathData -PropertyPath $property
 
         if (-not $propertyExists) {
             $validationResult.IsValid = $false
-            $validationResult.MissingProperties += $Property
+            $validationResult.MissingProperties += $property
             $validationResult.ErrorCount++
 
-            Write-LogMessage -Type ERROR -Message "$jsonObjectName (in JSON file $jsonFilePath) is missing required property: $Property"
+            Write-LogMessage -Type ERROR -Message "$JsonObjectName (in JSON file $JsonFilePath) is missing required property: $property"
 
-            # Generate expected structure if requested
-            if ($showExpectedStructure) {
-                $ExpectedStructure = Get-ExpectedStructure -PropertyPath $Property
-                $validationResult.ExpectedStructure[$Property] = $ExpectedStructure
+            # Generate expected structure if requested.
+
+            if ($ShowExpectedStructure) {
+                $expectedStructure = Get-ExpectedStructure -PropertyPath $property
+                $validationResult.ExpectedStructure[$property] = $expectedStructure
             }
 
-            # Stop on first error if requested
+            # Stop on first error if requested.
+
             if ($StopOnFirstError) {
                 break
             }
@@ -8164,15 +8782,16 @@ Function Get-ExpectedStructure {
 
     # Generate summary message.
     if ($validationResult.IsValid) {
-        $validationResult.Summary = "$jsonObjectName validation passed. All $($requiredProperties.Count) required properties are present."
+        $validationResult.Summary = "$JsonObjectName validation passed. All $($RequiredProperties.Count) required properties are present."
         Write-LogMessage -Type INFO -Message $validationResult.Summary -SuppressOutputToScreen
     }
     else {
-        $validationResult.Summary = "$jsonObjectName validation failed. $($validationResult.ErrorCount) of $($requiredProperties.Count) required properties are missing: $($validationResult.MissingProperties -join ', ')"
+        $validationResult.Summary = "$JsonObjectName validation failed. $($validationResult.ErrorCount) of $($RequiredProperties.Count) required properties are missing: $($validationResult.MissingProperties -join ', ')"
         Write-LogMessage -Type ERROR -Message $validationResult.Summary
 
-        # Log expected structure if available
-        if ($showExpectedStructure -and $validationResult.ExpectedStructure.Count -gt 0) {
+        # Log expected structure if available.
+
+        if ($ShowExpectedStructure -and $validationResult.ExpectedStructure.Count -gt 0) {
             Write-LogMessage -Type INFO -Message "Expected JSON structure for missing properties:"
             foreach ($missingProp in $validationResult.MissingProperties) {
                 $structureJson = $validationResult.ExpectedStructure[$missingProp] | ConvertTo-Json -Depth 10
@@ -8183,7 +8802,9 @@ Function Get-ExpectedStructure {
 
     return $validationResult
 }
+
 Function Test-JsonNullValues {
+
     <#
         .SYNOPSIS
         Validates that specified JSON properties are not null.
@@ -8236,7 +8857,7 @@ Function Test-JsonNullValues {
             "common.VcenterUser",
             "common.esxHost"
         )
-        $Result = Test-JsonNullValues -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration"
+        $result = Test-JsonNullValues -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration"
 
         .NOTES
         - This function is designed to work in conjunction with Test-JsonMissingProperties
@@ -8250,10 +8871,10 @@ Function Test-JsonNullValues {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$jsonFilePath,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$requiredProperties,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$jsonObjectName,
-        [Parameter(Mandatory = $false)] [Switch]$StopOnFirstError
+        [Parameter(Mandatory = $false)] [Switch]$StopOnFirstError,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonFilePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$RequiredProperties,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonObjectName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-JsonNullValues function..."
@@ -8267,28 +8888,31 @@ Function Test-JsonNullValues {
         JsonData = $null
     }
 
-    Write-LogMessage -Type DEBUG -Message "Checking $($requiredProperties.Count) properties for null values: $($requiredProperties -join ', ')"
+    Write-LogMessage -Type DEBUG -Message "Checking $($RequiredProperties.Count) properties for null values: $($RequiredProperties -join ', ')"
 
     # Load and validate the JSON file using helper function.
-    $jsonData = Get-JsonDataWithValidation -JsonFilePath $jsonFilePath -JsonObjectName $jsonObjectName -ValidationResult ([ref]$validationResult)
-    if ($null -eq $jsonData) {
+    $jsonFilePathData = Get-JsonDataWithValidation -JsonFilePath $JsonFilePath -JsonObjectName $JsonObjectName -ValidationResult ([ref]$validationResult)
+    if ($null -eq $jsonFilePathData) {
         return $validationResult
     }
 
     # Validate each property for null values.
-    foreach ($Property in $requiredProperties) {
-        # Use Get-JsonPropertyValue to retrieve the property value
-        $propertyValue = Get-JsonPropertyValue -inputData $jsonData -propertyPath $Property
+    foreach ($Property in $RequiredProperties) {
+        # Use Get-JsonPropertyValue to retrieve the property value.
 
-        # Check if the value is null
+        $propertyValue = Get-JsonPropertyValue -inputData $jsonFilePathData -propertyPath $Property
+
+        # Check if the value is null.
+
         if ($null -eq $propertyValue) {
             $validationResult.IsValid = $false
             $validationResult.NullProperties += $Property
             $validationResult.ErrorCount++
 
-            Write-LogMessage -Type ERROR -Message "$jsonObjectName (in JSON file $jsonFilePath) property '$Property' has a null value. Please provide a valid value."
+            Write-LogMessage -Type ERROR -Message "$JsonObjectName (in JSON file $JsonFilePath) property '$Property' has a null value. Please provide a valid value."
 
-            # Stop on first error if requested
+            # Stop on first error if requested.
+
             if ($StopOnFirstError) {
                 break
             }
@@ -8297,11 +8921,11 @@ Function Test-JsonNullValues {
 
     # Generate summary message.
     if ($validationResult.IsValid) {
-        $validationResult.Summary = "$jsonObjectName null value validation passed. All $($requiredProperties.Count) required properties have non-null values."
+        $validationResult.Summary = "$JsonObjectName null value validation passed. All $($RequiredProperties.Count) required properties have non-null values."
         Write-LogMessage -Type DEBUG -Message $validationResult.Summary
     }
     else {
-        $validationResult.Summary = "$jsonObjectName null value validation failed. $($validationResult.ErrorCount) of $($requiredProperties.Count) required properties have null values: $($validationResult.NullProperties -join ', ')"
+        $validationResult.Summary = "$JsonObjectName null value validation failed. $($validationResult.ErrorCount) of $($RequiredProperties.Count) required properties have null values: $($validationResult.NullProperties -join ', ')"
         Write-LogMessage -Type ERROR -Message $validationResult.Summary
     }
 
@@ -8421,7 +9045,7 @@ Function Test-JsonShallowValidation {
     # This array contains all mandatory property paths for TKGS supervisor cluster configuration.
     # Properties cover supervisor specs, load balancer components, and network configurations.
 
-    $SupervisorJsonRequiredProperties = @(
+    $supervisorJsonRequiredProperties = @(
         # Supervisor Specification Properties (5 properties)
         "supervisorSpec.controlPlaneVMCount",       # Number of control plane VMs
         "supervisorSpec.controlPlaneSize",          # Size specification for control plane VMs
@@ -8476,7 +9100,7 @@ Function Test-JsonShallowValidation {
 
     # Validate supervisor.json against required properties schema.
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating $SupervisorJson configuration file..."
-    $supervisorDataValidationResult = Test-JsonMissingProperties -JsonFilePath $SupervisorJson -RequiredProperties $SupervisorJsonRequiredProperties -JsonObjectName "SupervisorConfiguration" -ShowExpectedStructure
+    $supervisorDataValidationResult = Test-JsonMissingProperties -JsonFilePath $SupervisorJson -RequiredProperties $supervisorJsonRequiredProperties -JsonObjectName "SupervisorConfiguration" -ShowExpectedStructure
 
     # Validate input.json against required properties schema.
     Write-LogMessage -Type INFO -SuppressOutputToScreen  -Message "Validating $InfrastructureJson configuration file..."
@@ -8502,7 +9126,7 @@ Function Test-JsonShallowValidation {
 
     # Validate supervisor.json for null values.
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating $SupervisorJson for null values..."
-    $supervisorNullValidationResult = Test-JsonNullValues -JsonFilePath $SupervisorJson -RequiredProperties $SupervisorJsonRequiredProperties -JsonObjectName "SupervisorConfiguration"
+    $supervisorNullValidationResult = Test-JsonNullValues -JsonFilePath $SupervisorJson -RequiredProperties $supervisorJsonRequiredProperties -JsonObjectName "SupervisorConfiguration"
 
     # Validate input.json for null values.
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating $InfrastructureJson for null values..."
@@ -8531,7 +9155,9 @@ Function Test-JsonShallowValidation {
         Write-LogMessage -PrependNewLine -Type INFO -Message "JSON configuration file validation completed successfully."
     }
 }
+
 Function Test-IpAddressInCidrRange {
+
     <#
         .SYNOPSIS
         Tests if an IP address falls within a specified CIDR network range.
@@ -8575,55 +9201,66 @@ Function Test-IpAddressInCidrRange {
         .NOTES
         This function only supports IPv4 addresses and CIDR notation.
         The function validates input formats before performing range checks.
+
     #>
+
     Param(
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$IpAddress,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$CidrRange
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-IpAddressInCidrRange function..."
 
     try {
-        # Validate IP address format
+        # Validate IP address format.
+
         if ($IpAddress -notmatch '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$') {
             Write-LogMessage -Type ERROR -Message "Invalid IP address format: $IpAddress"
             return $false
         }
 
-        # Validate CIDR range format
+        # Validate CIDR range format.
+
         if ($CidrRange -notmatch '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\/([0-9]|[1-2][0-9]|3[0-2])$') {
             Write-LogMessage -Type ERROR -Message "Invalid CIDR range format: $CidrRange"
             return $false
         }
 
-        # Split CIDR into network address and prefix length
+        # Split CIDR into network address and prefix length.
+
         $cidrParts = $CidrRange.Split('/')
         $networkAddress = $cidrParts[0]
         $prefixLength = [int]$cidrParts[1]
 
-        # Convert IP addresses to 32-bit integers
+        # Convert IP addresses to 32-bit integers.
+
         Function ConvertTo-IpInt {
-            Param([String]$IpString)
+            param([String]$IpString)
             $octets = $IpString.Split('.')
             return ([int64]$octets[0] -shl 24) -bor ([int64]$octets[1] -shl 16) -bor ([int64]$octets[2] -shl 8) -bor [int64]$octets[3]
         }
 
-        # Calculate subnet mask from prefix length
+        # Calculate subnet mask from prefix length.
+
         if ($prefixLength -eq 0) {
             $subnetMask = 0
         } else {
             $subnetMask = [int64][Math]::Pow(2, 32) - [int64][Math]::Pow(2, (32 - $prefixLength))
         }
 
-        # Convert addresses to integers
+        # Convert addresses to integers.
+
         $ipInt = ConvertTo-IpInt -IpString $IpAddress
         $networkInt = ConvertTo-IpInt -IpString $networkAddress
 
-        # Apply subnet mask to both addresses
+        # Apply subnet mask to both addresses.
+
         $ipNetwork = $ipInt -band $subnetMask
         $cidrNetwork = $networkInt -band $subnetMask
 
-        # Check if the IP is in the same network
+        # Check if the IP is in the same network.
+
         $isInRange = ($ipNetwork -eq $cidrNetwork)
 
         if ($isInRange) {
@@ -8639,7 +9276,9 @@ Function Test-IpAddressInCidrRange {
         return $false
     }
 }
+
 Function Get-JsonPropertyValue {
+
     <#
         .SYNOPSIS
         Extracts a property value from a JSON object using dot-notation path.
@@ -8649,12 +9288,12 @@ Function Get-JsonPropertyValue {
         using a dot-notation property path (e.g., "parent.child.property") and returns the value as a string.
         This helper function separates the concern of property extraction from validation logic.
 
-        .PARAMETER inputData
+        .PARAMETER InputData
         The input data object (JSON, PSCustomObject, Hashtable, or String) to extract the value from.
 
-        .PARAMETER propertyPath
+        .PARAMETER PropertyPath
         Optional. The dot-notation path to the property (e.g., "common.vCenterName"). If not specified
-        and inputData is a string, returns the string directly. If not specified and inputData is an
+        and InputData is a string, returns the string directly. If not specified and InputData is an
         object, converts the entire object to a string.
 
         .OUTPUTS
@@ -8662,48 +9301,55 @@ Function Get-JsonPropertyValue {
         Returns the extracted property value as a string, or $null if extraction fails.
 
         .EXAMPLE
-        $value = Get-JsonPropertyValue -inputData $config -propertyPath "common.vCenterName"
+        $value = Get-JsonPropertyValue -InputData $config -PropertyPath "common.vCenterName"
         Extracts the vCenterName property from the common section of the config object.
 
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate property extraction
         from validation logic, improving testability and maintainability.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyString()] $inputData,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$propertyPath
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PropertyPath,
+        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyString()] $InputData
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-JsonPropertyValue function..."
 
     try {
         # Handle null input
-        if ($null -eq $inputData) {
+        if ($null -eq $InputData) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Input data is null"
             return $null
         }
 
-        # If inputData is already a string, return it directly
-        if ($inputData -is [String]) {
-            Write-LogMessage -Type DEBUG -Message "Input is already a string with length: $($inputData.Length)"
-            return $inputData
+        # If inputData is already a string, return it directly.
+
+        if ($InputData -is [String]) {
+            Write-LogMessage -Type DEBUG -Message "Input is already a string with length: $($InputData.Length)"
+            return $InputData
         }
 
-        # If propertyPath is specified, extract the property value
-        if ($propertyPath) {
-            Write-LogMessage -Type DEBUG -Message "Extracting property '$propertyPath' from input object"
+        # If propertyPath is specified, extract the property value.
 
-            # Split property path by dots to navigate nested properties
-            $pathParts = $propertyPath.Split('.')
-            $currentObject = $inputData
+        if ($PropertyPath) {
+            Write-LogMessage -Type DEBUG -Message "Extracting property '$PropertyPath' from input object"
+
+            # Split property path by dots to navigate nested properties.
+
+            $pathParts = $PropertyPath.Split('.')
+            $currentObject = $InputData
 
             foreach ($part in $pathParts) {
                 if ($null -eq $currentObject) {
-                    Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Property path '$propertyPath' contains null value at '$part'"
+                    Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Property path '$PropertyPath' contains null value at '$part'"
                     return $null
                 }
 
-                # Handle PSCustomObject, Hashtable, and regular object property access
+                # Handle PSCustomObject, Hashtable, and regular object property access.
+
                 if ($currentObject -is [PSCustomObject]) {
                     $currentObject = $currentObject.$part
                 } elseif ($currentObject -is [Hashtable]) {
@@ -8712,20 +9358,22 @@ Function Get-JsonPropertyValue {
                     try {
                         $currentObject = $currentObject.$part
                     } catch {
-                        Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Cannot access property '$part' in path '$propertyPath': $($_.Exception.Message)"
+                        Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Cannot access property '$part' in path '$PropertyPath': $($_.Exception.Message)"
                         return $null
                     }
                 }
             }
 
-            # Convert the final property value to string
+            # Convert the final property value to string.
+
             $result = if ($null -eq $currentObject) { "" } else { $currentObject.ToString() }
             Write-LogMessage -Type DEBUG -Message "Extracted value: '$result' (length: $($result.Length))"
             return $result
         }
-        # If no propertyPath specified, convert entire object to string
+        # If no propertyPath specified, convert entire object to string.
+
         else {
-            $result = $inputData.ToString()
+            $result = $InputData.ToString()
             Write-LogMessage -Type DEBUG -Message "Converted entire object to string (length: $($result.Length))"
             return $result
         }
@@ -8735,7 +9383,9 @@ Function Get-JsonPropertyValue {
         return $null
     }
 }
+
 Function Get-ValidationPresetRules {
+
     <#
         .SYNOPSIS
         Returns validation rules for predefined validation presets.
@@ -8745,7 +9395,7 @@ Function Get-ValidationPresetRules {
         validation rules (allowed characters, regex patterns, etc.). This separates preset definition
         logic from the main validation orchestration, improving maintainability and extensibility.
 
-        .PARAMETER validationPreset
+        .PARAMETER ValidationPreset
         The name of the validation preset to retrieve rules for.
 
         .OUTPUTS
@@ -8756,17 +9406,17 @@ Function Get-ValidationPresetRules {
         - RegexPattern: Regular expression pattern (if applicable)
 
         .EXAMPLE
-        $rules = Get-ValidationPresetRules -validationPreset "IpAddress"
+        $rules = Get-ValidationPresetRules -ValidationPreset "IpAddress"
         Returns rules for IP address validation including the regex pattern.
 
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate preset logic
         from validation execution, making it easier to add or modify presets.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)]
-        [ValidateSet("AlphaNumeric", "AlphaNumericDash", "Numeric", "FileName", "UserName", "DomainName", "IpAddress", "IpAddressWithCidr", "IpAddressOrDomainNameWithPort", "Email", "lowerCaseRfc1123PortGroup", "FilePath", "vSphereObject80Characters")]
-        [String]$validationPreset
+        [Parameter(Mandatory = $true)] [ValidateSet("AlphaNumeric", "AlphaNumericDash", "Numeric", "FileName", "UserName", "DomainName", "IpAddress", "IpAddressWithCidr", "IpAddressOrDomainNameWithPort", "Email", "lowerCaseRfc1123PortGroup", "FilePath", "vSphereObject80Characters")] [String]$ValidationPreset
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-ValidationPresetRules function..."
@@ -8777,7 +9427,7 @@ Function Get-ValidationPresetRules {
         RegexPattern = $null
     }
 
-    switch ($validationPreset) {
+    switch ($ValidationPreset) {
         "AlphaNumeric" {
             $rules.AllowedCharacters = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         }
@@ -8812,7 +9462,8 @@ Function Get-ValidationPresetRules {
             $rules.RegexPattern = '^(?=.{1,80}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
         }
         "FilePath" {
-            # Cross-platform file path regex supporting Windows, Linux, and macOS
+            # Cross-platform file path regex supporting Windows, Linux, and macOS.
+
             $rules.RegexPattern = '^(?:(?:[a-zA-Z]:)?[\\\/]|\.{0,2}[\\\/]|\\\\[^\\\/\s]+[\\\/][^\\\/\s]+[\\\/])?(?:[^<>:"|?*\x00-\x1f\\\/]+[\\\/])*[^<>:"|?*\x00-\x1f\\\/]*$'
         }
         "vSphereObject80Characters" {
@@ -8821,10 +9472,12 @@ Function Get-ValidationPresetRules {
         }
     }
 
-    Write-LogMessage -Type DEBUG -Message "Retrieved validation rules for preset '$validationPreset'"
+    Write-LogMessage -Type DEBUG -Message "Retrieved validation rules for preset '$ValidationPreset'"
     return $rules
 }
+
 Function Test-StringAgainstAllowlist {
+
     <#
         .SYNOPSIS
         Validates that a string contains only allowed characters.
@@ -8834,35 +9487,38 @@ Function Test-StringAgainstAllowlist {
         against an allowlist of permitted characters. This implements a secure allowlist
         validation approach.
 
-        .PARAMETER inputText
+        .PARAMETER InputText
         The string to validate.
 
-        .PARAMETER allowedCharacters
+        .PARAMETER AllowedCharacters
         A string containing all characters that are permitted in the input.
 
         .OUTPUTS
         System.Boolean
-        Returns $true if all characters in inputText are in the allowlist, $false otherwise.
+        Returns $true if all characters in InputText are in the allowlist, $false otherwise.
 
         .EXAMPLE
-        $isValid = Test-StringAgainstAllowlist -inputText "Server01" -allowedCharacters "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+        $isValid = Test-StringAgainstAllowlist -InputText "Server01" -AllowedCharacters "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
         Validates that Server01 contains only alphanumeric characters.
 
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate allowlist
         validation logic from orchestration.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [String]$inputText,
-        [Parameter(Mandatory = $true)] [String]$allowedCharacters
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InputText,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$AllowedCharacters
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-StringAgainstAllowlist function..."
 
     Write-LogMessage -Type DEBUG -Message "Validating string against allowed characters allowlist"
 
-    foreach ($char in $inputText.ToCharArray()) {
-        if ($allowedCharacters.IndexOf($char.ToString()) -eq -1) {
+    foreach ($char in $InputText.ToCharArray()) {
+        if ($AllowedCharacters.IndexOf($char.ToString()) -eq -1) {
             Write-LogMessage -Type ERROR -Message "Character '$char' is not in the allowed character set"
             return $false
         }
@@ -8871,7 +9527,9 @@ Function Test-StringAgainstAllowlist {
     Write-LogMessage -Type DEBUG -Message "Allowlist validation passed"
     return $true
 }
+
 Function Test-StringAgainstDenylist {
+
     <#
         .SYNOPSIS
         Validates that a string does not contain forbidden characters.
@@ -8880,10 +9538,10 @@ Function Test-StringAgainstDenylist {
         The Test-StringAgainstDenylist function checks that the input string does not
         contain any characters from a denylist of forbidden characters.
 
-        .PARAMETER inputText
+        .PARAMETER InputText
         The string to validate.
 
-        .PARAMETER disallowedCharacters
+        .PARAMETER DisallowedCharacters
         A string containing characters that are not permitted in the input.
 
         .OUTPUTS
@@ -8891,24 +9549,27 @@ Function Test-StringAgainstDenylist {
         Returns $true if no forbidden characters are found, $false otherwise.
 
         .EXAMPLE
-        $isValid = Test-StringAgainstDenylist -inputText "MyFile.txt" -disallowedCharacters '<>:"/\|?*'
+        $isValid = Test-StringAgainstDenylist -InputText "MyFile.txt" -DisallowedCharacters '<>:"/\|?*'
         Validates that the filename doesn't contain filesystem-unsafe characters.
 
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate denylist
         validation logic from orchestration.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [String]$inputText,
-        [Parameter(Mandatory = $true)] [String]$disallowedCharacters
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InputText,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DisallowedCharacters
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-StringAgainstDenylist function..."
 
     Write-LogMessage -Type DEBUG -Message "Validating string against disallowed characters denylist"
 
-    foreach ($char in $inputText.ToCharArray()) {
-        if ($disallowedCharacters.IndexOf($char.ToString()) -ne -1) {
+    foreach ($char in $InputText.ToCharArray()) {
+        if ($DisallowedCharacters.IndexOf($char.ToString()) -ne -1) {
             Write-LogMessage -Type ERROR -Message "Character '$char' is not allowed (found in disallowed character set)"
             return $false
         }
@@ -8917,7 +9578,9 @@ Function Test-StringAgainstDenylist {
     Write-LogMessage -Type DEBUG -Message "Denylist validation passed"
     return $true
 }
+
 Function Test-AcceptableStrings {
+
     <#
         .SYNOPSIS
         Validates that a string matches one of the acceptable values.
@@ -8927,13 +9590,13 @@ Function Test-AcceptableStrings {
         one of the strings in an acceptable values list. This implements enumerated
         value validation for controlled vocabularies.
 
-        .PARAMETER inputText
+        .PARAMETER InputText
         The string to validate.
 
-        .PARAMETER acceptableStrings
+        .PARAMETER AcceptableStrings
         An array of strings that are considered acceptable values.
 
-        .PARAMETER propertyPath
+        .PARAMETER PropertyPath
         Optional. The property path for error messages.
 
         .OUTPUTS
@@ -8947,31 +9610,36 @@ Function Test-AcceptableStrings {
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate acceptable
         strings validation logic from orchestration. Uses ordinal comparison for consistency.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [String]$inputText,
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [String[]]$acceptableStrings,
-        [Parameter(Mandatory = $false)] [String]$propertyPath
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PropertyPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [String]$InputText,
+
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [String[]]$AcceptableStrings
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-AcceptableStrings function..."
 
-    Write-LogMessage -Type DEBUG -Message "Validating against list of acceptable strings: $($acceptableStrings -join ', ')"
+    Write-LogMessage -Type DEBUG -Message "Validating against list of acceptable strings: $($AcceptableStrings -join ', ')"
 
     $stringComparison = [System.StringComparison]::Ordinal
-    foreach ($acceptableString in $acceptableStrings) {
-        if ([String]::Equals($inputText, $acceptableString, $stringComparison)) {
+    foreach ($acceptableString in $AcceptableStrings) {
+        if ([String]::Equals($InputText, $acceptableString, $stringComparison)) {
             Write-LogMessage -Type DEBUG -Message "Matched acceptable string: '$acceptableString'"
             return $true
         }
     }
 
     # Build error message with optional property path.
-    $pathInfo = if ($propertyPath) { " for JSON property `"$propertyPath`"" } else { "" }
-    Write-LogMessage -Type ERROR -Message "Validation failed for input value `"$inputText`"${pathInfo}. It should be one of: $($acceptableStrings -join ', ')"
+    $pathInfo = if ($PropertyPath) { " for JSON property `"$PropertyPath`"" } else { "" }
+    Write-LogMessage -Type ERROR -Message "Validation failed for input value `"$InputText`"${pathInfo}. It should be one of: $($AcceptableStrings -join ', ')"
     return $false
 }
+
 Function Test-NumericRange {
+
     <#
         .SYNOPSIS
         Validates that a numeric value falls within a specified range.
@@ -8981,16 +9649,16 @@ Function Test-NumericRange {
         that it falls within specified minimum and maximum bounds. Supports validation
         against minimum only, maximum only, or both.
 
-        .PARAMETER inputText
+        .PARAMETER InputText
         The string representation of the numeric value to validate.
 
-        .PARAMETER minValue
+        .PARAMETER MinValue
         Optional. The minimum acceptable value.
 
-        .PARAMETER maxValue
+        .PARAMETER MaxValue
         Optional. The maximum acceptable value.
 
-        .PARAMETER propertyPath
+        .PARAMETER PropertyPath
         Optional. The property path for error messages.
 
         .OUTPUTS
@@ -8998,52 +9666,57 @@ Function Test-NumericRange {
         Returns $true if the value is numeric and within the specified range, $false otherwise.
 
         .EXAMPLE
-        $isValid = Test-NumericRange -inputText "5" -minValue 1 -maxValue 10
+        $isValid = Test-NumericRange -InputText "5" -MinValue 1 -MaxValue 10
         Validates that the value is between 1 and 10.
 
         .NOTES
         This is a helper function used by Test-JsonPropertyFormat to separate numeric
         range validation logic from orchestration.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [String]$inputText,
-        [Parameter(Mandatory = $false)] [Double]$minValue,
-        [Parameter(Mandatory = $false)] [Double]$maxValue,
-        [Parameter(Mandatory = $false)] [String]$propertyPath
+        [Parameter(Mandatory = $false)] [Double]$MaxValue,
+        [Parameter(Mandatory = $false)] [Double]$MinValue,
+
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PropertyPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InputText
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-NumericRange function..."
 
-    Write-LogMessage -Type DEBUG -Message "Validating numeric range for value: '$inputText'"
+    Write-LogMessage -Type DEBUG -Message "Validating numeric range for value: '$InputText'"
 
     # Attempt to convert input to numeric.
     $numericValue = $null
-    $isNumeric = [Double]::TryParse($inputText, [ref]$numericValue)
+    $isNumeric = [Double]::TryParse($InputText, [ref]$numericValue)
 
     if (-not $isNumeric) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
-        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value '$inputText' is not a valid number"
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
+        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value '$InputText' is not a valid number"
         return $false
     }
 
     # Check minimum value.
-    if ($PSBoundParameters.ContainsKey('minValue') -and $numericValue -lt $minValue) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
-        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value $numericValue is below minimum $minValue"
+    if ($PSBoundParameters.ContainsKey('MinValue') -and $numericValue -lt $MinValue) {
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
+        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value $numericValue is below minimum $MinValue"
         return $false
     }
 
     # Check maximum value.
-    if ($PSBoundParameters.ContainsKey('maxValue') -and $numericValue -gt $maxValue) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
-        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value $numericValue exceeds maximum $maxValue"
+    if ($PSBoundParameters.ContainsKey('MaxValue') -and $numericValue -gt $MaxValue) {
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
+        Write-LogMessage -Type ERROR -Message "Numeric validation failed${pathInfo}: Value $numericValue exceeds maximum $MaxValue"
         return $false
     }
 
     Write-LogMessage -Type DEBUG -Message "Numeric range validation passed for value: $numericValue"
     return $true
 }
+
 Function Test-ValidCidrRange {
+
     <#
         .SYNOPSIS
         Validates that an IP count corresponds to a valid CIDR block range.
@@ -9071,10 +9744,10 @@ Function Test-ValidCidrRange {
         Values larger than 16,777,216 (e.g., 2^25 = 33,554,432) are powers of 2 but correspond
         to CIDR prefixes smaller than /8, which are invalid.
 
-        .PARAMETER inputText
+        .PARAMETER InputText
         The value to validate as a power of 2.
 
-        .PARAMETER propertyPath
+        .PARAMETER PropertyPath
         Optional. The property path for error messages.
 
         .OUTPUTS
@@ -9082,17 +9755,17 @@ Function Test-ValidCidrRange {
         Returns $true if the value is a power of 2, $false otherwise.
 
         .EXAMPLE
-        $isValid = Test-ValidCidrRange -inputText "512"
+        $isValid = Test-ValidCidrRange -InputText "512"
         Validates that "512" corresponds to a valid CIDR range (/23).
         Returns: $true
 
         .EXAMPLE
-        $isValid = Test-ValidCidrRange -inputText "511"
+        $isValid = Test-ValidCidrRange -InputText "511"
         Validates that "511" corresponds to a valid CIDR range.
         Returns: $false (511 is not a power of 2)
 
         .EXAMPLE
-        $isValid = Test-ValidCidrRange -inputText "33554432"
+        $isValid = Test-ValidCidrRange -InputText "33554432"
         Validates that "33554432" corresponds to a valid CIDR range.
         Returns: $false (would be /7, outside valid range)
 
@@ -9100,29 +9773,32 @@ Function Test-ValidCidrRange {
         The function uses bitwise AND operation to check if a number is a power of 2.
         A power of 2 in binary has exactly one bit set (e.g., 8 = 1000, 16 = 10000).
         The check (n & (n-1)) == 0 returns true only for powers of 2.
+
     #>
+
     Param (
-        [Parameter(Mandatory = $true)] [String]$inputText,
-        [Parameter(Mandatory = $false)] [String]$propertyPath
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PropertyPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InputText
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-ValidCidrRange function..."
 
-    Write-LogMessage -Type DEBUG -Message "Validating CIDR range for IP count: '$inputText'"
+    Write-LogMessage -Type DEBUG -Message "Validating CIDR range for IP count: '$InputText'"
 
     # Attempt to parse as integer.
     $number = $null
-    $isInteger = [int]::TryParse($inputText, [ref]$number)
+    $isInteger = [int]::TryParse($InputText, [ref]$number)
 
     if (-not $isInteger) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
-        Write-LogMessage -Type ERROR -Message "CIDR range validation failed${pathInfo}: Value '$inputText' is not a valid integer"
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
+        Write-LogMessage -Type ERROR -Message "CIDR range validation failed${pathInfo}: Value '$InputText' is not a valid integer"
         return $false
     }
 
     # Check if number is positive.
     if ($number -le 0) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
         Write-LogMessage -Type ERROR -Message "CIDR range validation failed${pathInfo}: Value $number must be positive"
         return $false
     }
@@ -9134,9 +9810,10 @@ Function Test-ValidCidrRange {
     $isPowerOfTwo = ($number -band ($number - 1)) -eq 0
 
     if (-not $isPowerOfTwo) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
 
-        # Calculate what CIDR block this would be if it were valid
+        # Calculate what CIDR block this would be if it were valid.
+
         $nearestLower = [Math]::Pow(2, [Math]::Floor([Math]::Log($number, 2)))
         $nearestUpper = [Math]::Pow(2, [Math]::Ceiling([Math]::Log($number, 2)))
 
@@ -9150,7 +9827,7 @@ Function Test-ValidCidrRange {
     # Validate that this corresponds to a valid CIDR range (/8 to /32)
     # /32 = 1 IP, /31 = 2 IPs, /30 = 4 IPs, ... /8 = 16,777,216 IPs
     if ($cidrPrefix -lt 8 -or $cidrPrefix -gt 32) {
-        $pathInfo = if ($propertyPath) { " for property '$propertyPath'" } else { "" }
+        $pathInfo = if ($PropertyPath) { " for property '$PropertyPath'" } else { "" }
         Write-LogMessage -Type ERROR -Message "CIDR range validation failed${pathInfo}: Value $number corresponds to /$cidrPrefix which is outside valid CIDR range (/8 to /32). Valid IP counts: 1 to 16,777,216"
         return $false
     }
@@ -9178,7 +9855,7 @@ Function Test-JsonPropertyFormat {
         it in scripts that interact with file systems, network resources, or other components that may be
         sensitive to special characters or injection attacks.
 
-        .PARAMETER inputData
+        .PARAMETER InputData
         The input data to validate. This parameter accepts either:
         - A JSON object/PSCustomObject with properties to validate
         - A string value to validate directly
@@ -9186,30 +9863,30 @@ Function Test-JsonPropertyFormat {
         The function will extract string values from JSON properties or validate the string directly
         according to the validation rules provided.
 
-        .PARAMETER propertyPath
-        Optional. When inputData is a JSON object, specifies the dot-notation path to the property to validate.
-        For example: "common.vCenterName" or "supervisorSpec.controlPlaneSize". If not specified and inputData
+        .PARAMETER PropertyPath
+        Optional. When InputData is a JSON object, specifies the dot-notation path to the property to validate.
+        For example: "common.vCenterName" or "supervisorSpec.controlPlaneSize". If not specified and InputData
         is an object, the function will attempt to convert the entire object to a string for validation.
 
-        .PARAMETER allowedCharacters
+        .PARAMETER AllowedCharacters
         A string containing all characters that are permitted in the input. When specified,
         the function will validate that the input contains only characters present in this set.
         This is a allowlist approach where only explicitly allowed characters pass validation.
         Example: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_"
 
-        .PARAMETER disallowedCharacters
+        .PARAMETER DisallowedCharacters
         A string containing characters that are not permitted in the input. When specified,
         the function will fail validation if any of these characters are found in the input.
         This is a denylist approach where specific characters are explicitly forbidden.
         Example: "<>:\"/\\|?*" (common filesystem-unsafe characters)
 
-        .PARAMETER regexPattern
+        .PARAMETER RegexPattern
         A regular expression pattern that the input must match. When specified, the entire
         input string must match this pattern for validation to succeed. This provides
         flexible pattern-based validation for complex requirements.
         Example: "^[a-zA-Z0-9][a-zA-Z0-9\-_.]*[a-zA-Z0-9]$" (valid hostname pattern)
 
-        .PARAMETER validationPreset
+        .PARAMETER ValidationPreset
         A predefined validation preset that applies common validation rules. Available presets:
         - AlphaNumeric: Letters and numbers only
         - AlphaNumericDash: Letters, numbers, hyphens, and underscores
@@ -9223,24 +9900,24 @@ Function Test-JsonPropertyFormat {
         - lowerCaseRfc1123PortGroup: Valid RFC1123 hostname format (lowercase only)
         - FilePath: Cross-platform file path validation (Windows, Linux, macOS compatible)
 
-        .PARAMETER minLength
+        .PARAMETER MinLength
         The minimum required length for the input string. If specified, validation will fail
         if the input is shorter than this value. Defaults to 1 if not specified.
 
-        .PARAMETER maxLength
+        .PARAMETER MaxLength
         The maximum allowed length for the input string. If specified, validation will fail
         if the input is longer than this value. No maximum limit if not specified.
 
-        .PARAMETER caseSensitive
+        .PARAMETER CaseSensitive
         When specified, character validation will be case-sensitive. By default, validation
-        is case-insensitive for character set matching. This parameter affects allowedCharacters,
-        disallowedCharacters, and acceptableStrings validation but not regular expression patterns.
+        is case-insensitive for character set matching. This parameter affects AllowedCharacters,
+        DisallowedCharacters, and AcceptableStrings validation but not regular expression patterns.
 
-        .PARAMETER acceptableStrings
+        .PARAMETER AcceptableStrings
         An array of strings that are considered acceptable input values. When specified,
         the input must exactly match one of the strings in this array for validation to succeed.
         This provides a simple allowlist approach for validating against a predefined set of
-        acceptable values. The comparison respects the caseSensitive parameter.
+        acceptable values. The comparison respects the CaseSensitive parameter.
         Example: @("Development", "Testing", "Production")
 
         .OUTPUTS
@@ -9250,51 +9927,51 @@ Function Test-JsonPropertyFormat {
         failures for troubleshooting purposes.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "MyFileName123" -validationPreset "FileName"
+        $isValid = Test-JsonPropertyFormat -InputData "MyFileName123" -ValidationPreset "FileName"
         Validates that the input string contains only characters safe for use in file names.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "12345" -validationPreset "Numeric"
+        $isValid = Test-JsonPropertyFormat -InputData "12345" -ValidationPreset "Numeric"
         Validates that the input string contains only numeric characters (0-9).
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData $jsonConfig -propertyPath "common.vCenterName" -validationPreset "DomainName"
+        $isValid = Test-JsonPropertyFormat -inputData $JsonFilePathConfig -propertyPath "common.vCenterName" -validationPreset "DomainName"
         Validates that the vCenter name from JSON configuration follows domain name format rules.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath "common.esxHost" -validationPreset "IpAddressOrDomainNameWithPort"
+        $isValid = Test-JsonPropertyFormat -inputData $InputData -propertyPath "common.esxHost" -validationPreset "IpAddressOrDomainNameWithPort"
         Validates that the ESX host property from JSON contains a valid IP address or domain name with optional port.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "ServerName-01" -allowedCharacters "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" -minLength 3 -maxLength 15
+        $isValid = Test-JsonPropertyFormat -inputData "ServerName-01" -allowedCharacters "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_" -minLength 3 -maxLength 15
         Validates server name string with specific character allowlist and length constraints.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData $config -propertyPath "datastore.datastoreName" -disallowedCharacters "<>:\"/\\|?*" -maxLength 50
+        $isValid = Test-JsonPropertyFormat -inputData $config -propertyPath "datastore.datastoreName" -disallowedCharacters "<>:\"/\\|?*" -maxLength 50
         Validates datastore name from JSON by excluding filesystem-unsafe characters with a maximum length limit.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData $supervisorConfig -propertyPath "tkgsComponentSpec.foundationLoadBalancerComponents.flbVipStartIP" -validationPreset "IpAddress"
+        $isValid = Test-JsonPropertyFormat -inputData $supervisorConfig -propertyPath "tkgsComponentSpec.foundationLoadBalancerComponents.flbVipStartIP" -validationPreset "IpAddress"
         Validates that the load balancer VIP start IP from JSON is a properly formatted IPv4 address.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "192.168.1.0/24" -validationPreset "IpAddressWithCidr"
+        $isValid = Test-JsonPropertyFormat -inputData "192.168.1.0/24" -validationPreset "IpAddressWithCidr"
         Validates that the input string is a properly formatted IPv4 address with CIDR notation (e.g., 192.168.1.0/24).
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "my-domain-name.local" -regexPattern "^[a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9]$" -minLength 4
+        $isValid = Test-JsonPropertyFormat -inputData "my-domain-name.local" -regexPattern "^[a-zA-Z0-9][a-zA-Z0-9\-\.]*[a-zA-Z0-9]$" -minLength 4
         Validates input string against a custom regular expression pattern with minimum length requirement.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData $config -propertyPath "supervisorSpec.controlPlaneSize" -acceptableStrings @("TINY", "SMALL", "MEDIUM", "LARGE")
+        $isValid = Test-JsonPropertyFormat -inputData $config -propertyPath "supervisorSpec.controlPlaneSize" -acceptableStrings @("TINY", "SMALL", "MEDIUM", "LARGE")
         Validates that the control plane size from JSON matches one of the acceptable string values.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "TINY" -acceptableStrings @("tiny", "small", "medium", "large") -caseSensitive
+        $isValid = Test-JsonPropertyFormat -inputData "TINY" -acceptableStrings @("tiny", "small", "medium", "large") -caseSensitive
         Validates input against acceptable strings with case-sensitive matching.
 
         .EXAMPLE
-        $IsValid = Test-JsonPropertyFormat -inputData "C:\Program Files\VMware\vCenter" -validationPreset "FilePath"
+        $isValid = Test-JsonPropertyFormat -inputData "C:\Program Files\VMware\vCenter" -validationPreset "FilePath"
         Validates that the input string is a valid cross-platform file path (supports Windows, Linux, and macOS formats).
 
         .NOTES
@@ -9322,24 +9999,24 @@ Function Test-JsonPropertyFormat {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String[]]$acceptableStrings,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String[]]$AcceptableStrings,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$allowedCharacters,
-        [Parameter(Mandatory = $false)] [Switch]$caseSensitive,
+        [Parameter(Mandatory = $false)] [Switch]$CaseSensitive,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$disallowedCharacters,
-        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyString()] $inputData,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, 10000)] [Int]$maxLength,
-        [Parameter(Mandatory = $false)] [ValidateRange(0, 1000)] [Int]$minLength,
-        [Parameter(Mandatory = $false)] [Double]$minValue,
-        [Parameter(Mandatory = $false)] [Double]$maxValue,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$propertyPath,
+        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyString()] $InputData,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10000)] [Int]$MaxLength,
+        [Parameter(Mandatory = $false)] [Double]$MaxValue,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 1000)] [Int]$MinLength,
+        [Parameter(Mandatory = $false)] [Double]$MinValue,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PropertyPath,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$regexPattern,
-        [Parameter(Mandatory = $false)] [ValidateSet("AlphaNumeric", "AlphaNumericDash", "Numeric", "FileName", "UserName", "DomainName", "IpAddress", "IpAddressWithCidr", "IpAddressOrDomainNameWithPort", "Email", "lowerCaseRfc1123PortGroup", "FilePath", "vSphereObject80Characters")] [String]$validationPreset
+        [Parameter(Mandatory = $false)] [ValidateSet("AlphaNumeric", "AlphaNumericDash", "Numeric", "FileName", "UserName", "DomainName", "IpAddress", "IpAddressWithCidr", "IpAddressOrDomainNameWithPort", "Email", "lowerCaseRfc1123PortGroup", "FilePath", "vSphereObject80Characters")] [String]$ValidationPreset
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-JsonPropertyFormat function..."
 
     # Step 1: Extract the property value from input data using helper function.
-    $inputText = Get-JsonPropertyValue -inputData $inputData -propertyPath $propertyPath
+    $inputText = Get-JsonPropertyValue -inputData $InputData -propertyPath $PropertyPath
 
     if ($null -eq $inputText) {
         Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Input validation failed: Could not extract property value"
@@ -9349,9 +10026,9 @@ Function Test-JsonPropertyFormat {
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating input text with length: $($inputText.Length)"
 
     # Step 2: Apply validation preset rules if specified.
-    if ($validationPreset) {
-        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Applying validation preset: $validationPreset"
-        $presetRules = Get-ValidationPresetRules -validationPreset $validationPreset
+    if ($ValidationPreset) {
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Applying validation preset: $ValidationPreset"
+        $presetRules = Get-ValidationPresetRules -validationPreset $ValidationPreset
 
         # Merge preset rules with explicitly provided parameters (explicit parameters take precedence)
         if (-not $allowedCharacters -and $presetRules.AllowedCharacters) {
@@ -9366,34 +10043,36 @@ Function Test-JsonPropertyFormat {
     }
 
     # Step 3: Validate against acceptable strings (enumerated values) if specified.
-    if ($acceptableStrings -and $acceptableStrings.Count -gt 0) {
+    if ($AcceptableStrings -and $AcceptableStrings.Count -gt 0) {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating against acceptable strings"
-        $isValid = Test-AcceptableStrings -inputText $inputText -acceptableStrings $acceptableStrings -propertyPath $propertyPath
+        $isValid = Test-AcceptableStrings -inputText $inputText -acceptableStrings $AcceptableStrings -propertyPath $PropertyPath
         if (-not $isValid) {
             return $false
         }
 
-        # If only acceptable strings validation was requested, return early
-        if (-not $allowedCharacters -and -not $disallowedCharacters -and -not $regexPattern -and -not $minLength -and -not $maxLength -and -not $PSBoundParameters.ContainsKey('minValue') -and -not $PSBoundParameters.ContainsKey('maxValue')) {
+        # If only acceptable strings validation was requested, return early.
+
+        if (-not $allowedCharacters -and -not $disallowedCharacters -and -not $regexPattern -and -not $MinLength -and -not $MaxLength -and -not $PSBoundParameters.ContainsKey('MinValue') -and -not $PSBoundParameters.ContainsKey('MaxValue')) {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Input validation for '$inputText' passed successfully (acceptable strings only)"
             return $true
         }
     }
 
     # Step 4: Validate numeric range if specified.
-    if ($PSBoundParameters.ContainsKey('minValue') -or $PSBoundParameters.ContainsKey('maxValue')) {
+    if ($PSBoundParameters.ContainsKey('MinValue') -or $PSBoundParameters.ContainsKey('MaxValue')) {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating numeric range"
 
-        # Build parameter hashtable for Test-NumericRange
+        # Build parameter hashtable for Test-NumericRange.
+
         $numericParams = @{
-            inputText = $inputText
-            propertyPath = $propertyPath
+            InputText = $inputText
+            PropertyPath = $PropertyPath
         }
-        if ($PSBoundParameters.ContainsKey('minValue')) {
-            $numericParams.minValue = $minValue
+        if ($PSBoundParameters.ContainsKey('MinValue')) {
+            $numericParams.MinValue = $MinValue
         }
-        if ($PSBoundParameters.ContainsKey('maxValue')) {
-            $numericParams.maxValue = $maxValue
+        if ($PSBoundParameters.ContainsKey('MaxValue')) {
+            $numericParams.MaxValue = $MaxValue
         }
 
         $isValid = Test-NumericRange @numericParams
@@ -9403,13 +10082,13 @@ Function Test-JsonPropertyFormat {
     }
 
     # Step 5: Validate string length constraints.
-    if ($minLength -and $inputText.Length -lt $minLength) {
-        Write-LogMessage -Type ERROR -Message "Input validation failed: Input length $($inputText.Length) is less than minimum required length $minLength"
+    if ($MinLength -and $inputText.Length -lt $MinLength) {
+        Write-LogMessage -Type ERROR -Message "Input validation failed: Input length $($inputText.Length) is less than minimum required length $MinLength"
         return $false
     }
 
-    if ($maxLength -and $inputText.Length -gt $maxLength) {
-        Write-LogMessage -Type ERROR -Message "Input validation failed: Input length $($inputText.Length) exceeds maximum allowed length $maxLength"
+    if ($MaxLength -and $inputText.Length -gt $MaxLength) {
+        Write-LogMessage -Type ERROR -Message "Input validation failed: Input length $($inputText.Length) exceeds maximum allowed length $MaxLength"
         return $false
     }
 
@@ -9417,10 +10096,11 @@ Function Test-JsonPropertyFormat {
     if ($regexPattern) {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating against regex pattern: $regexPattern"
 
-        # Use case-sensitive matching for all regex validation
+        # Use case-sensitive matching for all regex validation.
+
         if (-not ($inputText -cmatch $regexPattern)) {
-            $presetInfo = if ($validationPreset) { " ($validationPreset)" } else { "" }
-            Write-LogMessage -Type ERROR -Message "Validation failed for `"$propertyPath`" with value `"$inputText`". It does not match the required pattern${presetInfo}: $regexPattern"
+            $presetInfo = if ($ValidationPreset) { " ($ValidationPreset)" } else { "" }
+            Write-LogMessage -Type ERROR -Message "Validation failed for `"$PropertyPath`" with value `"$inputText`". It does not match the required pattern${presetInfo}: $regexPattern"
             return $false
         }
     }
@@ -9447,7 +10127,9 @@ Function Test-JsonPropertyFormat {
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Input validation for '$inputText' passed successfully"
     return $true
 }
+
 Function Test-TagCatalogCategory {
+
     <#
         .SYNOPSIS
         Tests for the existence of a vSphere tag catalog category and creates it if it doesn't exist.
@@ -9461,7 +10143,7 @@ Function Test-TagCatalogCategory {
         The function will exit the script with code 1 if any errors occur during the lookup
         or creation process.
 
-        .PARAMETER tagCatalog
+        .PARAMETER TagCatalog
         The name of the tag catalog category to test for existence or create.
         This parameter is mandatory and cannot be null or empty.
 
@@ -9470,7 +10152,7 @@ Function Test-TagCatalogCategory {
         Tests for the existence of the "EdgeNodePolicy" tag catalog category and creates it if it doesn't exist.
 
         .EXAMPLE
-        Test-TagCatalogCategory -tagCatalog $inputData.common.storagePolicy.storagePolicyTagCatalog
+        Test-TagCatalogCategory -tagCatalog $InputData.common.storagePolicy.storagePolicyTagCatalog
         Tests for the tag catalog specified in the input configuration data.
 
         .NOTES
@@ -9489,7 +10171,7 @@ Function Test-TagCatalogCategory {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagCatalog
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-TagCatalogCategory function..."
@@ -9502,21 +10184,22 @@ Function Test-TagCatalogCategory {
     }
 
     try {
-        $tagFoundCategory = Get-TagCategory -Name $tagCatalog -Server $Script:VCenterName -ErrorAction SilentlyContinue
+        $tagFoundCategory = Get-TagCategory -Name $TagCatalog -Server $Script:VCenterName -ErrorAction SilentlyContinue
     } catch {
     }
 
     if (-not $tagFoundCategory) {
         # Hard coded description for the tag category assuming greenfield.  Can revisit for non-greenfield.
         try {
-            New-TagCategory -Name $tagCatalog -Description "Tag catalog for edge-node greenfield deployment" -Server $Script:VCenterName -Confirm:$false -ErrorAction Stop | Out-Null
-            Write-LogMessage -Type INFO -Message "Succesfully created tag catalog `"$tagCatalog`" on `"$Script:VCenterName`"."
+            New-TagCategory -Name $TagCatalog -Description "Tag catalog for edge-node greenfield deployment" -Server $Script:VCenterName -Confirm:$false -ErrorAction Stop | Out-Null
+            Write-LogMessage -Type INFO -Message "Succesfully created tag catalog `"$TagCatalog`" on `"$Script:VCenterName`"."
         } catch {
             $errorMessage = $_.Exception.Message
 
-            # Check for SSO authentication failure which is commonly caused by clock sync issues
+            # Check for SSO authentication failure which is commonly caused by clock sync issues.
+
             if ($errorMessage -match "vSphere single sign-on failed for connection") {
-                Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$tagCatalog`" on `"$Script:VCenterName`": SSO authentication failure."
+                Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$TagCatalog`" on `"$Script:VCenterName`": SSO authentication failure."
                 Write-LogMessage -Type ERROR -Message "This is commonly caused by clock synchronization issues between the client and vCenter Server."
                 Write-LogMessage -Type ERROR -Message "Troubleshooting steps:"
                 Write-LogMessage -Type ERROR -Message "  1. Verify NTP is configured and synchronized on this host (client)."
@@ -9524,16 +10207,18 @@ Function Test-TagCatalogCategory {
                 Write-LogMessage -Type ERROR -Message "  3. Check that time drift is less than 5 minutes between client and vCenter."
                 Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage"
             } else {
-                Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$tagCatalog`" on `"$Script:VCenterName`": $errorMessage"
+                Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$TagCatalog`" on `"$Script:VCenterName`": $errorMessage"
             }
             throw "Deployment failed. Check logs for details."
         }
 
     } else {
-        Write-LogMessage -Type WARNING -Message "Tag catalog `"$tagCatalog`" already exists on vCenter `"$Script:VCenterName`"."
+        Write-LogMessage -Type WARNING -Message "Tag catalog `"$TagCatalog`" already exists on vCenter `"$Script:VCenterName`"."
     }
 }
+
 Function Test-Tag {
+
     <#
         .SYNOPSIS
         Tests for the existence of a vSphere tag within a specified tag catalog category and creates it if it doesn't exist.
@@ -9547,11 +10232,11 @@ Function Test-Tag {
         The function will exit the script with code 1 if any errors occur during the lookup
         or creation process.
 
-        .PARAMETER tagCatalog
+        .PARAMETER TagCatalog
         The name of the tag catalog category that should contain the tag.
         This parameter is mandatory and cannot be null or empty.
 
-        .PARAMETER tagName
+        .PARAMETER TagName
         The name of the tag to test for existence or create within the specified tag catalog category.
         This parameter is mandatory and cannot be null or empty.
 
@@ -9561,7 +10246,7 @@ Function Test-Tag {
         and creates it if it doesn't exist.
 
         .EXAMPLE
-        Test-Tag -tagCatalog $storagePolicyTagCatalog -tagName $supervisorName
+        Test-Tag -tagCatalog $storagePolicyTagCatalog -tagName $SupervisorName
         Tests for the tag specified by variables, commonly used with configuration data.
 
         .NOTES
@@ -9580,8 +10265,8 @@ Function Test-Tag {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagCatalog,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$tagName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Test-Tag function..."
@@ -9595,17 +10280,17 @@ Function Test-Tag {
 
     # Create tagCategoy object.
     try {
-        $tagCatalogObject = Get-TagCategory -Name $tagCatalog -Server $Script:VCenterName -ErrorAction SilentlyContinue}
+        $tagCatalogObject = Get-TagCategory -Name $TagCatalog -Server $Script:VCenterName -ErrorAction SilentlyContinue}
     catch {
-        Write-LogMessage -Type ERROR -Message "Error looking up tag catalog `"$tagCatalog`" on vCenter `"$Script:VCenterName`" $_"
+        Write-LogMessage -Type ERROR -Message "Error looking up tag catalog `"$TagCatalog`" on vCenter `"$Script:VCenterName`" $_"
         throw "Deployment failed. Check logs for details."
     }
 
     # Look to see if tag has already been created.
     try {
-        $foundTagName = Get-Tag -Name $tagName -Category $tagCatalogObject -Server $Script:VCenterName -ErrorAction SilentlyContinue
+        $foundTagName = Get-Tag -Name $TagName -Category $tagCatalogObject -Server $Script:VCenterName -ErrorAction SilentlyContinue
     } catch {
-        Write-LogMessage -Type ERROR -Message "Error looking up tag `"$tagName`" in tag catalog `"$tagCatalog`" on vCenter `"$Script:VCenterName`" $_"
+        Write-LogMessage -Type ERROR -Message "Error looking up tag `"$TagName`" in tag catalog `"$TagCatalog`" on vCenter `"$Script:VCenterName`" $_"
         throw "Deployment failed. Check logs for details."
     }
 
@@ -9613,18 +10298,20 @@ Function Test-Tag {
     if (-not $foundTagName) {
         try {
             $tagCategoryObject = Get-TagCategory $tagCatalogObject -ErrorAction Stop
-            $TaskId = New-Tag -Name $tagName -Category $tagCategoryObject -Description "New Tag for supervisor instance $tagName for edge-node greenfield deployment" -Server $Script:VCenterName -Confirm:$false -ErrorAction Stop
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "New Tag creation TaskId: $($TaskId.Value)"
-            Write-LogMessage -Type INFO -Message "Succesfully created tag name `"$tagName`" on `"$tagCatalog`" on vCenter `"$Script:VCenterName`"."
+            $taskId = New-Tag -Name $TagName -Category $tagCategoryObject -Description "New Tag for supervisor instance $TagName for edge-node greenfield deployment" -Server $Script:VCenterName -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "New Tag creation TaskId: $($taskId.Value)"
+            Write-LogMessage -Type INFO -Message "Succesfully created tag name `"$TagName`" on `"$TagCatalog`" on vCenter `"$Script:VCenterName`"."
         } catch {
-            Write-LogMessage -Type ERROR -Message "Error creating tag name `"$tagName`" on `"$tagCatalog`" on vCenter `"$Script:VCenterName`" $_"
+            Write-LogMessage -Type ERROR -Message "Error creating tag name `"$TagName`" on `"$TagCatalog`" on vCenter `"$Script:VCenterName`" $_"
             throw "Deployment failed. Check logs for details."
         }
     } else{
-        Write-LogMessage -Type WARNING -Message "Tag name `"$tagName`" already exists on `"$tagCatalog`" on vCenter `"$Script:VCenterName`"."
+        Write-LogMessage -Type WARNING -Message "Tag name `"$TagName`" already exists on `"$TagCatalog`" on vCenter `"$Script:VCenterName`"."
     }
 }
+
 Function Test-JsonDeeperValidation {
+
     <#
         .SYNOPSIS
         Validates JSON file content against specified validation rules.
@@ -9679,8 +10366,8 @@ Function Test-JsonDeeperValidation {
         "common.storagepolicy.storagePolicyName"
     )
     foreach ($vmwareObjectCharacterProperty in $vmwareObjectCharacterProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $vmwareObjectCharacterProperty -validationPreset "vSphereObject80Characters"
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $vmwareObjectCharacterProperty -validationPreset "vSphereObject80Characters"
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9690,9 +10377,9 @@ Function Test-JsonDeeperValidation {
         "common.argoCD.argoCdOperatorYamlPath",
         "common.argoCD.argoCdDeploymentYamlPath"
     )
-    foreach ($filePathProperty in $filePathProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $filePathProperty -validationPreset "FilePath"
-        if (-Not $IsValid) {
+    foreach ($FilePathProperty in $filePathProperties) {
+        $isValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $FilePathProperty -validationPreset "FilePath"
+        if (-Not $isValid) {
                 $validationFailures++
         }
     }
@@ -9714,8 +10401,8 @@ Function Test-JsonDeeperValidation {
             minValue = $prop.Min
         }
 
-        $IsValid = Test-JsonPropertyFormat @params
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat @params
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9728,8 +10415,8 @@ Function Test-JsonDeeperValidation {
     Write-LogMessage -Type DEBUG -Message "Validating tkgsWorkloadServiceCount as valid CIDR range"
     $serviceCountValue = Get-JsonPropertyValue -inputData $supervisorData -propertyPath "tkgsComponentSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"
     if ($null -ne $serviceCountValue) {
-        $IsValid = Test-ValidCidrRange -inputText $serviceCountValue -propertyPath "tkgsComponentSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"
-        if (-Not $IsValid) {
+        $isValid = Test-ValidCidrRange -inputText $serviceCountValue -propertyPath "tkgsComponentSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"
+        if (-Not $isValid) {
             $validationFailures++
         }
     } else {
@@ -9742,8 +10429,8 @@ Function Test-JsonDeeperValidation {
         "common.virtualDistributedSwitch.numUplinks"
     )
     foreach ($integerObjectProperty in $integerObjectPropertiesForInputData) {
-        $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $integerObjectProperty -validationPreset "Numeric"
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $integerObjectProperty -validationPreset "Numeric"
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9756,8 +10443,8 @@ Function Test-JsonDeeperValidation {
         "tkgsComponentSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkName"
     )
     foreach ($vksNetworkNameProperty in $vksNetworkNameProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $vksNetworkNameProperty -validationPreset "lowerCaseRfc1123PortGroup"
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $vksNetworkNameProperty -validationPreset "lowerCaseRfc1123PortGroup"
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9778,7 +10465,8 @@ Function Test-JsonDeeperValidation {
     # VM classes must be lowercase RFC1123 compliant for Kubernetes compatibility.
     $vmClassValue = $inputData.common.argoCD.vmClass
     if ($vmClassValue) {
-        # Handle both string and array formats
+        # Handle both string and array formats.
+
         $vmClassList = if ($vmClassValue -is [Array]) { $vmClassValue } else { @($vmClassValue) }
 
         foreach ($vmClassName in $vmClassList) {
@@ -9813,36 +10501,36 @@ Function Test-JsonDeeperValidation {
     # Supervisor services or vSphere Pods must have storage policy set to fully Initialized. other settings will introduce disk creation issues.
     # https://knowledge.broadcom.com/external/article/385016/failed-to-add-disk-error-while-deploying.html
     $policyPath = "common.storagepolicy.storagePolicyRule"
-    $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $policyPath -acceptableStrings @("Fully initialized")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $policyPath -acceptableStrings @("Fully initialized")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
     # Today only VMFS is supported.
     $storageType = "common.storagepolicy.storagePolicyType"
-    $IsValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $storageType -acceptableStrings @("VMFS")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $inputData -propertyPath $storageType -acceptableStrings @("VMFS")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
     # Foundation Load Balancer size must be one of the following: SMALL, MEDIUM, LARGE, X-LARGE.
     $policyPath = "tkgsComponentSpec.foundationLoadBalancerComponents.flbSize"
-    $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("SMALL", "MEDIUM", "LARGE", "X-LARGE")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("SMALL", "MEDIUM", "LARGE", "X-LARGE")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
     # Only one FLB provider is supported: VSPHERE_FOUNDATION.
     $flbProvider = "tkgsComponentSpec.foundationLoadBalancerComponents.flbProvider"
-    $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $flbProvider -acceptableStrings @("VSPHERE_FOUNDATION")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $flbProvider -acceptableStrings @("VSPHERE_FOUNDATION")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
     # Supervisor control plane size must be one of the following: TINY, SMALL, MEDIUM, LARGE.
     $policyPath = "supervisorSpec.controlPlaneSize"
-    $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("TINY", "SMALL", "MEDIUM", "LARGE")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("TINY", "SMALL", "MEDIUM", "LARGE")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
@@ -9852,23 +10540,23 @@ Function Test-JsonDeeperValidation {
         "tkgsComponentSpec.foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkType"
     )
     foreach ($networkTypeProperty in $networkTypeProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $networkTypeProperty -acceptableStrings @("DVPG")
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $networkTypeProperty -acceptableStrings @("DVPG")
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
 
     # flbAvailability must be either SINGLE_NODE or ACTIVE_PASSIVE
     $policyPath = "tkgsComponentSpec.foundationLoadBalancerComponents.flbAvailability"
-    $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("SINGLE_NODE", "ACTIVE_PASSIVE")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("SINGLE_NODE", "ACTIVE_PASSIVE")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
     # Ensure the control plane VM count is either 1 or 3.
     $policyPath = "supervisorSpec.controlPlaneVMCount"
-    $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("1", "3")
-    if (-Not $IsValid) {
+    $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $policyPath -acceptableStrings @("1", "3")
+    if (-Not $isValid) {
         $validationFailures++
     }
 
@@ -9880,8 +10568,8 @@ Function Test-JsonDeeperValidation {
         "tkgsComponentSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkGatewayCidr"
     )
     foreach ($networkGatewayProperty in $networkGatewayProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $networkGatewayProperty -validationPreset "IpAddressWithCidr"
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $networkGatewayProperty -validationPreset "IpAddressWithCidr"
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9896,8 +10584,8 @@ Function Test-JsonDeeperValidation {
         "tkgsComponentSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp"
     )
     foreach ($startingIpAddressProperty in $startingIpAddressProperties) {
-        $IsValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $startingIpAddressProperty -validationPreset "IpAddress"
-        if (-Not $IsValid) {
+        $isValid = Test-JsonPropertyFormat -inputData $supervisorData -propertyPath $startingIpAddressProperty -validationPreset "IpAddress"
+        if (-Not $isValid) {
             $validationFailures++
         }
     }
@@ -9930,11 +10618,13 @@ Function Test-JsonDeeperValidation {
     )
 
     foreach ($mapping in $ipToGatewayMappings) {
-        # Extract IP and Gateway values from JSON
+        # Extract IP and Gateway values from JSON.
+
         $ipValue = $null
         $gatewayValue = $null
 
-        # Navigate the property path to get the IP value
+        # Navigate the property path to get the IP value.
+
         $ipParts = $mapping.IpPath.Split('.')
         $ipTemp = $supervisorData
         foreach ($part in $ipParts) {
@@ -9948,7 +10638,8 @@ Function Test-JsonDeeperValidation {
             $ipValue = $ipTemp
         }
 
-        # Navigate the property path to get the Gateway value
+        # Navigate the property path to get the Gateway value.
+
         $gatewayParts = $mapping.GatewayPath.Split('.')
         $gatewayTemp = $supervisorData
         foreach ($part in $gatewayParts) {
@@ -9962,7 +10653,8 @@ Function Test-JsonDeeperValidation {
             $gatewayValue = $gatewayTemp
         }
 
-        # Validate if both values exist
+        # Validate if both values exist.
+
         if ($null -ne $ipValue -and $null -ne $gatewayValue) {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Checking $($mapping.Description): $ipValue against gateway $gatewayValue"
 
@@ -9984,7 +10676,6 @@ Function Test-JsonDeeperValidation {
         Write-LogMessage -Type DEBUG -Message "JSON parameter validation passed."
     }
 }
-
 Function Find-Datastore {
 
     <#
@@ -10010,35 +10701,37 @@ Function Find-Datastore {
         - Returns canonical disk name for programmatic use in datastore creation workflows
         - Exits with error if no valid datastore or disk selection is made
 
-        .PARAMETER esxHostName
+        .PARAMETER EsxHostName
         The hostname or IP address of the ESX host to scan. This parameter is mandatory.
         Requires an active direct connection to the ESX host.
 
-        .PARAMETER datastoreName
+        .PARAMETER DatastoreName
         The name of the datastore to locate on the ESX host. This parameter is mandatory.
         If the datastore is not found, the function will prompt for an alternative disk selection.
 
         .EXAMPLE
-        Find-Datastore -esxHostName "esx01.example.com" -datastoreName "datastore1"
+        Find-Datastore -EsxHostName "esx01.example.com" -DatastoreName "datastore1"
 
         Searches for "datastore1" on the specified ESX host.
         If found and VMFS formatted, reports the datastore status.
         If not found, prompts user to select from available unformatted disks.
 
         .EXAMPLE
-        $diskName = Find-Datastore -esxHostName "esx01.example.com" -datastoreName "my-datastore"
+        $diskName = Find-Datastore -EsxHostName "esx01.example.com" -DatastoreName "my-datastore"
         if ($diskName) {
             Write-Host "Selected disk for datastore creation: $diskName"
-            # Proceed with datastore creation using $diskName
+            # Proceed with datastore creation using $diskName.
+
         }
 
         Captures the returned canonical disk name for use in subsequent datastore creation operations.
 
         .EXAMPLE
-        # Within a deployment workflow
-        $diskCanonicalName = Find-Datastore -esxHostName $esxHost -datastoreName $requiredDatastore
+        # Within a deployment workflow.
+
+        $diskCanonicalName = Find-Datastore -EsxHostName $EsxHost -DatastoreName $requiredDatastore
         if ($diskCanonicalName) {
-            Set-NewDatastore -esxHostName $esxHost -diskName $diskCanonicalName -datastoreName $requiredDatastore
+            Set-NewDatastore -EsxHost $EsxHost -DiskCanonicalName $diskCanonicalName -DatastoreName $requiredDatastore
         }
 
         Uses the function as part of an automated deployment workflow to locate or select storage.
@@ -10047,47 +10740,52 @@ Function Find-Datastore {
         String. Returns the canonical name of either:
         - The selected unformatted disk (e.g., "naa.600508b1001c...") if the datastore doesn't exist
         - The existing datastore's underlying disk canonical name if the datastore is already mounted
-        Exits with error code 1 if no valid selection is made, datastore type is unexpected, or canonical name cannot be retrieved.
+        Throws an exception if no valid selection is made, datastore type is unexpected, or canonical name cannot be retrieved.
 
         .NOTES
         - Requires an active direct connection to the ESX host
         - Requires PowerCLI modules to be installed (VMware.VimAutomation.Core)
         - Uses Get-EsxDatastoreInfo internally for datastore scanning and disk discovery
         - Interactive selection requires user input and cannot be fully automated
-        - If datastore exists but is not VMFS formatted, the function exits with error
+        - If datastore exists but is not VMFS formatted, the function throws an exception
         - Uses Write-LogMessage for consistent logging throughout the script
         - Follows the error handling patterns of the SimpleSupervisorDeploymentAtScale module
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$esxHostName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$datastoreName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName
+
     )
     Write-LogMessage -Type DEBUG -Message "Entered Find-Datastore function..."
 
     # Step 1: Check if specific datastore exists.
     $getDatastoreParams = @{
-        esxHostName = $esxHostName
-        datastoreName = $datastoreName
+        esxHostName = $EsxHostName
+        datastoreName = $DatastoreName
         silence = $true
     }
     $result = Get-EsxDatastoreInfo @getDatastoreParams
 
     if (-not $result.MountedDatastoreStatus.IsMounted) {
-        # Step 2: Datastore NOT found - inform user
-        Write-LogMessage -Type INFO -Message "Datastore `"$datastoreName`" not found on ESX host `"$esxHostName`". Proceeding with unformatted disk selection."
+        # Step 2: Datastore NOT found - inform user.
+
+        Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" not found on ESX host `"$EsxHostName`". Proceeding with unformatted disk selection."
         Write-LogMessage -Type INFO -Message "Checking for available unformatted disks..."
 
-        # Step 3: Present alternatives with interactive selection
+        # Step 3: Present alternatives with interactive selection.
+
         $selectDatastoreParams = @{
-            esxHostName = $esxHostName
+            esxHostName = $EsxHostName
             selectUnformattedDatastore = $true
         }
         $result = Get-EsxDatastoreInfo @selectDatastoreParams
 
-        # Step 4: Process user's selection
+        # Step 4: Process user's selection.
+
         if ($result.SelectedDatastoreUUID) {
-            # Get full details of selected disk
+            # Get full details of selected disk.
+
             $selectedDisk = $result.UnformattedDisks | Where-Object { $_.CanonicalName -eq $result.SelectedDatastoreUUID }
 
             if ($null -ne $selectedDisk) {
@@ -10101,33 +10799,304 @@ Function Find-Datastore {
             }
         }
         else {
-            # User skipped selection - cannot proceed
+            # User skipped selection - cannot proceed.
+
             Write-LogMessage -Type ERROR -Message "No datastore selected. Cannot proceed with deployment."
             throw "Deployment failed. Check logs for details."
         }
     }
     else {
-        # Datastore found - verify it's VMFS and healthy
+        # Datastore found - verify it's VMFS and healthy.
         if ($result.MountedDatastoreStatus.IsVMFS) {
-            Write-LogMessage -Type INFO -Message "Datastore `"$datastoreName`" is already mounted on ESX host `"$esxHostName`" and has $($result.MountedDatastoreStatus.FreeSpaceGB) GB free space."
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$datastoreName UUID is $($result.MountedDatastoreStatus.UUID)"
-            # Datastore already exists - return its canonical name from the result object
+            Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" is already mounted on ESX host `"$EsxHostName`" and has $($result.MountedDatastoreStatus.FreeSpaceGB) GB free space."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$DatastoreName UUID is $($result.MountedDatastoreStatus.UUID)"
+            # Datastore already exists - return its canonical name from the result object.
+
             if ($result.MountedDatastoreStatus.CanonicalName) {
-                Write-LogMessage -Type INFO -Message "Retrieved canonical name for existing datastore `"$datastoreName`": $($result.MountedDatastoreStatus.CanonicalName)"
+                Write-LogMessage -Type INFO -Message "Retrieved canonical name for existing datastore `"$DatastoreName`": $($result.MountedDatastoreStatus.CanonicalName)."
                 return $result.MountedDatastoreStatus.CanonicalName
             }
             else {
-                Write-LogMessage -Type ERROR -Message "Could not retrieve canonical name for datastore `"$datastoreName`""
+                Write-LogMessage -Type ERROR -Message "Could not retrieve canonical name for datastore `"$DatastoreName`""
                 throw "Deployment failed. Check logs for details."
             }
         }
         else {
-            Write-LogMessage -Type ERROR -Message "Datastore `"$datastoreName`" is mounted, but in unexpected type: (Type: $($result.MountedDatastoreStatus.Type)). Cannot proceed."
+            Write-LogMessage -Type ERROR -Message "Datastore `"$DatastoreName`" is mounted, but in unexpected type: (Type: $($result.MountedDatastoreStatus.Type)). Cannot proceed."
             throw "Deployment failed. Check logs for details."
         }
     }
 }
+Function Find-VlcmImage {
+
+    <#
+        .SYNOPSIS
+        Locates a vLCM image on the attached vCenter or prompts for interactive selection.
+
+        .DESCRIPTION
+        The Find-VlcmImage function retrieves available vLCM images from the attached vCenter using
+        Invoke-EsxSettingsRepositorySoftwareList and presents them for user selection. The function
+        displays each image's DisplayName and non-null SoftwareSpec components, allowing the user
+        to choose an appropriate image for deployment.
+
+        The function performs the following operations:
+        1. Retrieves all available vLCM images from the attached vCenter using Invoke-EsxSettingsRepositorySoftwareList
+        2. Displays each image's DisplayName and SoftwareSpec details in a formatted table with proper spacing
+        3. Prompts the user to select an image by number (selection cannot be skipped)
+        4. Returns the selected image's ID for use in subsequent operations (typically passed to Get-LcmSoftwareSpecification)
+
+        Key features:
+        - Interactive image selection with detailed SoftwareSpec information
+        - Shows BaseImage (always present) and other non-null SoftwareSpec components as separate columns
+        - Formatted output with blank line separation between table and prompt for improved readability
+        - Validates user input and provides clear error messages
+        - Returns image ID string for programmatic use in deployment workflows
+        - User must select an image or enter 'c' to cancel (which throws an exception)
+
+        .PARAMETER None
+        This function requires no parameters. It uses the currently attached vCenter connection.
+
+        .EXAMPLE
+        $imageId = Find-VlcmImage
+
+        Retrieves available vLCM images and prompts for user selection, returning the selected image ID.
+
+        .EXAMPLE
+        # Within a deployment workflow.
+
+        $selectedImageId = Find-VlcmImage
+        if ($selectedImageId) {
+            Write-Host "Selected image ID: $selectedImageId"
+            # Proceed with deployment using $selectedImageId.
+
+        }
+
+        Uses the function as part of an automated deployment workflow to select a vLCM image.
+
+        .OUTPUTS
+        String. Returns the ID of the selected vLCM image (e.g., "software-spec-1").
+        Throws an exception if the user enters 'c' to cancel.
+
+        .NOTES
+        - Requires an active vCenter connection (Connect-VIServer)
+        - Requires PowerCLI modules to be installed (VMware.VimAutomation.Core)
+        - Uses Invoke-EsxSettingsRepositorySoftwareList internally for image discovery
+        - Interactive selection requires user input and cannot be fully automated
+        - Selection cannot be skipped - user must select an image (1-N) or cancel ('c')
+        - If user cancels, the function throws an exception to stop deployment
+        - Uses Write-LogMessage for consistent logging throughout the script
+        - Follows the error handling patterns of the SimpleSupervisorDeploymentAtScale module
+    #>
+
+    Write-LogMessage -Type DEBUG -Message "Entered Find-VlcmImage function..."
+
+    # Step 1: Retrieve available vLCM images from vCenter.
+    Write-LogMessage -Type INFO -PrependNewLine -Message "Retrieving list of of vLCM images from vCenter's Image Catalog..."
+    try {
+        $imageList = Invoke-EsxSettingsRepositorySoftwareList -ErrorAction Stop
+    }
+    catch {
+        Write-LogMessage -Type ERROR -Message "Failed to retrieve vLCM images: $($_.Exception.Message)"
+        throw "Deployment failed. Check logs for details."
+    }
+
+    if ($null -eq $imageList -or $null -eq $imageList.Records -or $imageList.Records.Count -eq 0) {
+        Write-LogMessage -Type ERROR -Message "No vLCM images found in the repository."
+        throw "Deployment failed. Check logs for details."
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Found $($imageList.Records.Count) vLCM image(s) available."
+
+    # Step 2: Helper function to extract SoftwareSpec components as a hashtable.
+    function Get-SoftwareSpecComponents {
+        param (
+            [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$SoftwareSpec
+        )
+
+        # Define the keys we care about and how they should be handled.
+        $fieldMap = @(
+            @{ Key = "AlternativeImages"; Label = "AlternativeImages"; IsCollection = $true },
+            @{ Key = "AddOn";             Label = "AddOn" },
+            @{ Key = "BaseImage";         Label = "BaseImage"; IsVersion = $true },
+            @{ Key = "Components";        Label = "Components"; IsCollection = $true },
+            @{ Key = "HardwareSupport";   Label = "HardwareSupport" },
+            @{ Key = "RemovedComponents"; Label = "RemovedComponents"; IsCollection = $true },
+            @{ Key = "Solutions";         Label = "Solutions"; IsCollection = $true }
+        )
+
+        # Initialize result with nulls.
+        $results = [ordered]@{ }
+        foreach ($field in $fieldMap) {
+            $results[$field.Key] = $null
+        }
+
+        if ($null -eq $SoftwareSpec) {
+            return $results
+        }
+
+        # Case 1: SoftwareSpec is an Object (PSObject/Dictionary/etc).
+        if ($SoftwareSpec -isnot [string]) {
+            foreach ($field in $fieldMap) {
+                $val = $SoftwareSpec.$($field.Key)
+
+                if ($null -ne $val) {
+                    if ($field.IsVersion -and $null -ne $val.Version) {
+                        $results[$field.Key] = $val.Version
+                    }
+                    elseif ($field.IsCollection -and $val.Count -gt 0) {
+                        $results[$field.Key] = $val.Keys -join ", "
+                    }
+                    elseif ($val -ne "") {
+                        $results[$field.Key] = $val
+                    }
+                }
+            }
+        }
+        else {
+            # Case 2: SoftwareSpec is a string - parse it to extract components.
+            $softwareSpecString = $SoftwareSpec.ToString()
+
+            foreach ($field in $fieldMap) {
+                if ($field.IsVersion) {
+                    # BaseImage has special format: "BaseImage: Version: <value>".
+
+                    if ($softwareSpecString -match "$($field.Label):\s*Version:\s*([^,]+)") {
+                        $extractedValue = $matches[1].Trim()
+                        if ($extractedValue -and $extractedValue -ne "") {
+                            $results[$field.Key] = $extractedValue
+                        }
+                    }
+                }
+                else {
+                    # Other fields use format: "Label: <value>".
+
+                    if ($softwareSpecString -match "$($field.Label):\s*([^,]+)") {
+                        $extractedValue = $matches[1].Trim()
+                        if ($extractedValue -and $extractedValue -ne "") {
+                            $results[$field.Key] = $extractedValue
+                        }
+                    }
+                }
+            }
+        }
+
+        return $results
+    }
+
+    # Step 3: First pass - determine which columns are needed across all records.
+    $availableColumns = @{
+        BaseImage = $false
+        AddOn = $false
+        Components = $false
+        Solutions = $false
+        HardwareSupport = $false
+        RemovedComponents = $false
+        AlternativeImages = $false
+    }
+
+    # Create a copy of keys to avoid enumeration modification error.
+    $columnKeys = @('BaseImage', 'AddOn', 'Components', 'Solutions', 'HardwareSupport', 'RemovedComponents', 'AlternativeImages')
+
+    foreach ($record in $imageList.Records) {
+        $specComponents = Get-SoftwareSpecComponents -SoftwareSpec $record.SoftwareSpec
+        foreach ($key in $columnKeys) {
+            if ($null -ne $specComponents[$key] -and $specComponents[$key] -ne "") {
+                $availableColumns[$key] = $true
+            }
+        }
+    }
+
+    # Step 4: Build column list (BaseImage always included, others only if found).
+    $columnList = @('ID', 'DisplayName', 'BaseImage')
+    foreach ($key in @('AddOn', 'Components', 'Solutions', 'HardwareSupport', 'RemovedComponents', 'AlternativeImages')) {
+        if ($availableColumns[$key]) {
+            $columnList += $key
+        }
+    }
+
+    # Step 5: Prepare image data for display with individual columns.
+    $imageSelectionList = @()
+    $index = 1
+
+    foreach ($record in $imageList.Records) {
+        $specComponents = Get-SoftwareSpecComponents -SoftwareSpec $record.SoftwareSpec
+
+        # Build hashtable with required columns.
+        $imageHash = @{
+            ID = $index
+            DisplayName = $record.DisplayName
+            BaseImage = if ($specComponents.BaseImage) { $specComponents.BaseImage } else { "(not available)" }
+            ImageId = $record.Id
+        }
+
+        # Add other columns only if they're available across any record.
+        if ($availableColumns.AddOn) {
+            $imageHash['AddOn'] = if ($specComponents.AddOn) { $specComponents.AddOn } else { "" }
+        }
+        if ($availableColumns.Components) {
+            $imageHash['Components'] = if ($specComponents.Components) { $specComponents.Components } else { "" }
+        }
+        if ($availableColumns.Solutions) {
+            $imageHash['Solutions'] = if ($specComponents.Solutions) { $specComponents.Solutions } else { "" }
+        }
+        if ($availableColumns.HardwareSupport) {
+            $imageHash['HardwareSupport'] = if ($specComponents.HardwareSupport) { $specComponents.HardwareSupport } else { "" }
+        }
+        if ($availableColumns.RemovedComponents) {
+            $imageHash['RemovedComponents'] = if ($specComponents.RemovedComponents) { $specComponents.RemovedComponents } else { "" }
+        }
+        if ($availableColumns.AlternativeImages) {
+            $imageHash['AlternativeImages'] = if ($specComponents.AlternativeImages) { $specComponents.AlternativeImages } else { "" }
+        }
+
+        $imageSelectionList += [PSCustomObject]$imageHash
+        $index++
+    }
+
+    # Step 6: Display formatted table of available images.
+    Write-LogMessage -Type INFO -Message "Available vLCM images:"
+    $selectionTable = $imageSelectionList | Select-Object $columnList
+    $tableOutput = $selectionTable | Format-Table -AutoSize | Out-String
+    Write-Host $tableOutput.TrimEnd()
+    Write-Host ""
+
+    # Step 7: Prompt user for selection.
+    $validSelection = $false
+    $selectedId = $null
+
+    while (-not $validSelection) {
+        Write-Host "Enter the ID of the image to select (1-$($imageSelectionList.Count)) or 'c' to cancel: " -NoNewline -ForegroundColor Yellow
+        $userInput = Read-Host
+
+        # Check for cancel option.
+        if ($userInput -eq 'c' -or $userInput -eq 'C') {
+            Write-Host ""
+            Write-LogMessage -Type WARNING -Message "User cancelled vLCM image selection."
+            Write-LogMessage -Type ERROR -Message "vLCM image selection cancelled. Cannot proceed with deployment."
+            throw "Deployment failed. Check logs for details."
+        }
+        elseif ($userInput -match '^\d+$') {
+            $selectedId = [int]$userInput
+
+            if ($selectedId -ge 1 -and $selectedId -le $imageSelectionList.Count) {
+                $selectedImage = $imageSelectionList | Where-Object { $_.ID -eq $selectedId }
+                Write-Host ""
+                Write-LogMessage -Type DEBUG -Message "Selected image: $($selectedImage.DisplayName) - ID: $($selectedImage.ImageId)"
+                # Return the image's ID.
+                return $selectedImage.ImageId
+            }
+            else {
+                Write-Host "Invalid selection. Please enter a number between 1 and $($imageSelectionList.Count), or 'c' to cancel." -ForegroundColor Red
+            }
+        }
+        else {
+            Write-Host "Invalid input. Please enter a number between 1 and $($imageSelectionList.Count), or 'c' to cancel." -ForegroundColor Red
+        }
+    }
+}
+
 Function Initialize-SimpleSupervisorDeploymentAtScale {
+
     <#
         .SYNOPSIS
         Initializes a complete VMware vSphere one-node deployment environment.
@@ -10162,16 +11131,14 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
         Initialize-SimpleSupervisorDeploymentAtScale -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
 
         This will start the complete one-node deployment process using the specified configuration files.
+
     #>
+
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]$InfrastructureJson,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
 
-        [Parameter(Mandatory = $true)]
-        [ValidateNotNullOrEmpty()]
-        [String]$SupervisorJson
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson
     )
 
     # Convert the input JSON file to a PowerShell object.
@@ -10215,10 +11182,10 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
         $argocdVmClass  = $inputData.common.argoCD.vmClass
         $argoCdDeploymentYamlPath = $inputData.common.argoCD.argoCdDeploymentYamlPath
 
-        # Check if the vcf-cli utility is available
+        # Check if the vcf-cli utility is available.
         Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
 
-        # Check if the kubectl utility is available
+        # Check if the kubectl utility is available.
         Test-CommandAvailability -Command $Script:KubectlCmd -Description "kubectl"
 
         # Check if the namespace is consistent in the argoCD deployment yaml file.
@@ -10255,7 +11222,8 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
         # Check if the vCenter version is supported.
         $result = Test-VCenterVersion -minimumVersion "9.0.0"
         if (-not $result.Success) {
-            # Connection cleanup handled by function-level finally block
+            # Connection cleanup handled by function-level finally block.
+
             throw "Deployment failed. Check logs for details."
         }
 
@@ -10265,22 +11233,29 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
             $diskCanonicalName = Find-Datastore -esxHostName $esxHost -datastoreName $datastoreName
         }
         catch {
-            Write-LogMessage -Type ERROR -Message "Something unexpected happening connecting to ESX host `"$esxHost`" or find datastore `"$datastoreName`" : $_"
-            # Set flag for cleanup
+            # Check if this is an authentication error (already logged in Connect-Vcenter).
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -notmatch "Authentication failed") {
+                Write-LogMessage -Type ERROR -Message "Something unexpected happening connecting to ESX host `"$esxHost`" or find datastore `"$datastoreName`" : $_"
+            }
+            # Set flag for cleanup.
             $esxConnectionFailed = $true
         }
         finally {
             # Always disconnect ESX (if connected), even on errors
             Disconnect-Vcenter -serverName $esxHost -serverType "ESX" -silence
-            # Exit after cleanup if connection failed
-            # Function-level finally block will also handle vCenter cleanup
+            # Exit after cleanup if connection failed.
+
+            # Function-level finally block will also handle vCenter cleanup.
+
             if ($esxConnectionFailed) {
                 throw "Deployment failed. Check logs for details."
             }
         }
 
-        # Create cluster with HAEnabled, DrsEnabled, AdmissionControlDisabled are by default
-        Add-Cluster -clusterName $clusterName -dataCenterName $dataCenterName
+        # Create cluster with HAEnabled, DrsEnabled, AdmissionControlDisabled are by default.
+
+        Add-Cluster -clusterName $clusterName -dataCenterName $datacenterName
         Add-HostToCluster -clusterName $clusterName -esxHostName $esxHost -esxCredential $esxCredential
 
         # Create the tag catalog category.
@@ -10298,7 +11273,8 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
         }
         catch {
             Write-LogMessage -Type ERROR -Message "Failed to get the ESX host `"$esxHost`" on vCenter `"$Script:VCenterName`": $_"
-            # Connection cleanup handled by function-level finally block
+            # Connection cleanup handled by function-level finally block.
+
             throw "Deployment failed. Check logs for details."
         }
         Set-NewDatastore -datastoreName $datastoreName -esxHost $esxHost -diskCanonicalName $diskCanonicalName -tagName $Script:SupervisorName
@@ -10320,7 +11296,8 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
 
         $storagePolicyId = Get-StoragePolicyId -storagePolicyName $storagePolicyName
 
-        # Get or create supervisor using the new function
+        # Get or create supervisor using the new function.
+
         $supervisorId = Get-OrCreateSupervisor -storagePolicyId $storagePolicyId -supervisorName $Script:SupervisorName -vCenterPasswordDecrypted $vCenterPasswordDecrypted -supervisorJson $SupervisorJson -clusterId $clusterId -clusterName $clusterName -insecureTls
 
         # Set environmental variables for password-less access for creating an ArgoCD instance.
@@ -10340,18 +11317,24 @@ Function Initialize-SimpleSupervisorDeploymentAtScale {
             Set-VCFContextCreate -contextName $contextName -endpoint $supervisorControlPlaneVmIp -ssoUsername $Script:VCenterUser -insecureTls
             # Create an argoCD Instance using the cluster name.
             Add-ArgoCDInstance -argoCdNamespace $argocdNameSpace -argoCdDeploymentYamlPath $argoCdDeploymentYamlPath -contextName $contextName -clusterId $clusterId -service $argoServiceName -insecureTls
+
+            Show-ArgoCDInstanceDetails -argoCdNamespace $argocdNameSpace
             } finally {
-                # Always cleanup environment variables, even on errors
+                # Always cleanup environment variables, even on errors.
+
                 Remove-Item env:\VCF_CLI_VSPHERE_PASSWORD -ErrorAction SilentlyContinue
                 Remove-Item env:\KUBECTL_VSPHERE_PASSWORD -ErrorAction SilentlyContinue
             }
     } finally {
         # Always cleanup vCenter connections on ANY exit (normal, error, or Ctrl+C)
-        # This ensures no leaked connections regardless of how the function exits
+        # This ensures no leaked connections regardless of how the function exits.
+
         Disconnect-Vcenter -allServers -silence
     }
 }
+
 Function ConvertFrom-Yaml {
+
     <#
     .SYNOPSIS
         Converts YAML content to PowerShell objects using native PowerShell parsing.
@@ -10390,48 +11373,62 @@ Function ConvertFrom-Yaml {
         This function is designed to work with the internal ConvertFrom-YamlInternal function
         which handles the actual parsing logic. The function uses PowerShell's pipeline
         capabilities for efficient processing of YAML content.
+
     #>
+
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [string]$YamlContent
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [ValidateNotNullOrEmpty()] [string]$YamlContent
+
     )
 
     begin {
         Write-LogMessage -Type DEBUG -Message "Entered ConvertFrom-Yaml function..."
 
-        # Initialize an ArrayList to collect YAML lines from pipeline input
-        # Using ArrayList for better performance when adding multiple items
+        # Initialize an ArrayList to collect YAML lines from pipeline input.
+
+        # Using ArrayList for better performance when adding multiple items.
+
         $yamlLines = New-Object System.Collections.ArrayList
     }
 
     process {
-        # Split the YAML content into individual lines for processing
+        # Split the YAML content into individual lines for processing.
+
         # This handles both Windows (\r\n) and Unix (\n) line endings
-        # Split on \n and then trim \r from each line to handle cross-platform line endings
+        # Split on \n and then trim \r from each line to handle cross-platform line endings.
+
         $lines = $YamlContent -split "`n"
 
-        # Add each line to our collection for later processing
+        # Add each line to our collection for later processing.
+
         # Out-Null suppresses the ArrayList.Add() return value (index)
         foreach ($line in $lines) {
-            # TrimEnd removes any trailing \r from Windows line endings
+            # TrimEnd removes any trailing \r from Windows line endings.
+
             $yamlLines.Add($line.TrimEnd("`r")) | Out-Null
         }
     }
 
     end {
         try {
-            # Call the internal YAML parsing function with collected lines
-            # This returns an array containing hashtables representing the YAML structure
+            # Call the internal YAML parsing function with collected lines.
+
+            # This returns an array containing hashtables representing the YAML structure.
+
             return ConvertFrom-YamlInternal -YamlLines $yamlLines
         }
         catch {
-            # Provide detailed error information for troubleshooting YAML parsing issues
+            # Provide detailed error information for troubleshooting YAML parsing issues.
+
             Write-Error "Failed to parse YAML: $($_.Exception.Message)"
             return Write-ErrorAndReturn -ErrorMessage "YAML parsing failed: $($_.Exception.Message)" -ErrorCode "ERR_YAML_PARSE"
         }
     }
 }
+
 Function ConvertTo-Yaml {
+
     <#
     .SYNOPSIS
         Converts a PowerShell object to YAML format.
@@ -10471,14 +11468,14 @@ Function ConvertTo-Yaml {
     .NOTES
         Author: PowerShell YAML Parser
         Version: 1.0.0
+
     #>
+
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
-        [object]$InputObject,
+        [Parameter()] [ValidateRange(1, [int]::MaxValue)] [int]$IndentSize = 2,
 
-        [Parameter()]
-        [int]$IndentSize = 2
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [object]$InputObject
     )
 
     begin {
@@ -10498,7 +11495,9 @@ Function ConvertTo-Yaml {
         return $yamlContent -join "`n"
     }
 }
+
 Function ConvertFrom-YamlInternal {
+
     <#
     .SYNOPSIS
         Internal function that parses YAML lines into a PowerShell array.
@@ -10533,9 +11532,11 @@ Function ConvertFrom-YamlInternal {
 
         Author: PowerShell YAML Parser
         Version: 1.0.0
+
     #>
+
     Param (
-        [string[]]$YamlLines
+        [ValidateNotNullOrEmpty()] [string[]]$YamlLines
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered ConvertFrom-YamlInternal function..."
@@ -10549,7 +11550,8 @@ Function ConvertFrom-YamlInternal {
         $lineNumber++
         $trimmedLine = $line.TrimEnd()
 
-        # Skip empty lines and comments
+        # Skip empty lines and comments.
+
         if ([string]::IsNullOrWhiteSpace($trimmedLine) -or $trimmedLine.StartsWith('#')) {
             continue
         }
@@ -10557,7 +11559,8 @@ Function ConvertFrom-YamlInternal {
         # Calculate indentation level
         $currentIndentLevel = ($line.Length - $line.TrimStart().Length) / 2
 
-        # Remove processed items from stack that are at same or higher level
+        # Remove processed items from stack that are at same or higher level.
+
         while ($stack.Count -gt 0) {
             $lastItem = $stack[$stack.Count - 1]
             if ($lastItem.IndentLevel -ge $currentIndentLevel) {
@@ -10571,14 +11574,16 @@ Function ConvertFrom-YamlInternal {
         $parsedItem = New-YamlLine -Line $trimmedLine -LineNumber $lineNumber
 
         if ($null -ne $parsedItem) {
-            # Set the current object based on stack
+            # Set the current object based on stack.
+
             if ($stack.Count -eq 0) {
                 $currentObject = $result
             } else {
                 $currentObject = $stack[$stack.Count - 1].Object
             }
 
-            # Handle different types of YAML structures
+            # Handle different types of YAML structures.
+
             if ($parsedItem.Type -eq "KeyValue") {
                 Add-ObjectProperty -Object $currentObject -Path $parsedItem.Key -Value $parsedItem.Value
             }
@@ -10613,7 +11618,9 @@ Function ConvertFrom-YamlInternal {
     $array[0] = $result
     return $array
 }
+
 Function New-YamlLine {
+
     <#
     .SYNOPSIS
         Parses a single YAML line and returns a structured object representing its content.
@@ -10654,10 +11661,13 @@ Function New-YamlLine {
 
         Author: PowerShell YAML Parser
         Version: 1.0.0
+
     #>
+
     Param (
         [string]$Line,
         [int]$LineNumber
+
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered New-YamlLine function..."
@@ -10678,9 +11688,11 @@ Function New-YamlLine {
         $key = $Line.Substring(0, $colonIndex).Trim()
         $value = $Line.Substring($colonIndex + 1).Trim()
 
-        # Check if this is an object or array start
+        # Check if this is an object or array start.
+
         if ([string]::IsNullOrWhiteSpace($value)) {
-            # Check next non-empty line to determine if it's an object or array
+            # Check next non-empty line to determine if it's an object or array.
+
             return @{
                 Type = "ObjectStart"
                 Key = $key
@@ -10706,7 +11718,9 @@ Function New-YamlLine {
     return $null
 }
 
+
 Function ConvertFrom-YamlValue {
+
     <#
     .SYNOPSIS
         Converts a YAML value string to its appropriate PowerShell data type.
@@ -10754,7 +11768,9 @@ Function ConvertFrom-YamlValue {
 
         Author: PowerShell YAML Parser
         Version: 1.0.0
+
     #>
+
     Param (
         [string]$Value
     )
@@ -10796,7 +11812,9 @@ Function ConvertFrom-YamlValue {
     return $Value
 }
 
+
 Function Add-ObjectProperty {
+
     <#
     .SYNOPSIS
         Adds a property to a hashtable object with the specified key and value.
@@ -10840,10 +11858,13 @@ Function Add-ObjectProperty {
 
         Author: PowerShell YAML Parser
         Version: 1.0.0
+
     #>
+
     Param (
         [hashtable]$Object,
         [string]$Path,
+
         [object]$Value
     )
 
@@ -10855,7 +11876,9 @@ Function Add-ObjectProperty {
 
     $Object[$Path] = $Value
 }
+
 Function ConvertTo-YamlInternal {
+
     <#
     .SYNOPSIS
         Internal helper function that recursively converts PowerShell objects to YAML format with proper indentation.
@@ -10895,7 +11918,8 @@ Function ConvertTo-YamlInternal {
         This parameter starts at 0 for root-level objects and increments for each nesting level.
 
     .EXAMPLE
-        # This function is typically called internally by ConvertTo-Yaml
+        # This function is typically called internally by ConvertTo-Yaml.
+
         $hashtable = @{
             name = "John Doe"
             age = 30
@@ -10918,7 +11942,8 @@ Function ConvertTo-YamlInternal {
           city: New York
 
     .EXAMPLE
-        # Processing an array at indentation level 1
+        # Processing an array at indentation level 1.
+
         $array = @("item1", "item2", "item3")
         $yamlLines = ConvertTo-YamlInternal -InputObject $array -IndentSize 2 -CurrentIndent 1
 
@@ -10944,11 +11969,14 @@ Function ConvertTo-YamlInternal {
         Author: PowerShell YAML Parser
         Version: 1.0.0
         Dependencies: ConvertTo-YamlValue function for primitive type conversion
+
     #>
+
     Param (
-        [object]$InputObject,
+        [int]$CurrentIndent,
         [int]$IndentSize,
-        [int]$CurrentIndent
+
+        [object]$InputObject
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered ConvertTo-YamlInternal function..."
@@ -10990,7 +12018,9 @@ Function ConvertTo-YamlInternal {
 
     return $yamlLines
 }
+
 Function ConvertTo-YamlValue {
+
     <#
     .SYNOPSIS
         Converts a PowerShell object to its YAML string representation.
@@ -11027,7 +12057,8 @@ Function ConvertTo-YamlValue {
 
     .EXAMPLE
         $result = ConvertTo-YamlValue -Value @("item1", "item2") -IndentSize 2 -CurrentIndent 0
-        # Returns: Multi-line YAML array representation
+        # Returns: Multi-line YAML array representation.
+
 
     .OUTPUTS
         System.String
@@ -11036,11 +12067,14 @@ Function ConvertTo-YamlValue {
     .NOTES
         This is an internal function used by ConvertTo-YamlInternal. It should not be
         called directly in most scenarios.
+
     #>
+
     Param (
-        [object]$Value,
+        [int]$CurrentIndent,
         [int]$IndentSize,
-        [int]$CurrentIndent
+
+        [object]$Value
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered ConvertTo-YamlValue function..."
@@ -11052,7 +12086,8 @@ Function ConvertTo-YamlValue {
         return $Value.ToString().ToLower()
     }
     elseif ($Value -is [string]) {
-        # Escape special characters and add quotes if necessary
+        # Escape special characters and add quotes if necessary.
+
         if ($Value.Contains(':') -or $Value.Contains('"') -or $Value.Contains("'") -or
             $Value.StartsWith(' ') -or $Value.EndsWith(' ') -or
             $Value -match '^[0-9]' -or $Value -match '^(true|false|null)$') {
@@ -11080,7 +12115,9 @@ Function ConvertTo-YamlValue {
     }
 }
 
+
 Function Test-PortGroupNameUniqueness {
+
     <#
         .SYNOPSIS
         Validates that all portgroup names are unique within input.json.
@@ -11092,12 +12129,12 @@ Function Test-PortGroupNameUniqueness {
         and provides detailed error reporting if any duplicates are found, including
         the VLAN IDs associated with conflicting portgroups.
 
-        .PARAMETER inputData
+        .PARAMETER InputData
         The parsed input.json data object containing portgroup configurations.
 
         .EXAMPLE
         $inputData = ConvertFrom-JsonSafely -JsonFilePath "input.json"
-        $result = Test-PortGroupNameUniqueness -inputData $inputData
+        $result = Test-PortGroupNameUniqueness -InputData $inputData
         if (-not $result.IsValid) {
             Write-Error "Portgroup name validation failed: $($result.ErrorMessage)"
         }
@@ -11134,7 +12171,8 @@ Function Test-PortGroupNameUniqueness {
     }
 
     try {
-        # Collect portgroup information from input.json
+        # Collect portgroup information from input.json.
+
         $portGroupDetails = @()
         if ($inputData.common.virtualDistributedSwitch.portGroups) {
             foreach ($portGroup in $inputData.common.virtualDistributedSwitch.portGroups) {
@@ -11148,7 +12186,8 @@ Function Test-PortGroupNameUniqueness {
             }
         }
 
-        # Check for duplicates within portgroup names
+        # Check for duplicates within portgroup names.
+
         $groupedNames = $portGroupDetails | Group-Object -Property Name
         foreach ($group in $groupedNames) {
             if ($group.Count -gt 1) {
@@ -11185,7 +12224,9 @@ Function Test-PortGroupNameUniqueness {
 # Exported Functions
 # =============================================================================
 
+
 Function Start-SimpleSupervisorDeploymentAtScale {
+
     <#
     .SYNOPSIS
         Automates the end-to-end deployment of a simple vSphere Supervisor at scale in VMware Cloud Foundation 9.x.
@@ -11233,40 +12274,36 @@ Function Start-SimpleSupervisorDeploymentAtScale {
         Start-SimpleSupervisorDeploymentAtScale -Version
 
         Displays the module version and exits.
+
     #>
+
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $false)]
-        [ValidateNotNullOrEmpty()]
-        [String]$InfrastructureJson = "infrastructure.json",
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson = "infrastructure.json",
 
-        [Parameter(Mandatory = $false)]
-        [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")]
-        [String]$LogLevel = "INFO",
-
-        [Parameter(Mandatory = $false)]
-        [ValidateNotNullOrEmpty()]
-        [String]$SupervisorJson = "supervisor.json",
-
-        [Parameter(Mandatory = $false)]
-        [Switch]$Version
+        [Parameter(Mandatory = $false)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO",
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson = "supervisor.json",
+        [Parameter(Mandatory = $false)] [Switch]$Version
     )
 
     # Handle version flag
     if ($Version) {
         $versionToDisplay = $null
 
-        # Try to get version from loaded module first
+        # Try to get version from loaded module first.
+
         $loadedModule = Get-Module -Name "SimpleSupervisorDeploymentAtScale"
         if ($loadedModule -and $loadedModule.Version -and $loadedModule.Version -ne [version]"0.0") {
             $versionToDisplay = $loadedModule.Version.ToString()
         } else {
-            # Try to get version from manifest file
+            # Try to get version from manifest file.
+
             $modulePath = $null
             if ($PSScriptRoot) {
                 $modulePath = $PSScriptRoot
             } else {
-                # Try to find module path from loaded module
+                # Try to find module path from loaded module.
+
                 $moduleInfo = Get-Module -Name "SimpleSupervisorDeploymentAtScale" -ListAvailable | Select-Object -First 1
                 if ($moduleInfo -and $moduleInfo.ModuleBase) {
                     $modulePath = $moduleInfo.ModuleBase
@@ -11287,7 +12324,8 @@ Function Start-SimpleSupervisorDeploymentAtScale {
                 }
             }
 
-            # Fall back to script variable if we couldn't get version from manifest
+            # Fall back to script variable if we couldn't get version from manifest.
+
             if (-not $versionToDisplay) {
                 $versionToDisplay = $Script:ModuleVersion
             }
@@ -11297,7 +12335,8 @@ Function Start-SimpleSupervisorDeploymentAtScale {
         return
     }
 
-    # Set the progress preference to continue
+    # Set the progress preference to continue.
+
     $Global:ProgressPreference = 'Continue'
 
     # Initialize configured log level from parameter (normalize to uppercase).
@@ -11315,10 +12354,12 @@ Function Start-SimpleSupervisorDeploymentAtScale {
     # Perform deeper validation of input.json and supervisor.json configuration files (pattern matching of values).
     Test-JsonDeeperValidation -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
 
-    # Load JSON data for portgroup name uniqueness validation
+    # Load JSON data for portgroup name uniqueness validation.
+
     $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
 
-    # Validate portgroup name uniqueness within input.json
+    # Validate portgroup name uniqueness within input.json.
+
     $portGroupNameValidationResult = Test-PortGroupNameUniqueness -inputData $inputData
     if (-not $portGroupNameValidationResult.IsValid) {
         Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Portgroup name uniqueness validation failed: $($portGroupNameValidationResult.ErrorMessage)"
@@ -11331,7 +12372,9 @@ Function Start-SimpleSupervisorDeploymentAtScale {
     # Initialize the one node deployment.
     Initialize-SimpleSupervisorDeploymentAtScale -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
 }
+
 Function Show-SimpleSupervisorDeploymentAtScaleVersion {
+
     <#
     .SYNOPSIS
         Displays the version information for the SimpleSupervisorDeploymentAtScale module.
@@ -11343,13 +12386,18 @@ Function Show-SimpleSupervisorDeploymentAtScaleVersion {
         Show-SimpleSupervisorDeploymentAtScaleVersion
 
         Displays: "SimpleSupervisorDeploymentAtScale version: 1.0.0.2"
+
     #>
+
     [CmdletBinding()]
     param()
 
+
     Write-Host "SimpleSupervisorDeploymentAtScale version: $Script:ModuleVersion"
 }
+
 Function Copy-SimpleSupervisorTemplates {
+
     <#
     .SYNOPSIS
         Copies supervisor deployment template files to a specified location.
@@ -11399,7 +12447,7 @@ Function Copy-SimpleSupervisorTemplates {
 
     [CmdletBinding(SupportsShouldProcess = $true)]
     Param (
-        [Parameter(Mandatory = $false)] [String]$DestinationPath = $PWD
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$DestinationPath = $PWD
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Copy-SimpleSupervisorTemplates function..."
@@ -11416,7 +12464,8 @@ Function Copy-SimpleSupervisorTemplates {
         throw "Deployment failed. Check logs for details."
     }
 
-    # Validate that the destination path is valid using Test-Path
+    # Validate that the destination path is valid using Test-Path.
+
     # Check if parent directory exists (if path has a parent) or if the path itself is valid
     $parentPath = Split-Path -Path $DestinationPath -Parent -ErrorAction SilentlyContinue
     if ($parentPath -and $parentPath -ne $DestinationPath) {
@@ -11426,10 +12475,12 @@ Function Copy-SimpleSupervisorTemplates {
         }
     }
 
-    # Define the four required template files
+    # Define the four required template files.
+
     $requiredTemplateFiles = @("infrastructure.json", "supervisor.json", "argocd-deployment.yml", "1.0.1-24896502.yml")
 
-    # Determine the module's template directory
+    # Determine the module's template directory.
+
     $moduleBase = $null
 
     # Primary: Use module's ModuleBase if available (most reliable)
@@ -11438,18 +12489,22 @@ Function Copy-SimpleSupervisorTemplates {
     } elseif ($PSScriptRoot) {
         # Fallback 1: Use PSScriptRoot (when module is loaded)
         $moduleBase = $PSScriptRoot
-        # Check if Templates directory exists in current path
+        # Check if Templates directory exists in current path.
+
         $templatesCheck = Join-Path $moduleBase "Templates"
         if (-not (Test-Path $templatesCheck)) {
-            # If not found, check if we're in root and Templates is in SimpleSupervisorDeploymentAtScale subdirectory
-            # This handles development/testing scenarios
+            # If not found, check if we're in root and Templates is in SimpleSupervisorDeploymentAtScale subdirectory.
+
+            # This handles development/testing scenarios.
+
             $subDirCheck = Join-Path $moduleBase (Join-Path "SimpleSupervisorDeploymentAtScale" "Templates")
             if (Test-Path $subDirCheck) {
                 $moduleBase = Join-Path $moduleBase "SimpleSupervisorDeploymentAtScale"
             }
         }
     } else {
-        # Fallback 2: Query module system
+        # Fallback 2: Query module system.
+
         $moduleInfo = Get-Module -Name "SimpleSupervisorDeploymentAtScale" -ListAvailable | Select-Object -First 1
         if ($moduleInfo -and $moduleInfo.ModuleBase) {
             $moduleBase = $moduleInfo.ModuleBase
@@ -11468,7 +12523,8 @@ Function Copy-SimpleSupervisorTemplates {
         throw "Deployment failed. Check logs for details."
     }
 
-    # Validate that all required template files exist before attempting to copy
+    # Validate that all required template files exist before attempting to copy.
+
     $missingFiles = @()
     foreach ($fileName in $requiredTemplateFiles) {
         $sourceFile = Join-Path $templatesPath $fileName
@@ -11482,7 +12538,8 @@ Function Copy-SimpleSupervisorTemplates {
         throw "Deployment failed. Check logs for details."
     }
 
-    # Ensure destination directory exists
+    # Ensure destination directory exists.
+
     if (-not (Test-Path $DestinationPath)) {
         if ($PSCmdlet.ShouldProcess($DestinationPath, "Create directory")) {
             try {
@@ -11502,9 +12559,11 @@ Function Copy-SimpleSupervisorTemplates {
         $sourceFile = Join-Path $templatesPath $fileName
         $destFile = Join-Path $DestinationPath $fileName
 
-        # Check if destination file already exists and prompt for confirmation
+        # Check if destination file already exists and prompt for confirmation.
+
         if (Test-Path $destFile) {
-            # Skip prompt if WhatIf is enabled
+            # Skip prompt if WhatIf is enabled.
+
             if ($WhatIfPreference) {
                 Write-LogMessage -Type INFO -Message "Would overwrite existing file: $destFile"
             } elseif ($PSCmdlet.ShouldProcess($destFile, "Overwrite existing file")) {
@@ -11548,7 +12607,8 @@ Function Copy-SimpleSupervisorTemplates {
         }
     }
 
-    # Build and display summary message
+    # Build and display summary message.
+
     if ($WhatIfPreference) {
         $summaryMessage = "What if: Performing the operation 'Copy template files' on target '$DestinationPath'. "
         $summaryMessage += "Would copy $copiedCount file(s)"
@@ -11571,9 +12631,12 @@ Function Copy-SimpleSupervisorTemplates {
     }
 }
 
+
 Function Format-ConfigurationTable {
+
     <#
         .SYNOPSIS
+
         Formats configuration data as a table.
 
         .DESCRIPTION
@@ -11581,11 +12644,13 @@ Function Format-ConfigurationTable {
 
         .PARAMETER InputObject
         Array of PSCustomObject configuration items to format.
+
     #>
+
     [CmdletBinding()]
+
     Param(
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)]
-        [PSCustomObject[]]$InputObject
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [PSCustomObject[]]$InputObject
     )
 
     Begin {
@@ -11594,7 +12659,8 @@ Function Format-ConfigurationTable {
     }
 
     Process {
-        # Handle both single objects and arrays
+        # Handle both single objects and arrays.
+
         if ($null -ne $InputObject) {
             if ($InputObject -is [Array]) {
                 foreach ($item in $InputObject) {
@@ -11623,13 +12689,17 @@ Function Format-ConfigurationTable {
             return
         }
 
-        # Simply format as table
+        # Simply format as table.
+
         $allItems | Format-Table -Property 'Element Name', 'Default Value May Be Used?', 'Created by Script?', 'Notes' -AutoSize -Wrap
     }
 }
 
+
 Function Show-InfrastructureJsonConfigurationHelp {
+
     <#
+
         .SYNOPSIS
         Displays a reference table for configuring infrastructure.json file.
 
@@ -11683,10 +12753,11 @@ Function Show-InfrastructureJsonConfigurationHelp {
         .OUTPUTS
         None. This function displays formatted output to the console or opens a grid view window.
     #>
+
     [CmdletBinding()]
     Param(
-        [Parameter()] [ValidateSet('Table', 'List', 'GridView', 'Auto')] [string]$Format = 'Auto',
         [Parameter()] [string]$Filter,
+        [Parameter()] [ValidateSet('Table', 'List', 'GridView', 'Auto')] [string]$format = 'Auto',
         [Parameter()] [int]$WidthThreshold = 120
     )
 
@@ -11825,7 +12896,8 @@ Function Show-InfrastructureJsonConfigurationHelp {
         }
     )
 
-    # Apply filter if specified
+    # Apply filter if specified.
+
     if ($Filter) {
         $filterPattern = "*$Filter*"
         $infrastructureConfig = $infrastructureConfig | Where-Object {
@@ -11854,20 +12926,23 @@ Function Show-InfrastructureJsonConfigurationHelp {
     Write-Host ("=" * $lineWidth) -ForegroundColor Cyan
     Write-Host "`n"
 
-    # Determine format if Auto is selected
-    if ($Format -eq 'Auto') {
+    # Determine format if Auto is selected.
+
+    if ($format -eq 'Auto') {
         # Auto-select: List for narrow screens (< WidthThreshold chars), Table for wide screens
         if ($terminalWidth -lt $WidthThreshold) {
-            $Format = 'List'
+            $format = 'List'
         } else {
-            $Format = 'Table'
+            $format = 'Table'
         }
     }
 
-    # Display based on selected format
-    switch ($Format) {
+    # Display based on selected format.
+
+    switch ($format) {
         'GridView' {
-            # Check if Out-GridView cmdlet is available
+            # Check if Out-GridView cmdlet is available.
+
             $gridViewAvailable = $null -ne (Get-Command -Name 'Out-GridView' -ErrorAction SilentlyContinue)
             if ($gridViewAvailable) {
                 $infrastructureConfig | Out-GridView -Title "Infrastructure.json Configuration Reference"
@@ -11894,6 +12969,7 @@ Function Show-InfrastructureJsonConfigurationHelp {
 }
 
 Function Show-SupervisorJsonConfigurationHelp {
+
     <#
         .SYNOPSIS
         Displays a reference table for configuring supervisor.json file.
@@ -11947,11 +13023,14 @@ Function Show-SupervisorJsonConfigurationHelp {
 
         .OUTPUTS
         None. This function displays formatted output to the console or opens a grid view window.
+
+
     #>
+
     [CmdletBinding()]
     Param(
-        [Parameter()] [ValidateSet('Table', 'List', 'GridView', 'Auto')] [string]$Format = 'Auto',
         [Parameter()] [string]$Filter,
+        [Parameter()] [ValidateSet('Table', 'List', 'GridView', 'Auto')] [string]$format = 'Auto',
         [Parameter()] [int]$WidthThreshold = 120
     )
 
@@ -12204,7 +13283,8 @@ Function Show-SupervisorJsonConfigurationHelp {
         }
     )
 
-    # Apply filter if specified
+    # Apply filter if specified.
+
     if ($Filter) {
         $filterPattern = "*$Filter*"
         $supervisorConfig = $supervisorConfig | Where-Object {
@@ -12233,20 +13313,23 @@ Function Show-SupervisorJsonConfigurationHelp {
     Write-Host ("=" * $lineWidth) -ForegroundColor Cyan
     Write-Host "`n"
 
-    # Determine format if Auto is selected
-    if ($Format -eq 'Auto') {
+    # Determine format if Auto is selected.
+
+    if ($format -eq 'Auto') {
         # Auto-select: List for narrow screens (< WidthThreshold chars), Table for wide screens
         if ($terminalWidth -lt $WidthThreshold) {
-            $Format = 'List'
+            $format = 'List'
         } else {
-            $Format = 'Table'
+            $format = 'Table'
         }
     }
 
-    # Display based on selected format
-    switch ($Format) {
+    # Display based on selected format.
+
+    switch ($format) {
         'GridView' {
-            # Check if Out-GridView cmdlet is available
+            # Check if Out-GridView cmdlet is available.
+
             $gridViewAvailable = $null -ne (Get-Command -Name 'Out-GridView' -ErrorAction SilentlyContinue)
             if ($gridViewAvailable) {
                 $supervisorConfig | Out-GridView -Title "Supervisor.json Configuration Reference"
