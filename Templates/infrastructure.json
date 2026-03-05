@@ -1,46 +1,112 @@
 {
-    "common": {
-        "vCenterName": "vc01.example.com",
-        "vCenterUser": "administrator@vsphere.local",
-        "esxHost": "esx01.example.com",
-        "esxUser": "root",
-        "datacenterName": "dc01",
-        "clusterName": "cl02",
-        "supervisorName": "supervisor-01",
-        "argoCD": {
-            "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.0.1-24896502.yml",
-            "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml",
-            "contextName": "vcf-context-01",
-            "nameSpace": "argocd",
-            "vmClass": [
-                "best-effort-2xlarge",
-                "best-effort-4xlarge",
-                "best-effort-8xlarge"
-            ]
-        },
-        "datastore": {
-            "datastoreName": "datastore-01"
-        },
-        "storagePolicy": {
-            "storagePolicyTagCatalog": "VMFS-Storage-TagCatalog",
-            "storagePolicyName": "VMFS-Storage-Policy",
-            "storagePolicyType": "VMFS",
-            "storagePolicyRule": "Fully initialized"
-        },
-        "virtualDistributedSwitch": {
-            "vdsName": "Prod-VDS2",
-            "vdsVersion": "9.0.0",
-            "numUplinks": 2,
-            "nicList": [
-                {"name": "vmnic1"}
-            ],
-            "portGroups": [
-                {"name": "tkgmanagement", "vlanId": "1000"},
-                {"name": "flbmgmtnetwork", "vlanId": "1001"},
-                {"name": "workloadnetwork", "vlanId": "1002"},
-                {"name": "virtualsrvnetwork", "vlanId": "1003"}
-            ]
-        }
+  "common": {
+    "vCenterName": "vc01.example.com",
+    "vCenterUser": "administrator@vsphere.local",
+    "vSanWitnessVmName": "vsanwitness.example.com",
+    "vLcmImageName": "autogen-software-spec-1",
+    "datacenterName": "dc01",
+    "contextName": "vcf-context-01",
+    "nicList": [
+      { "name": "vmnic0" },
+      { "name": "vmnic1" }
+    ]
+  },
+  "clusters": [
+    {
+      "edgeSite": "site1",
+      "esxHosts": [
+        "esx01.example.com",
+        "esx02.example.com"
+      ],
+      "supervisorServices": {
+        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
+        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml"
+      },
+      "storagePolicy": {
+        "storageType": "vSAN-OSA"
+      },
+      "networking": {
+        "networkSegments": [
+          {
+            "name": "primaryworkloadnetwork",
+            "vlanId": "300",
+            "gateway": "10.30.10.1/24"
+          },
+          {
+            "name": "flbmanagementnetwork",
+            "vlanId": "301",
+            "gateway": "10.30.11.1/24"
+          },
+          {
+            "name": "virtualservernetwork",
+            "vlanId": "302",
+            "gateway": "10.30.12.1/24"
+          },
+          {
+            "name": "tkgsmgmtnetwork",
+            "vlanId": "303",
+            "gateway": "10.30.13.1/24"
+          }
+        ],
+        "networkingVmKernelInterfaces": [
+          {
+            "service": "vMotion",
+            "vlanId": "300",
+            "netmask": "255.255.255.0",
+            "ipList": ["10.30.10.12", "10.30.10.13"]
+          },
+          {
+            "service": "vSAN",
+            "vlanId": "301",
+            "netmask": "255.255.255.0",
+            "ipList": ["10.30.11.12", "10.30.11.13"]
+          },
+          {
+            "service": "vSAN Witness",
+            "vlanId": "302",
+            "netmask": "255.255.255.0",
+            "gateway": "10.30.12.1",
+            "ipList": ["10.30.12.12", "10.30.12.13"]
+          }
+        ]
+      }
+    },
+    {
+      "edgeSite": "site2",
+      "esxHosts": [
+        "esx03.example.com"
+      ],
+      "supervisorServices": {
+        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
+        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml"
+      },
+      "storagePolicy": {
+        "storageType": "VMFS"
+      },
+      "networking": {
+        "networkSegments": [
+          {
+            "name": "primaryworkloadnetwork-2",
+            "vlanId": "400",
+            "gateway": "10.40.10.1/24"
+          },
+          {
+            "name": "flbmanagementnetwork-2",
+            "vlanId": "401",
+            "gateway": "10.40.11.1/24"
+          },
+          {
+            "name": "virtualservernetwork-2",
+            "vlanId": "402",
+            "gateway": "10.40.12.1/24"
+          },
+          {
+            "name": "tkgsmgmtnetwork-2",
+            "vlanId": "403",
+            "gateway": "10.40.13.1/24"
+          }
+        ]
+      }
     }
+  ]
 }
-

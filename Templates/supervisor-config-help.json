@@ -1,0 +1,147 @@
+[
+  {
+    "Key": "commonSupervisorSpec.controlPlaneVMCount",
+    "Required": "No",
+    "Notes": "1 or 3."
+  },
+  {
+    "Key": "commonSupervisorSpec.controlPlaneSize",
+    "Required": "No",
+    "Notes": "TINY, SMALL, MEDIUM, or LARGE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbAvailability",
+    "Required": "No",
+    "Notes": "SINGLE_NODE or ACTIVE_PASSIVE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbSize",
+    "Required": "No",
+    "Notes": "SMALL, MEDIUM, LARGE, or X-LARGE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbNetworkType",
+    "Required": "No",
+    "Notes": "Use DVPG."
+  },
+  {
+    "Key": "commonSupervisorSpec.networkSearchDomains",
+    "Required": "Yes",
+    "Notes": "Array of DNS search domains."
+  },
+  {
+    "Key": "commonSupervisorSpec.networkNtpServers",
+    "Required": "Yes",
+    "Notes": "Array of NTP servers."
+  },
+  {
+    "Key": "commonSupervisorSpec.dnsServers",
+    "Required": "Yes",
+    "Notes": "Array of DNS servers."
+  },
+  {
+    "Key": "tkgsSiteSpec",
+    "Required": "Yes",
+    "Notes": "Array of site-specific supervisor configurations. Each entry is linked to infrastructure.json clusters[] via edgeSite."
+  },
+  {
+    "Key": "tkgsSiteSpec[].edgeSite",
+    "Required": "Yes",
+    "Notes": "Must match infrastructure.json clusters[].edgeSite."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbName",
+    "Required": "No",
+    "Notes": "FLB name for this site."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipStartIP",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB virtual IP range."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipIPCount",
+    "Required": "Yes",
+    "Notes": "Count of VIPs from flbVipStartIP."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName",
+    "Required": "No",
+    "Notes": "Must match infra networkSegments[].name; gateway from infra."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB management network."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount",
+    "Required": "Yes",
+    "Notes": "IP count for FLB management."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkGateway",
+    "Required": "No",
+    "Notes": "Override gateway (otherwise from infra by name)."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName",
+    "Required": "No",
+    "Notes": "Match infra segment name; gateway from infra."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB virtual server network."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount",
+    "Required": "No",
+    "Notes": "IP count; default may be used."
+  },
+  {
+    "Key": "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkGateway",
+    "Required": "No",
+    "Notes": "Override gateway (otherwise from infra by name)."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkName",
+    "Required": "No",
+    "Notes": "Must match infra segment name."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for VKS management network."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount",
+    "Required": "Yes",
+    "Notes": "IP count for VKS management."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName",
+    "Required": "No",
+    "Notes": "Must match infra segment name."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for workload VIP range."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount",
+    "Required": "Yes",
+    "Notes": "IP count for workload VIP range."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp",
+    "Required": "Yes",
+    "Notes": "Start IP for workload service range."
+  },
+  {
+    "Key": "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount",
+    "Required": "No",
+    "Notes": "Count (e.g. 256 or 512); must occupy full CIDR."
+  }
+]

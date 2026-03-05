@@ -1,80 +1,82 @@
 {
-    "supervisorSpec": {
+    "commonSupervisorSpec": {
       "controlPlaneVMCount": 1,
-      "controlPlaneSize": "TINY"
+      "controlPlaneSize": "SMALL",
+      "flbAvailability": "SINGLE_NODE",
+      "flbSize": "MEDIUM",
+      "flbNetworkType": "DVPG",
+      "networkSearchDomains": [
+        "vcfedge.demo"
+      ],
+      "networkNtpServers": [
+        "10.34.14.20"
+      ],
+      "dnsServers": [
+        "10.191.174.20"
+      ]
     },
-    "tkgsComponentSpec": {
-      "foundationLoadBalancerComponents": {
-        "flbName": "flb-sn1",
-        "flbSize": "SMALL",
-        "flbAvailability": "SINGLE_NODE",
-        "flbVipStartIP": "10.11.20.201",
-        "flbVipIPCount": 50,
-        "flbProvider": "VSPHERE_FOUNDATION",
-        "flbDnsServers": [
-          "10.11.10.4",
-          "10.11.10.5"
-        ],
-        "flbNtpServers": [
-          "ntp1.example.com"
-        ],
-        "flbSearchDomains": [
-          "example.com"
-        ],
-        "flbManagementNetwork": {
-          "flbNetworkIpAssignmentMode": "STATIC",
-          "flbNetworkName": "flbmgmtnetwork",
-          "flbNetworkType": "DVPG",
-          "flbNetworkIpAddressStartingIp": "10.11.11.101",
-          "flbNetworkIpAddressCount": 40,
-          "flbNetworkGateway": "10.11.11.1/24"
+    "tkgsSiteSpec": [
+      {
+        "edgeSite": "site1",
+        "foundationLoadBalancerComponents": {
+          "flbName": "flb-test-sn1",
+          "flbVipStartIP": "10.30.12.201",
+          "flbVipIPCount": 50,
+          "flbManagementNetwork": {
+            "flbNetworkName": "flbmanagementnetwork",
+            "flbNetworkIpAddressStartingIp": "10.30.11.101",
+            "flbNetworkIpAddressCount": 40
+          },
+          "flbVirtualServerNetwork": {
+            "flbNetworkName": "virtualservernetwork",
+            "flbNetworkIpAddressStartingIp": "10.30.12.141",
+            "flbNetworkIpAddressCount": 60
+          }
         },
-        "flbVirtualServerNetwork": {
-          "flbNetworkIpAssignmentMode": "STATIC",
-          "flbNetworkName": "virtualsrvnetwork",
-          "flbNetworkType": "DVPG",
-          "flbNetworkIpAddressStartingIp": "10.11.20.141",
-          "flbNetworkIpAddressCount": 60,
-          "flbNetworkGateway": "10.11.20.1/24"
+        "tkgsMgmtNetworkSpec": {
+          "tkgsMgmtNetworkName": "tkgsmgmtnetwork",
+          "tkgsMgmtNetworkStartingIp": "10.30.13.100",
+          "tkgsMgmtNetworkIPCount": 7
+        },
+        "tkgsPrimaryWorkloadNetwork": {
+          "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork",
+          "tkgsPrimaryWorkloadNetworkStartingIp": "10.30.10.101",
+          "tkgsPrimaryWorkloadNetworkIPCount": 100,
+          "tkgsWorkloadServiceStartIp": "10.97.0.0",
+          "tkgsWorkloadServiceCount": 512
         }
       },
-      "tkgsMgmtNetworkSpec": {
-        "tkgsMgmtIpAssignmentMode": "STATIC",
-        "tkgsMgmtNetworkName": "tkgmanagement",
-        "tkgsMgmtNetworkGatewayCidr": "10.11.10.1/24",
-        "tkgsMgmtNetworkStartingIp": "10.11.10.100",
-        "tkgsMgmtNetworkIPCount": 7,
-        "tkgsMgmtNetworkDnsServers": [
-          "10.11.10.4",
-          "10.11.10.5"
-        ],
-        "tkgsMgmtNetworkSearchDomains": [
-          "example.com"
-        ],
-        "tkgsMgmtNetworkNtpServers": [
-          "ntp0.example.com",
-          "ntp1.example.com"
-        ]
-      },
-      "tkgsPrimaryWorkloadNetwork": {
-        "tkgsPrimaryWorkloadIpAssignmentMode": "STATIC",
-        "tkgsPrimaryWorkloadNetworkName": "workloadnetwork",
-        "tkgsPrimaryWorkloadNetworkGatewayCidr": "10.11.16.1/24",
-        "tkgsPrimaryWorkloadNetworkStartingIp": "10.11.16.101",
-        "tkgsPrimaryWorkloadNetworkIPCount": 100,
-        "tkgsPrimaryWorkloadNetworkSearchDomains": [
-          "example.com"
-        ],
-        "tkgsWorkloadDnsServers": [
-          "10.11.10.4",
-          "10.11.10.5"
-        ],
-        "tkgsWorkloadNtpServers": [
-          "ntp0.example.com"
-        ],
-        "tkgsWorkloadServiceStartIp": "10.97.0.0",
-        "tkgsWorkloadServiceCount": 512
+      {
+        "edgeSite": "site2",
+        "foundationLoadBalancerComponents": {
+          "flbName": "flb-test-sn2",
+          "flbVipStartIP": "10.40.12.201",
+          "flbVipIPCount": 50,
+          "flbManagementNetwork": {
+            "flbNetworkName": "flbmanagementnetwork-2",
+            "flbNetworkIpAddressStartingIp": "10.40.11.101",
+            "flbNetworkIpAddressCount": 40,
+            "flbNetworkGateway": "10.40.11.1/24"
+          },
+          "flbVirtualServerNetwork": {
+            "flbNetworkName": "virtualservernetwork-2",
+            "flbNetworkIpAddressStartingIp": "10.40.12.141",
+            "flbNetworkIpAddressCount": 60,
+            "flbNetworkGateway": "10.40.12.1/24"
+          }
+        },
+        "tkgsMgmtNetworkSpec": {
+          "tkgsMgmtNetworkName": "tkgsmgmtnetwork-2",
+          "tkgsMgmtNetworkStartingIp": "10.40.13.100",
+          "tkgsMgmtNetworkIPCount": 7
+        },
+        "tkgsPrimaryWorkloadNetwork": {
+          "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork-2",
+          "tkgsPrimaryWorkloadNetworkStartingIp": "10.40.10.101",
+          "tkgsPrimaryWorkloadNetworkIPCount": 100,
+          "tkgsWorkloadServiceStartIp": "10.97.0.0",
+          "tkgsWorkloadServiceCount": 512
+        }
       }
-    }
+    ]
   }
-

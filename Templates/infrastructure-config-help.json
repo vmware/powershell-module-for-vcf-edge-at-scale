@@ -1,0 +1,177 @@
+[
+  {
+    "Key": "common.vCenterName",
+    "Required": "Yes",
+    "Notes": "vCenter FQDN, 9.0 or later. Script needs HTTPS access."
+  },
+  {
+    "Key": "common.vCenterUser",
+    "Required": "Yes",
+    "Notes": "vCenter login (e.g. administrator@vsphere.local); SSO supported."
+  },
+  {
+    "Key": "common.vSanWitnessVmName",
+    "Required": "No",
+    "Notes": "vSAN witness VM name or FQDN; used by vSAN-OSA/ESA."
+  },
+  {
+    "Key": "common.esxUser",
+    "Required": "No",
+    "Notes": "ESX login. Omit to use default root."
+  },
+  {
+    "Key": "common.esxUniquePasswordPerHost",
+    "Required": "No",
+    "Notes": "Boolean. Default false when not defined (one password for all hosts). true = prompt per host."
+  },
+  {
+    "Key": "common.nonInteractivePassword",
+    "Required": "No",
+    "Notes": "Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars."
+  },
+  {
+    "Key": "common.labEnvironment",
+    "Required": "No",
+    "Notes": "Boolean. When true, some vSAN health checks are relaxed. With -Force, bypasses cleanup confirmation."
+  },
+  {
+    "Key": "common.datacenterName",
+    "Required": "Yes",
+    "Notes": "Existing vSphere datacenter; clusters are created under it."
+  },
+  {
+    "Key": "common.clusterNamePrefix",
+    "Required": "No",
+    "Notes": "Prefix for cluster names. Omit for default cluster; format {prefix}-{edgeSite}."
+  },
+  {
+    "Key": "common.datastoreNamePrefix",
+    "Required": "No",
+    "Notes": "Prefix for datastore names. Omit for default datastore; format {prefix}-{edgeSite}."
+  },
+  {
+    "Key": "common.supervisorNamePrefix",
+    "Required": "No",
+    "Notes": "Prefix for supervisor names. Omit for default supervisor; format {prefix}-{edgeSite}."
+  },
+  {
+    "Key": "common.vdsNamePrefix",
+    "Required": "No",
+    "Notes": "Prefix for VDS names. Omit for default VDS; format {prefix}-{edgeSite}."
+  },
+  {
+    "Key": "common.supervisorContentLibraryDatastore",
+    "Required": "No",
+    "Notes": "When the key is present, datastore for supervisor content library (must already exist); script runs Initialize-SupervisorContentLibrary. When the key is omitted (removed) entirely, the content library workflow is skipped."
+  },
+  {
+    "Key": "common.supervisorContentLibrarySubscriptionUrl",
+    "Required": "No",
+    "Notes": "When supervisorContentLibraryDatastore key is present, subscription URL for the content library. If omitted, default is https://wp-content.vmware.com/supervisor/v1/latest/lib.json."
+  },
+  {
+    "Key": "common.vLcmImageName",
+    "Required": "No",
+    "Notes": "vLCM image name in vCenter Image Catalog; omit to choose at run time."
+  },
+  {
+    "Key": "common.vSanvMotionVmKernelMtuValue",
+    "Required": "No",
+    "Notes": "Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and vSAN Witness (vmk3) are always 1500. Must be 1500-9190 (numbers only; validated at JSON load). Use 1500 when the physical path does not support jumbo frames."
+  },
+  {
+    "Key": "common.vmkernelMtu",
+    "Required": "No",
+    "Notes": "Optional. Legacy. MTU (1500-9190) for VDS and vMotion/vSAN VMkernels when common.vSanvMotionVmKernelMtuValue is not set. Mgmt and vSAN Witness are always 1500."
+  },
+  {
+    "Key": "common.nicList",
+    "Required": "Conditional",
+    "Notes": "Array of NICs for the VDS (e.g. [{\"name\":\"vmnic1\"},{\"name\":\"vmnic2\"}]). Number of uplinks = length of nicList. Required at common or per cluster (clusters[].nicList); cluster overrides common. Must have 2 or 4 NICs."
+  },
+  {
+    "Key": "common.contextName",
+    "Required": "Yes",
+    "Notes": "VCF context name used by VCF CLI for ArgoCD."
+  },
+  {
+    "Key": "clusters",
+    "Required": "Yes",
+    "Notes": "Array of cluster configurations. Each cluster is identified by edgeSite and contains ESX hosts, supervisor services, storage policy, and networking."
+  },
+  {
+    "Key": "clusters[].edgeSite",
+    "Required": "Yes",
+    "Notes": "Unique site ID; must match one tkgsSiteSpec[].edgeSite in supervisor.json."
+  },
+  {
+    "Key": "clusters[].nicList",
+    "Required": "Conditional",
+    "Notes": "Optional override for this cluster. When present (2 or 4 NICs), overrides common.nicList. At least one of common.nicList or clusters[].nicList must be defined per cluster."
+  },
+  {
+    "Key": "clusters[].esxHosts",
+    "Required": "Yes",
+    "Notes": "Array of ESX FQDNs or IPs; script needs HTTPS access to each host."
+  },
+  {
+    "Key": "clusters[].supervisorServices.argoCdOperatorYamlPath",
+    "Required": "Yes",
+    "Notes": "Path to ArgoCD operator YAML (escape backslashes on Windows)."
+  },
+  {
+    "Key": "clusters[].supervisorServices.argoCdDeploymentYamlPath",
+    "Required": "Yes",
+    "Notes": "Path to ArgoCD instance YAML; namespace in file must match nameSpacePrefix."
+  },
+  {
+    "Key": "clusters[].supervisorServices.nameSpacePrefix",
+    "Required": "No",
+    "Notes": "ArgoCD namespace prefix. Omit for default argocd; script appends cluster MoRef for uniqueness."
+  },
+  {
+    "Key": "clusters[].supervisorServices.vmClass",
+    "Required": "No",
+    "Notes": "Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter."
+  },
+  {
+    "Key": "clusters[].storagePolicy.storagePolicyTagCatalog",
+    "Required": "No",
+    "Notes": "Tag catalog for storage policy. Omit for default {storageType}-Storage-TagCatalog."
+  },
+  {
+    "Key": "clusters[].storagePolicy.storageType",
+    "Required": "Yes",
+    "Notes": "Storage type: VMFS, vSAN-ESA, or vSAN-OSA."
+  },
+  {
+    "Key": "clusters[].storagePolicy.storagePolicyRule",
+    "Required": "No",
+    "Notes": "The only valid value is Fully initialized. Do not change otherwise the script will error."
+  },
+  {
+    "Key": "clusters[].networking.networkSegments",
+    "Required": "Yes",
+    "Notes": "Array of segments; names must match supervisor.json network references."
+  },
+  {
+    "Key": "clusters[].networking.networkSegments[].name",
+    "Required": "Yes",
+    "Notes": "Segment name; lower-case, RFC1123; must match supervisor.json."
+  },
+  {
+    "Key": "clusters[].networking.networkSegments[].vlanId",
+    "Required": "Yes",
+    "Notes": "VLAN ID (0-4095); unique within this cluster."
+  },
+  {
+    "Key": "clusters[].networking.networkSegments[].gateway",
+    "Required": "Yes",
+    "Notes": "Gateway in CIDR (e.g. 10.30.10.1/24); mapped into supervisor by segment name."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces",
+    "Required": "Conditional",
+    "Notes": "Required for vSAN-ESA and vSAN-OSA only (not VMFS). At least two entries: vMotion, vSAN (required). Optional third: vSAN Witness. Each entry: service, vlanId (0-4095), netmask (valid IPv4 netmask), ipList (exactly two unique IPv4s, one per host). Only the vSAN Witness entry requires gateway."
+  }
+]
