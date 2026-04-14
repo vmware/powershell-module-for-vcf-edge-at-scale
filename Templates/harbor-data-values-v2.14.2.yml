@@ -1,0 +1,249 @@
+#! This data values configuration template apply for Harbor Supervisor Service
+#! The FQDN for accessing Harbor admin UI and Registry service.
+hostname: yourdomain.com
+#! The network port of the Envoy service in Contour or other Ingress Controller.
+port:
+  https: 443
+
+#! Do not change tlsSecretLabels. It is required for TKG  integration to work.
+tlsCertificate:
+  tlsSecretLabels: {"managed-by": "vmware-vRegistry"}
+  #! [Optional] The signing settings for cert-manager to issue the certificate.
+  signingSettings:
+    #! [Optional] The DNS Names in addition to the hostname in values
+    additionalDnsNames: []
+    #! [Optional] The IP Addresses to be used to sign the certificate
+    ipAddresses: []
+    #! [Optional] The CA issuer settings to sign the TLS certificate.
+    caIssuer:
+      #! The ca bundle for public key for the issuer
+      ca.crt:
+      #! The private key for the issuer
+      ca.key:
+
+#! Use nginx and LoadBalancer service to expose Harbor's endpoints when it's true.  This requires a loadBlalancer provider installed on Kubernetes cluster.
+#! enableNginxLoadBalancer and enableContourHttpProxy can't be true at the same time.
+#! When they are both set to false an Ingress will be created to expose Harbor's endpoints
+enableNginxLoadBalancer: false
+
+#! Use contour http proxy to expose Harbor's endpoints when it's true, enableNginxLoadBalancer and enableContourHttpProxy
+#! can't be true at the same time.  When they are both set to false an Ingress will be created to expose Harbor's endpoints
+enableContourHttpProxy: true
+
+# This should always set to true for Supervisor service
+createNetworkPolicy: true
+
+#! [Required] The initial password of Harbor admin.
+harborAdminPassword: Harbor12345
+
+#! [Required] The secret key used for encryption. Must be a string of 16 chars.
+secretKey: 0123456789ABCDEF
+
+database:
+  #! if external database is used, set "type" to "external" 
+  #! and fill the connection information in "external" section
+  type: internal
+  #! [Required] The initial password of the internal postgres database.
+  #! if external database is used, please fill the external.password
+  password: change-it
+
+core:
+  replicas: 1
+  #! [Required] Secret is used when core server communicates with other components.
+  secret: change-it
+  #! [Required] The XSRF key. Must be a string of 32 chars.
+  xsrfKey: 0123456789ABCDEF0123456789ABCDEF
+jobservice:
+  replicas: 1
+  #! [Required] Secret is used when job service communicates with other components.
+  secret: change-it
+  #! registry http client request timeout
+  #! By default, the timeout is set to 30 minutes. This field only needs be configured if a longer request timeout is required.
+  #! the value assigned to timeout should be a number without min, e.g. registryHttpClientTimeout: 60 configures the timeout to 60 minutes
+  registryHttpClientTimeout: 30
+registry:
+  replicas: 1
+  #! [Required] Secret is used to secure the upload state from client
+  #! and registry storage backend.
+  #! See: https://github.com/docker/distribution/blob/master/docs/configuration.md#http
+  secret: change-it
+trivy:
+  #! enabled the flag to enable Trivy scanner
+  enabled: true
+  #! gitHubToken the GitHub access token to download Trivy DB
+  gitHubToken: ""
+  #! skipUpdate the flag to disable Trivy DB downloads from remote repository
+  #!
+  #! e.g.You might want to set the value of this flag to `true` in test or CI/CD environments to avoid GitHub rate limiting issues.
+  #! If the value is set to `true` you have to manually download the `trivy.db` file and mount it in the
+  #! `/home/scanner/.cache/trivy/db/trivy.db` path.
+  skipUpdate: false
+  #! skipJavaDBUpdate If the flag is enabled you have to manually download the `trivy-java.db` file and mount it in the
+  #! `/home/scanner/.cache/trivy/java-db/trivy-java.db` path
+  skipJavaDBUpdate: false
+  #! The offlineScan option prevents Trivy from sending API requests to identify dependencies.
+  #!
+  #! Scanning JAR files and pom.xml may require Internet access for better detection, but this option tries to avoid it.
+  #! For example, the offline mode will not try to resolve transitive dependencies in pom.xml when the dependency doesn't
+  #! exist in the local repositories. It means a number of detected vulnerabilities might be fewer in offline mode.
+  #! It would work if all the dependencies are in local.
+  #! This option doesn't affect DB download. You need to specify skipUpdate as well as offlineScan in an air-gapped environment.
+  offlineScan: false
+  #! the timeout set for trivy scanner, it should be a number followed by a letter like "h", "m", "s", or "ms", i.e. 1h, 5m, 60s, 1000ms
+  timeout: ""
+  #! By default, for Supervisor Service set the tmpdir to a mount point of a PersistentVolume.  
+  #! This is to fix the issue that the disk of a vSphere pod has not enough space for trivy's CVE Database 
+  tmpdir: /home/scanner/.cache
+    #! The flag to skip verifying registry certificate. e.g. It would skips verifying the self-hosted registry's certificate for the vulnerability database repository when insecure is set to true.
+  insecure: false
+  #! Repository for vulnerability database
+  #! you could override it to use a custom or mirrored repository
+  dbRepository: "ghcr.io/aquasecurity/trivy-db"
+  #! Repository for Java vulnerability database
+  #! you could override it to use a custom or mirrored repository
+  javaDBRepository: "ghcr.io/aquasecurity/trivy-java-db"
+
+#! The persistence is always enabled and a default StorageClass
+#! is needed in the k8s cluster to provision volumes dynamically.
+#! Specify another StorageClass in the "storageClass" or set "existingClaim"
+#! if you have already existing persistent volumes to use
+#!
+#! For storing images and charts, you can also use "azure", "gcs", "s3",
+#! "swift" or "oss". Set it in the "imageChartStorage" section
+persistence:
+  persistentVolumeClaim:
+    registry:
+      #! Use the existing PVC which must be created manually before bound,
+      #! and specify the "subPath" if the PVC is shared with other components
+      existingClaim: ""
+      #! Specify the "storageClass" used to provision the volume. Or the default
+      #! StorageClass will be used(the default).
+      #! Set it to "-" to disable dynamic provisioning
+      storageClass: "insert-storage-class-name-here"
+      subPath: ""
+      accessMode: ReadWriteOnce
+      size: 10Gi
+    jobservice:
+      jobLog:
+        existingClaim: ""
+        storageClass: "insert-storage-class-name-here"
+        subPath: ""
+        accessMode: ReadWriteOnce
+        size: 1Gi
+    database:
+      existingClaim: ""
+      storageClass: "insert-storage-class-name-here"
+      subPath: ""
+      accessMode: ReadWriteOnce
+      size: 1Gi
+    redis:
+      existingClaim: ""
+      storageClass: "insert-storage-class-name-here"
+      subPath: ""
+      accessMode: ReadWriteOnce
+      size: 1Gi
+    trivy:
+      existingClaim: ""
+      storageClass: "insert-storage-class-name-here"
+      subPath: ""
+      accessMode: ReadWriteOnce
+      size: 5Gi
+  
+
+#! The custom ca bundle secret, the secret must contain key named "ca.crt"
+#! which will be injected into the trust store for core, jobservice, registry, trivy components
+caBundleSecretName:
+#! The metrics used by core, registry and exporter
+metrics:
+  enabled: true
+  core:
+    path: /metrics
+    port: 8001
+  registry:
+    path: /metrics
+    port: 8001
+  jobservice:
+    path: /metrics
+    port: 8001
+  exporter:
+    path: /metrics
+    port: 8001
+
+#! The resource settings for Harbor's namespace and containers
+resources:
+#! The settings for LimitRange of Harbor's namespace
+  namespaceLimitRange:
+    defaultCPURequest: 300m
+    defaultCPULimit: 1000m
+    defaultMemoryRequest: 256Mi
+    defaultMemoryLimit: 2Gi
+#! The resource settings for each of the containers of Harbor
+  containers:
+    - name: core
+      cpuRequest: 500m
+      cpuLimit: 1000m
+      memoryRequest: 512Mi
+      memoryLimit: 2Gi
+    - name: database
+      cpuRequest: 1000m
+      cpuLimit: 2000m
+      memoryRequest: 1Gi
+      memoryLimit: 2Gi
+    - name: jobservice
+      cpuRequest: 500m
+      cpuLimit: 1000m
+      memoryRequest: 512Mi
+      memoryLimit: 2Gi
+    - name: portal
+      cpuRequest: 100m
+      cpuLimit: 300m
+      memoryRequest: 128Mi
+      memoryLimit: 256Mi
+    - name: redis
+      cpuRequest: 200m
+      cpuLimit: 500m
+      memoryRequest: 256Mi
+      memoryLimit: 1Gi
+    - name: registry
+      cpuRequest: 500m
+      cpuLimit: 1000m
+      memoryRequest: 512Mi
+      memoryLimit: 2Gi
+    - name: registryctl
+      cpuRequest: 200m
+      cpuLimit: 500m
+      memoryRequest: 256Mi
+      memoryLimit: 512Mi
+    - name: trivy
+      cpuRequest: 500m
+      cpuLimit: 2000m
+      memoryRequest: 1Gi
+      memoryLimit: 4Gi
+    - name: exporter
+      cpuRequest: 100m
+      cpuLimit: 300m
+      memoryRequest: 128Mi
+      memoryLimit: 256Mi
+
+#! Default [] is equivalent to have both ["IPv4","IPv6"]. Or you can choose one of ["IPv4"] or ["IPv6"]
+network:
+  ipFamilies: ["IPv4"]
+
+#! cache layer configurations
+#! if this feature enabled, harbor will cache the resource
+#! `project/project_metadata/repository/artifact/manifest` in the redis
+#! which help to improve the performance of high concurrent pulling manifest.
+cache:
+  #! default is not enabled.
+  enabled: false
+  #! default keep cache for one day.
+  expireHours: 24
+
+#! [Optional] The settings for concurrent request limitation.  Currently, it only supports limiting the concurrent requests
+#! And it only takes effect when Harbor is exposed via the nginx loadbalancer, i.e. when "enableNginxLoadBalancer" is set to true.
+concurrentRequestLimit:
+  registry:
+    #! Set enabled to true to enable the concurrent request limitation for registry
+    enabled: false
+    #! The max number of concurrent request to /v2/*
+    max: 500

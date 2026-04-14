@@ -10,9 +10,29 @@
     "Notes": "vCenter login (e.g. administrator@vsphere.local); SSO supported."
   },
   {
+    "Key": "common.datacenterName",
+    "Required": "Yes",
+    "Notes": "Existing vSphere datacenter; clusters are created under it."
+  },
+  {
+    "Key": "common.contextName",
+    "Required": "Yes",
+    "Notes": "VCF context name used by VCF CLI for ArgoCD."
+  },
+  {
+    "Key": "common.nicList",
+    "Required": "Conditional",
+    "Notes": "Array of NICs for the VDS (e.g. [{\"name\":\"vmnic1\"},{\"name\":\"vmnic2\"}]). Number of uplinks = length of nicList. Required at common or per cluster (clusters[].nicList); cluster overrides common. Must have 2 or 4 NICs."
+  },
+  {
     "Key": "common.vSanWitnessVmName",
     "Required": "No",
-    "Notes": "vSAN witness VM name or FQDN; used by vSAN-OSA/ESA."
+    "Notes": "vSAN witness VM name or FQDN; used by vSAN-OSA/ESA. Overridable per cluster."
+  },
+  {
+    "Key": "common.haPolicy",
+    "Required": "No",
+    "Notes": "vSAN-OSA/ESA multi-host only: reservationBased (default when key omitted; percentage admission), slotBased (host failures tolerated = 1), or disabled (HA on, admission off). When the key exists, value must be exactly one of those three strings. Overridable per cluster."
   },
   {
     "Key": "common.esxUser",
@@ -33,11 +53,6 @@
     "Key": "common.labEnvironment",
     "Required": "No",
     "Notes": "Boolean. When true, some vSAN health checks are relaxed. With -Force, bypasses cleanup confirmation."
-  },
-  {
-    "Key": "common.datacenterName",
-    "Required": "Yes",
-    "Notes": "Existing vSphere datacenter; clusters are created under it."
   },
   {
     "Key": "common.clusterNamePrefix",
@@ -85,14 +100,34 @@
     "Notes": "Optional. Legacy. MTU (1500-9190) for VDS and vMotion/vSAN VMkernels when common.vSanvMotionVmKernelMtuValue is not set. Mgmt and vSAN Witness are always 1500."
   },
   {
-    "Key": "common.nicList",
+    "Key": "common.supervisorServices.argoCdOperatorYamlPath",
     "Required": "Conditional",
-    "Notes": "Array of NICs for the VDS (e.g. [{\"name\":\"vmnic1\"},{\"name\":\"vmnic2\"}]). Number of uplinks = length of nicList. Required at common or per cluster (clusters[].nicList); cluster overrides common. Must have 2 or 4 NICs."
+    "Notes": "Default ArgoCD operator YAML path for all clusters (escape backslashes on Windows). Required here if any cluster omits this path at the cluster level. Ignored when disableArgoCD is true."
   },
   {
-    "Key": "common.contextName",
-    "Required": "Yes",
-    "Notes": "VCF context name used by VCF CLI for ArgoCD."
+    "Key": "common.supervisorServices.argoCdDeploymentYamlPath",
+    "Required": "Conditional",
+    "Notes": "Default ArgoCD instance YAML path for all clusters; namespace in file must match nameSpacePrefix. Required here if any cluster omits this path at the cluster level. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "common.supervisorServices.disableArgoCD",
+    "Required": "No",
+    "Notes": "Boolean. When true, skips ArgoCD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins. Default: false."
+  },
+  {
+    "Key": "common.supervisorServices.disableHarbor",
+    "Required": "No",
+    "Notes": "Boolean. When true, skips Harbor deployment (service registration, data values generation, installation) for all clusters. Cluster-level override wins. Default: false."
+  },
+  {
+    "Key": "common.supervisorServices.harborDataTemplateYamlPath",
+    "Required": "Conditional",
+    "Notes": "Path to the Harbor data values YAML template (e.g. harbor-data-values-v2.14.2.yml). The script creates a per-site copy of this file at runtime; the original is never modified. Required unless disableHarbor is true for all clusters."
+  },
+  {
+    "Key": "common.supervisorServices.harborServiceYamlPath",
+    "Required": "Conditional",
+    "Notes": "Path to the Harbor Supervisor Service Carvel package YAML (e.g. legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml). Copied to your working directory by Copy-ModernEdgeAtScaleTemplates. Required unless disableHarbor is true for all clusters."
   },
   {
     "Key": "clusters",
@@ -105,24 +140,44 @@
     "Notes": "Unique site ID; must match one tkgsSiteSpec[].edgeSite in supervisor.json."
   },
   {
-    "Key": "clusters[].nicList",
-    "Required": "Conditional",
-    "Notes": "Optional override for this cluster. When present (2 or 4 NICs), overrides common.nicList. At least one of common.nicList or clusters[].nicList must be defined per cluster."
-  },
-  {
     "Key": "clusters[].esxHosts",
     "Required": "Yes",
     "Notes": "Array of ESX FQDNs or IPs; script needs HTTPS access to each host."
   },
   {
+    "Key": "clusters[].nicList",
+    "Required": "Conditional",
+    "Notes": "Optional override for this cluster. When present (2 or 4 NICs), overrides common.nicList. At least one of common.nicList or clusters[].nicList must be defined per cluster."
+  },
+  {
+    "Key": "clusters[].vSanWitnessVmName",
+    "Required": "Conditional",
+    "Notes": "vSAN witness VM name or FQDN for this cluster. Overrides common.vSanWitnessVmName. Required (at cluster or common level) for vSAN-OSA and vSAN-ESA; not used for VMFS."
+  },
+  {
+    "Key": "clusters[].haPolicy",
+    "Required": "No",
+    "Notes": "Overrides common.haPolicy for this cluster. Same allowed values and vSAN-only scope as common.haPolicy. When the key exists, value must be reservationBased, slotBased, or disabled."
+  },
+  {
     "Key": "clusters[].supervisorServices.argoCdOperatorYamlPath",
-    "Required": "Yes",
-    "Notes": "Path to ArgoCD operator YAML (escape backslashes on Windows)."
+    "Required": "Conditional",
+    "Notes": "ArgoCD operator YAML path for this cluster. Overrides common.supervisorServices.argoCdOperatorYamlPath when defined. Ignored when disableArgoCD is true."
   },
   {
     "Key": "clusters[].supervisorServices.argoCdDeploymentYamlPath",
-    "Required": "Yes",
-    "Notes": "Path to ArgoCD instance YAML; namespace in file must match nameSpacePrefix."
+    "Required": "Conditional",
+    "Notes": "ArgoCD instance YAML path for this cluster; namespace in file must match nameSpacePrefix. Overrides common.supervisorServices.argoCdDeploymentYamlPath when defined. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.disableArgoCD",
+    "Required": "No",
+    "Notes": "Boolean. Overrides common.supervisorServices.disableArgoCD for this cluster only. When true, skips ArgoCD deployment for this cluster. Default: false."
+  },
+  {
+    "Key": "clusters[].supervisorServices.disableHarbor",
+    "Required": "No",
+    "Notes": "Boolean. Overrides common.supervisorServices.disableHarbor for this cluster only. When true, skips Harbor deployment for this cluster. Default: false."
   },
   {
     "Key": "clusters[].supervisorServices.nameSpacePrefix",
@@ -133,6 +188,81 @@
     "Key": "clusters[].supervisorServices.vmClass",
     "Required": "No",
     "Notes": "Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.hostname",
+    "Required": "Conditional",
+    "Notes": "Required unless disableHarbor is true. DNS-compatible FQDN or IP for the Harbor registry (e.g. harbor.site1.example.com). Sets the hostname key in the Harbor data values YAML."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.harborAdminPassword",
+    "Required": "No",
+    "Notes": "Override for the Harbor admin password. Prefix with $env: to resolve from an environment variable at runtime. If the variable is unset, the script prompts interactively (masked input) during pre-flight."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.secretKey",
+    "Required": "No",
+    "Notes": "AES-128 encryption key; must be exactly 16 characters. Plain-text values of the wrong length are rejected at pre-flight. Supports $env: resolution with interactive fallback prompt when unset."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.databasePassword",
+    "Required": "No",
+    "Notes": "Override for the internal PostgreSQL password. Supports $env: resolution with interactive fallback prompt when unset."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.coreSecret",
+    "Required": "No",
+    "Notes": "Override for the core inter-service secret. Supports $env: resolution with interactive fallback prompt when unset."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.jobserviceSecret",
+    "Required": "No",
+    "Notes": "Override for the jobservice inter-service secret. Supports $env: resolution with interactive fallback prompt when unset."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.registrySecret",
+    "Required": "No",
+    "Notes": "Override for the registry upload-state secret. Supports $env: resolution with interactive fallback prompt when unset."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.tlsCrt",
+    "Required": "Conditional",
+    "Notes": "Path to a PEM-encoded TLS certificate file. Required when tlsKey is set; both must be defined together. Contents injected as tls.crt under tlsCertificate in the YAML. File existence is validated before deployment."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.tlsKey",
+    "Required": "Conditional",
+    "Notes": "Path to a PEM-encoded TLS private key file. Required when tlsCrt is set; both must be defined together. Contents injected as tls.key under tlsCertificate in the YAML. File existence is validated before deployment."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.caCrt",
+    "Required": "No",
+    "Notes": "Path to a PEM-encoded CA certificate file. Only valid when both tlsCrt and tlsKey are defined. Contents injected as ca.crt under tlsCertificate in the YAML. Also used as the certificate chain when registering Harbor as a Supervisor container image registry."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.registryVolumeSize",
+    "Required": "No",
+    "Notes": "Override for persistence.persistentVolumeClaim.registry.size. Format: positive integer followed by Gi (e.g. 10Gi). Omit to use the template default."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.jobserviceVolumeSize",
+    "Required": "No",
+    "Notes": "Override for persistence.persistentVolumeClaim.jobservice.jobLog.size. Format: <N>Gi. Omit to use the template default."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.databaseVolumeSize",
+    "Required": "No",
+    "Notes": "Override for persistence.persistentVolumeClaim.database.size. Format: <N>Gi. Omit to use the template default."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.redisVolumeSize",
+    "Required": "No",
+    "Notes": "Override for persistence.persistentVolumeClaim.redis.size. Format: <N>Gi. Omit to use the template default."
+  },
+  {
+    "Key": "clusters[].harborConfiguration.trivyVolumeSize",
+    "Required": "No",
+    "Notes": "Override for persistence.persistentVolumeClaim.trivy.size. Format: <N>Gi. Omit to use the template default."
   },
   {
     "Key": "clusters[].storagePolicy.storagePolicyTagCatalog",

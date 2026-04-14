@@ -2,14 +2,21 @@
   "common": {
     "vCenterName": "vc01.example.com",
     "vCenterUser": "administrator@vsphere.local",
-    "vSanWitnessVmName": "vsanwitness.example.com",
-    "vLcmImageName": "autogen-software-spec-1",
-    "datacenterName": "dc01",
     "contextName": "vcf-context-01",
+    "datacenterName": "dc01",
     "nicList": [
       { "name": "vmnic0" },
       { "name": "vmnic1" }
-    ]
+    ],
+    "supervisorServices": {
+      "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml",
+      "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
+      "harborDataTemplateYamlPath": "C:\\Users\\Administrator\\Documents\\harbor-data-values-v2.14.2.yml",
+      "harborServiceYamlPath": "C:\\Users\\Administrator\\Documents\\legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
+    },
+    "vLcmImageName": "autogen-software-spec-1",
+    "vSanWitnessVmName": "vsanwitness.example.com",
+    "haPolicy": "reservationBased"
   },
   "clusters": [
     {
@@ -18,9 +25,22 @@
         "esx01.example.com",
         "esx02.example.com"
       ],
-      "supervisorServices": {
-        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
-        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml"
+      "harborConfiguration": {
+        "hostname": "harbor-site1.example.com",
+        "tlsCrt": "C:\\Users\\Administrator\\Documents\\tls.crt.pem",
+        "tlsKey": "C:\\Users\\Administrator\\Documents\\tls.key.pem",
+        "caCrt": "C:\\Users\\Administrator\\Documents\\ca.crt.pem",
+        "registryVolumeSize": "10Gi",
+        "jobserviceVolumeSize": "5Gi",
+        "databaseVolumeSize": "10Gi",
+        "redisVolumeSize": "1Gi",
+        "trivyVolumeSize": "5Gi",
+        "harborAdminPassword": "$env:HARBOR_ADMIN_PASSWORD",
+        "secretKey": "$env:SECRET_KEY",
+        "databasePassword": "$env:DATABASE_PASSWORD",
+        "coreSecret": "$env:CORE_SECRET_KEY",
+        "jobserviceSecret": "$env:JOBSERVICE_SECRET_KEY",
+        "registrySecret": "$env:REGISTRY_SECRET_KEY"
       },
       "storagePolicy": {
         "storageType": "vSAN-OSA"
@@ -76,12 +96,11 @@
       "esxHosts": [
         "esx03.example.com"
       ],
-      "supervisorServices": {
-        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
-        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml"
-      },
       "storagePolicy": {
         "storageType": "VMFS"
+      },
+      "harborConfiguration": {
+        "hostname": "harbor-site2.example.com"
       },
       "networking": {
         "networkSegments": [

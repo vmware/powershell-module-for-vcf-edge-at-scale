@@ -1,0 +1,3680 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2869
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica-Bold;\f1\fswiss\fcharset0 Helvetica;\f2\fmodern\fcharset0 Courier;
+\f3\fnil\fcharset0 LucidaGrande;\f4\fmodern\fcharset0 Courier-Bold;\f5\fnil\fcharset0 LucidaGrande-Bold;
+}
+{\colortbl;\red255\green255\blue255;\red191\green191\blue191;}
+{\*\expandedcolortbl;;\csgray\c79525;}
+\vieww34580\viewh13840\viewkind0
+\hyphauto1\hyphfactor90
+\deftab720
+\pard\pardeftab720\sa180\qc\partightenfactor0
+
+\f0\b\fs36 \cf0 Modern Edge at Scale\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs36 \cf0 Modern Edge at Scale Automation\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs32 \cf0 Overview\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs24 \cf0 ModernEdgeAtScale
+\f1\b0  deploys a vSphere Supervisor end to end in 
+\f0\b VCF 9.x
+\f1\b0 , following the {\field{\*\fldinst{HYPERLINK "https://blogs.vmware.com/cloud-foundation/2025/07/14/modernizing-your-edge-with-single-node-vsphere-supervisor-in-vmware-cloud-foundation-9-0/"}}{\fldrslt \ul single-node supervisor design guidance}}. It uses 
+\f0\b VCF PowerCLI 9.0 or later
+\f1\b0  plus 
+\f2 infrastructure.json
+\f1  and 
+\f2 supervisor.json
+\f1  to drive cluster, network, storage, Supervisor, Argo CD, and Harbor.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Prerequisites\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b VCF 9.x and vCenter:
+\f1\b0  Running environment with vCenter available.\
+\'95	
+\f0\b Hosts:
+\f1\b0  ESXi installed and cabled; management and required data networks reachable.\
+\'95	
+\f0\b Provisioning host:
+\f1\b0  Can reach vCenter, ESXi, and the Supervisor management network.\
+\'95	
+\f0\b Datacenter:
+\f1\b0  Already exists in vCenter; vLCM image is present in the Image Catalog (per 
+\f2 infrastructure.json
+\f1 ).\
+\'95	
+\f0\b PowerShell:
+\f1\b0  7.4 or newer ({\field{\*\fldinst{HYPERLINK "https://github.com/PowerShell/PowerShell"}}{\fldrslt \ul PowerShell}}).\
+\'95	
+\f0\b VCF PowerCLI:
+\f1\b0  
+\f2 VCF.PowerCLI
+\f1  
+\f0\b 9.0+
+\f1\b0  on the provisioning host (enforced at startup and when a new log file is created).\
+\'95	
+\f0\b kubectl:
+\f1\b0  Installed; see {\field{\*\fldinst{HYPERLINK "https://kubernetes.io/docs/tasks/tools/"}}{\fldrslt \ul Kubernetes tools}}.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b VCF CLI:
+\f1\b0  Installed; see {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt \ul Installing and using VCF CLI v9}}.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Functions Performed by this Automation\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 This automation performs the following:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Deployment (per edge site)\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 1.	
+\f0\b Cluster creation and host addition
+\f1\b0 : Creates a new cluster in vCenter and adds the specified host(s) to the cluster.\
+2.	
+\f0\b Cluster configuration
+\f1\b0 :\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	DRS set to Automatic\
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	vLCM: image selection from the vCenter Image Catalog (by name from JSON or interactive prompt); cluster compliance check and remediation run before vSAN health checks.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 3.	
+\f0\b VDS and networking
+\f1\b0 :\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	vSphere Distributed Switch (VDS) creation with required port groups (management, vMotion, vSAN, vSAN Witness as configured) and VMkernel interfaces. Management (vmk0) remains management-only; vMotion, vSAN, and vSAN Witness use dedicated VMkernels when configured.\
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	Physical NIC connectivity check before VDS creation; active/standby uplink teaming; MTU from config (default 9000 for vMotion/vSAN, 1500 for management and vSAN Witness).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 4.	
+\f0\b Storage
+\f1\b0 :\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	
+\f0\b VMFS
+\f1\b0 : Local VMFS datastore from available disk; storage policy for the edge datastore.\
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	
+\f0\b vSAN OSA or vSAN ESA
+\f1\b0 : vSAN enabled (OSA or ESA per config); disk auto-claim; vSAN witness traffic (and optional witness host); vSAN performance service and alarm checks (with optional 
+\f2 -AcceptBadCheckResults
+\f1  to proceed when health is red or vLCM remediation fails).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 5.	
+\f0\b vSphere Supervisor enablement
+\f1\b0 : Supervisor enabled on the cluster with VM Operator, VKS, Velero, and Argo CD Operator services.\
+6.	
+\f0\b Argo CD instance
+\f1\b0 : Argo CD instance created and configured. The script appends the cluster MoRef to the Argo CD namespace (for example 
+\f2 argocd
+\f1  
+\f3 \uc0\u8594 
+\f1  
+\f2 argocd-c462
+\f1 ) so multiple supervisors on one vCenter stay unique. It prints the URL and temporary admin password when done.\
+7.	
+\f0\b Harbor instance
+\f1\b0 : Harbor registry created and configured from a templated data file so many edge sites stay consistent and easier to maintain.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 At-scale and targeting\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b Multiple edge sites
+\f1\b0 : Deploys all clusters defined in 
+\f2 infrastructure.json
+\f1  sequentially, or a subset via 
+\f2 -EdgeSite "site1,site2"
+\f1  in the order specified.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Operational modes\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b Validate only
+\f1\b0  (
+\f2 -ValidateOnly
+\f1 ): JSON checks (including network segments) and YAML path checks only; no vCenter session and no deployment.\
+\'95	
+\f0\b Compute only
+\f1\b0  (
+\f2 -ComputeOnly
+\f1 ): Cluster, hosts, storage, VDS, and vLCM through remediation; stops before Supervisor, Argo CD, and Harbor. JSON/YAML validation is limited to compute paths (supervisor.json, Argo/Harbor YAML, and 
+\f2 common.contextName
+\f1  are not required).\
+\'95	
+\f0\b Cleanup
+\f1\b0  (
+\f2 -CleanUp
+\f1 ): Removes the chosen scope without deploying. Values: 
+\f2 Supervisor
+\f1 , 
+\f2 Compute
+\f1 , 
+\f2 All
+\f1 , 
+\f2 ArgoCD
+\f1 , 
+\f2 Harbor
+\f1 .\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	
+\f0\b Supervisor:
+\f1\b0  Disable Supervisor; compute stays.\
+\'96	
+\f0\b Compute:
+\f1\b0  Remove VDS, storage, and cluster; fails if Supervisor is still enabled.\
+\'96	
+\f0\b All:
+\f1\b0  Disable Supervisor, then remove compute.\
+\'96	
+\f0\b ArgoCD:
+\f1\b0  Remove the Argo CD supervisor namespace for that cluster; script waits until it is gone.\
+\'96	
+\f0\b Harbor:
+\f1\b0  Remove the Harbor Supervisor Service from the supervisor; script waits until it is gone.\
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	Typed confirmation is required unless 
+\f2 -Force
+\f1  is used with 
+\f2 common.labenvironment
+\f1  true (for example 
+\f2 delete harbor for site1
+\f1 ; use your cleanup scope and edge site name).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Rollback on failure:
+\f1\b0  Rollback follows the failure point (compute, Supervisor, Argo CD namespace, or Harbor service). 
+\f2 -RollbackOnFailure
+\f1  selects always, never, or prompt (Y/N/Always).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Helper functions\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b Copy-ModernEdgeAtScaleTemplates
+\f1\b0 : Copies all eight template files from the module (infrastructure.json, supervisor.json, infrastructure-config-help.json, supervisor-config-help.json, argocd-deployment.yml, ArgoCD operator YAML, Harbor data values YAML, and Harbor Supervisor Service package YAML) to your working directory.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Show-InfrastructureJsonConfigurationHelp
+\f1\b0  / 
+\f0\b Show-SupervisorJsonConfigurationHelp
+\f1\b0 : Display configuration reference (Key, Required, Notes) for the JSON files (List, Table, GridView, or Auto by terminal width; optional 
+\f2 -Filter
+\f1 ).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Installation\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 Manual Installation\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 1.	Download the module files from this repository\
+2.	Extract to your PowerShell modules directory:\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	
+\f0\b Windows
+\f1\b0 : 
+\f2 $env:USERPROFILE\\Documents\\PowerShell\\Modules\\ModernEdgeAtScale\\
+\f1 \
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	
+\f0\b Linux/macOS
+\f1\b0 : 
+\f2 ~/.local/share/powershell/Modules/ModernEdgeAtScale/
+\f1 \
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 3.	Import the module: 
+\f2 Import-Module ModernEdgeAtScale
+\f1 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Quick Start\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 1. Get Template Files\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 The module includes default configuration templates. Copy them to your working directory:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Copy all template files to current directory\uc0\u8232 Copy-ModernEdgeAtScaleTemplates\u8232 \u8232 # Or specify a destination\u8232 Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"\u8232 \u8232 # Preview what would be copied (without actually copying)\u8232 Copy-ModernEdgeAtScaleTemplates -WhatIf\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 This will copy eight template files:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 infrastructure.json
+\f1  - Infrastructure configuration (vCenter, cluster, network, storage)\
+\'95	
+\f2 supervisor.json
+\f1  - Supervisor cluster configuration (networks, load balancer)\
+\'95	
+\f2 infrastructure-config-help.json
+\f1  - Key / Required / Notes reference for 
+\f2 infrastructure.json
+\f1  (same data 
+\f2 Show-InfrastructureJsonConfigurationHelp
+\f1  reads from the module; copy is for offline browsing)\
+\'95	
+\f2 supervisor-config-help.json
+\f1  - Key / Required / Notes reference for 
+\f2 supervisor.json
+\f1  (same data 
+\f2 Show-SupervisorJsonConfigurationHelp
+\f1  reads from the module; copy is for offline browsing)\
+\'95	
+\f2 argocd-deployment.yml
+\f1  - ArgoCD instance deployment YAML\
+\'95	
+\f2 1.1.0-25100889.yml
+\f1  - ArgoCD operator package YAML\
+\'95	
+\f2 harbor-data-values-v2.14.2.yml
+\f1  - Harbor supervisor service data values YAML\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+\f1  - Harbor Supervisor Service Carvel package (service definition)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 2. Configure Template Files\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Edit the template files with your environment-specific values:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b infrastructure.json
+\f1\b0 : Update vCenter details, ESX host, cluster name, network settings, storage configuration\
+\'95	
+\f0\b supervisor.json
+\f1\b0 : Configure supervisor cluster settings, network IP ranges, load balancer configuration\
+\'95	
+\f0\b argocd-deployment.yml
+\f1\b0 : Configure ArgoCD instance settings. 
+\f0\b Note:
+\f1\b0  The namespace value in this file will be automatically modified during deployment to ensure uniqueness (the cluster MoRef identifier will be appended). The namespace value in 
+\f2 infrastructure.json
+\f1  should match the base namespace value in this file.\
+\'95	
+\f0\b 1.1.0-25100889.yml
+\f1\b0 : Typically no changes needed (ArgoCD operator package)\
+\'95	
+\f0\b harbor-data-values-v2.14.2.yml
+\f1\b0 : Configure Harbor registry data values for supervisor service deployment\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+\f1\b0 : Typically no changes needed (Harbor Supervisor Service package)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Need help configuring your JSON files?
+\f1\b0  Use the built-in helper functions to view detailed configuration reference tables:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # View infrastructure.json configuration reference (auto-detects best format)\uc0\u8232 Show-InfrastructureJsonConfigurationHelp\u8232 \u8232 # View supervisor.json configuration reference (auto-detects best format)\u8232 Show-SupervisorJsonConfigurationHelp\u8232 \u8232 # Use list format for narrow screens\u8232 Show-InfrastructureJsonConfigurationHelp -Format List\u8232 Show-SupervisorJsonConfigurationHelp -Format List\u8232 \u8232 # Use table format for wide screens (with separators for readability)\u8232 Show-InfrastructureJsonConfigurationHelp -Format Table\u8232 Show-SupervisorJsonConfigurationHelp -Format Table\u8232 \u8232 # Use interactive grid view (Windows PowerShell only)\u8232 Show-InfrastructureJsonConfigurationHelp -Format GridView\u8232 Show-SupervisorJsonConfigurationHelp -Format GridView\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Format Options:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Auto
+\f1\b0  (default): Automatically selects the best format based on terminal width. Uses 'List' for narrow screens (< 120 characters) and 'Table' for wide screens (\uc0\u8805  120 characters).\
+\'95	
+\f0\b List
+\f1\b0 : Displays each field on its own line. Works best for narrow screens (40-50+ characters). No column wrapping issues.\
+\'95	
+\f0\b Table
+\f1\b0 : Displays data in a table format with horizontal separators between rows. Best for wide screens (120+ characters).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b GridView
+\f1\b0 : Opens an interactive grid view window with sorting and filtering capabilities. Works on any screen size but requires Windows PowerShell (not available in PowerShell Core on macOS/Linux).\
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 These functions display a reference table with 
+\f0\b Key
+\f1\b0 , 
+\f0\b Required
+\f1\b0  (Yes/No/Conditional), and 
+\f0\b Notes
+\f1\b0  for each configuration field.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 3. Run Deployment\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2\b0\fs24 \cf0 # Deploy using default configuration files\uc0\u8232 Start-ModernEdgeAtScale\u8232 \u8232 # Validate configuration files only (no vCenter connection or deployment)\u8232 Start-ModernEdgeAtScale -ValidateOnly\u8232 \u8232 # Or specify custom file paths and log level\u8232 Start-ModernEdgeAtScale `\u8232     -InfrastructureJson "./config/infrastructure.json" `\u8232     -SupervisorJson "./config/supervisor.json" `\u8232     -LogLevel INFO\u8232 \u8232 # Deploy a single site, or run cleanup (Supervisor / Compute / All / ArgoCD), or compute-only\u8232 # See the Start-ModernEdgeAtScale section below for more examples.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Module Functions\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 Start-ModernEdgeAtScale\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Main deployment function that automates the complete vSphere Supervisor deployment process.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Parameters:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 AcceptBadCheckResults
+\f1  (Switch, optional) - When specified, automatically proceed when vSAN cluster health is red or when vLCM cluster compliance remediation fails (no Y/N prompts).\
+\'95	
+\f2 CleanUp
+\f1  (String, optional) - Cleanup only; no deploy. Must be 
+\f2 Supervisor
+\f1 , 
+\f2 Compute
+\f1 , 
+\f2 All
+\f1 , 
+\f2 ArgoCD
+\f1 , or 
+\f2 Harbor
+\f1 . 
+\f0\b Supervisor
+\f1\b0  disables Supervisor only. 
+\f0\b Compute
+\f1\b0  removes VDS, storage, and cluster (fails if Supervisor exists). 
+\f0\b All
+\f1\b0  disables Supervisor then removes compute. 
+\f0\b ArgoCD
+\f1\b0  removes only the Argo CD supervisor namespace (polls until gone). 
+\f0\b Harbor
+\f1\b0  removes only the Harbor Supervisor Service (polls until gone). Confirm with a typed phrase such as 
+\f2 delete harbor for site1
+\f1  unless 
+\f2 -Force
+\f1  is used with 
+\f2 common.labenvironment
+\f1  true (see module help for the exact pattern).\
+\'95	
+\f2 ComputeOnly
+\f1  (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying ArgoCD.\
+\'95	
+\f2 EdgeSite
+\f1  (String, optional) - Comma-delimited list of edge site names (e.g. 
+\f2 "site1,site2"
+\f1 ). Deploy only clusters whose 
+\f2 edgeSite
+\f1  matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.\
+\'95	
+\f2 Force
+\f1  (Switch, optional) - When 
+\f2 common.labenvironment
+\f1  is true in infrastructure JSON, bypasses the cleanup confirmation prompt when using 
+\f2 -CleanUp
+\f1 . Has no effect otherwise; a warning is shown if used without lab.\
+\'95	
+\f2 InfrastructureJson
+\f1  (String, optional) - Path to infrastructure configuration JSON file. Default: 
+\f2 "infrastructure.json"
+\f1 .\
+\'95	
+\f2 LogLevel
+\f1  (String, optional) - Minimum log level for console output. Valid values: 
+\f2 DEBUG
+\f1 , 
+\f2 INFO
+\f1 , 
+\f2 ADVISORY
+\f1 , 
+\f2 WARNING
+\f1 , 
+\f2 EXCEPTION
+\f1 , 
+\f2 ERROR
+\f1 . Default: 
+\f2 "INFO"
+\f1 .\
+\'95	
+\f2 RollbackOnFailure
+\f1  (Boolean, optional) - When 
+\f2 $true
+\f1 : always rollback on failure (no prompt; for autonomous runs). When 
+\f2 $false
+\f1 : never rollback; leave site in current state and continue to next site if any. When omitted: prompt (Y/N/Always). Rollback scope is automatic by failure state (see 
+\f0\b Rollback behavior
+\f1\b0  below).\
+\'95	
+\f2 SaveHarborYaml
+\f1  (Switch, optional) - When specified, the per-site Harbor data values YAML generated at runtime is moved to a 
+\f2 HarborYaml
+\f1  subdirectory under the module directory instead of being deleted after installation. 
+\f0\b Warning:
+\f1\b0  this file contains Harbor passwords and secrets in plain text. A 
+\f2 [WARNING]
+\f1  is shown whenever this switch is used. Delete the file immediately after inspecting it.\
+\'95	
+\f2 SupervisorJson
+\f1  (String, optional) - Path to supervisor configuration JSON file. Default: 
+\f2 "supervisor.json"
+\f1 .\
+\'95	
+\f2 ValidateOnly
+\f1  (Switch, optional) - Run JSON validation (shallow, deeper, network segment uniqueness) and YAML checks where applicable, then exit without connecting to vCenter or deploying. With 
+\f4\b disableArgoCD
+\f1\b0  / 
+\f4\b disableHarbor
+\f1\b0  on all clusters in scope, Argo- or Harbor-specific rules and YAML checks are skipped; use 
+\f4\b -ValidateOnly -ComputeOnly
+\f1\b0  to validate only compute-related JSON. Use to validate configuration files before deployment.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 Version
+\f1  (Switch, optional) - Display module version and exit.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Rollback behavior:
+\f1\b0  Scope follows where the run failed: compute or vSAN before Supervisor 
+\f3 \uc0\u8594 
+\f1  full compute teardown; after compute but before Argo CD 
+\f3 \uc0\u8594 
+\f1  Supervisor disabled only; Argo CD issues 
+\f3 \uc0\u8594 
+\f1  namespace removed, Supervisor kept; Harbor issues 
+\f3 \uc0\u8594 
+\f1  Harbor service removed only. 
+\f2 -RollbackOnFailure
+\f1  sets prompt, always, or never.\
+
+\f0\b Examples:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Basic deployment with default files\uc0\u8232 Start-ModernEdgeAtScale\u8232 \u8232 # Deployment with custom configuration files\u8232 Start-ModernEdgeAtScale `\u8232     -InfrastructureJson "config/prod-infrastructure.json" `\u8232     -SupervisorJson "config/prod-supervisor.json"\u8232 \u8232 # Deployment with DEBUG logging for troubleshooting\u8232 Start-ModernEdgeAtScale -LogLevel DEBUG\u8232 \u8232 # Deploy only a specific edge site (targeted deployments or troubleshooting)\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\u8232 \u8232 # Deploy multiple edge sites in order (comma-delimited; only comma is allowed as separator)\u8232 Start-ModernEdgeAtScale -EdgeSite "site1,site2"\u8232 \u8232 # Deploy specific edge site(s) with custom configuration files\u8232 Start-ModernEdgeAtScale `\u8232     -EdgeSite "site2" `\u8232     -InfrastructureJson "./config/infrastructure.json" `\u8232     -SupervisorJson "./config/supervisor.json"\u8232 \u8232 # Autonomous run: always rollback on failure without prompting\u8232 Start-ModernEdgeAtScale -RollbackOnFailure $true\u8232 \u8232 # Never rollback on failure; leave site in current state and continue to next site\u8232 Start-ModernEdgeAtScale -RollbackOnFailure $false\u8232 \u8232 # Compute-only: prepare clusters, hosts, storage, VDS, and vLCM; exit without enabling supervisor\u8232 Start-ModernEdgeAtScale -ComputeOnly\u8232 \u8232 # Cleanup supervisor only for site1 (compute remains); you must type "delete supervisor for site1" to confirm\u8232 Start-ModernEdgeAtScale -CleanUp Supervisor -EdgeSite "site1"\u8232 \u8232 # Cleanup ArgoCD namespace only for site1 (supervisor and compute remain); confirm with "delete argocd for site1"\u8232 Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\u8232 \u8232 # Cleanup Harbor Supervisor Service only for site1 (supervisor, ArgoCD, and compute remain); confirm with "delete harbor for site1"\u8232 Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\u8232 \u8232 # Cleanup compute only for site1 (fails if supervisor is deployed); confirm with "delete compute for site1"\u8232 Start-ModernEdgeAtScale -CleanUp Compute -EdgeSite "site1"\u8232 \u8232 # Cleanup all (supervisor then compute) for all sites; confirm per site with "delete all for <edgeSite>"\u8232 Start-ModernEdgeAtScale -CleanUp All\u8232 \u8232 # Cleanup all with -Force when common.labenvironment is true in infrastructure.json (bypasses confirmation)\u8232 Start-ModernEdgeAtScale -CleanUp All -Force\u8232 \u8232 # Accept bad vSAN health or vLCM compliance (proceed without Y/N prompts)\u8232 Start-ModernEdgeAtScale -AcceptBadCheckResults\u8232 \u8232 # Validate JSON and YAML only (no deployment)\u8232 Start-ModernEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"\u8232 \u8232 # Check module version\u8232 Start-ModernEdgeAtScale -Version\u8232 \u8232 # ---------------------------------------------------------------------------\u8232 # Harbor: pre-set environment variable secrets before running (recommended).\u8232 # Each $env: reference in harborConfiguration is resolved from these variables.\u8232 # SECRET_KEY must be exactly 16 characters (AES-128 requirement).\u8232 # ---------------------------------------------------------------------------\u8232 $env:HARBOR_ADMIN_PASSWORD = "MyAdminPassword1"\u8232 $env:SECRET_KEY             = "MySecretKey12345"   # exactly 16 characters\u8232 $env:DATABASE_PASSWORD      = "MyDatabasePw1"\u8232 $env:CORE_SECRET_KEY        = "MyCoreSecret1"\u8232 $env:JOBSERVICE_SECRET_KEY  = "MyJobSvcSecret1"\u8232 $env:REGISTRY_SECRET_KEY    = "MyRegSecret1"\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\u8232 \u8232 # Harbor: omit env vars to use just-in-time interactive prompting.\u8232 # Any $env: reference that is unset triggers a masked prompt at startup\u8232 # (before vCenter connection or any deployment step). The value is cached\u8232 # in the process environment for the rest of the run \'97 only prompted once.\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\u8232 # Console output when HARBOR_ADMIN_PASSWORD and SECRET_KEY are unset:\u8232 #   [INFO] harborConfiguration.harborAdminPassword references environment variable\u8232 #          "HARBOR_ADMIN_PASSWORD" which is not set.\u8232 #   Enter value for HARBOR_ADMIN_PASSWORD (input masked): ****\u8232 #   [INFO] harborConfiguration.secretKey references environment variable\u8232 #          "SECRET_KEY" which is not set.\u8232 #   Enter value for SECRET_KEY (input masked): ****************\u8232 \u8232 # ---------------------------------------------------------------------------\u8232 # ArgoCD: roll back the ArgoCD namespace only, fix YAML, and retry.\u8232 # Supervisor and Harbor remain intact; their steps are idempotently skipped.\u8232 # ---------------------------------------------------------------------------\u8232 Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\u8232 # ... fix argocd-deployment.yml ...\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\u8232 \u8232 # ArgoCD: after a successful deployment the console shows the temporary password\u8232 # and the command to change it:\u8232 #   [INFO] Login as user "admin" using temporary password: vEHJgoj3wGtHQDlI\u8232 #   [INFO] To update your password run:\u8232 #          "argocd.exe account update-password --server 10.40.12.203 --account admin --insecure"\u8232 \u8232 # ---------------------------------------------------------------------------\u8232 # Harbor: roll back Harbor only, fix configuration, and retry.\u8232 # Supervisor and ArgoCD remain intact; their steps are idempotently skipped.\u8232 # ---------------------------------------------------------------------------\u8232 Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\u8232 # ... fix infrastructure.json harborConfiguration ...\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\u8232 \u8232 # Autonomous run with Harbor and ArgoCD: always rollback on failure, no prompts\u8232 Start-ModernEdgeAtScale -RollbackOnFailure $true\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 EdgeSite Parameter Usage:
+\f1\b0 \
+The 
+\f2 -EdgeSite
+\f1  parameter lets you target one or more edge sites from your infrastructure.json instead of processing all clusters. Use a comma-delimited list to deploy multiple sites (e.g. 
+\f2 -EdgeSite "site1,site2"
+\f1 ). This is useful for the following:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Targeted deployments
+\f1\b0 : Deploy or redeploy specific edge sites without processing others\
+\'95	
+\f0\b Troubleshooting
+\f1\b0 : Isolate issues to specific clusters\
+\'95	
+\f0\b Incremental rollouts
+\f1\b0 : Deploy a subset of sites in a chosen order\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Testing
+\f1\b0 : Validate configuration for selected sites before deploying all\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 How it works:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	When 
+\f2 -EdgeSite
+\f1  is 
+\f0\b not specified
+\f1\b0 : All clusters in the 
+\f2 clusters[]
+\f1  array are processed sequentially. The script connects to vCenter once and processes each cluster in order, maintaining the connection between clusters that share the same vCenter FQDN.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	When 
+\f2 -EdgeSite
+\f1  
+\f0\b is specified
+\f1\b0 : Only clusters whose 
+\f2 edgeSite
+\f1  matches one of the comma-separated values are processed, in the order you list them (e.g. 
+\f2 -EdgeSite "site2,site1"
+\f1  deploys site2 then site1).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Important Notes:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	Use 
+\f0\b only a comma
+\f1\b0  to separate site names. Invalid delimiters (e.g. semicolon) cause the workflow to fail.\
+\'95	Each value must exactly match an 
+\f2 edgeSite
+\f1  in your infrastructure.json 
+\f2 clusters[]
+\f1  array. If any specified site is invalid, the workflow fails with the list of valid values.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	All clusters in the same infrastructure.json share the same vCenter connection (from 
+\f2 common.vCenterName
+\f1 ), so the connection persists when processing multiple clusters.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Copy-ModernEdgeAtScaleTemplates\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Copies all required template files from the module installation directory to a specified destination.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Parameters:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 DestinationPath
+\f1  (String, optional) - Destination directory for template files. Default: Current working directory (
+\f2 $PWD
+\f1 )\
+\'95	
+\f2 WhatIf
+\f1  (Switch) - Preview what would happen without actually copying files\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 Confirm
+\f1  (Switch) - Prompt for confirmation before performing operations\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Examples:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Copy templates to current directory\uc0\u8232 Copy-ModernEdgeAtScaleTemplates\u8232 \u8232 # Copy templates to specific directory\u8232 Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"\u8232 \u8232 # Preview what would be copied\u8232 Copy-ModernEdgeAtScaleTemplates -WhatIf\u8232 \u8232 # Copy with confirmation prompt\u8232 Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config" -Confirm\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Template Files Included:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 infrastructure.json
+\f1  - Infrastructure configuration template\
+\'95	
+\f2 supervisor.json
+\f1  - Supervisor cluster configuration template\
+\'95	
+\f2 infrastructure-config-help.json
+\f1  - Reference rows for 
+\f2 Show-InfrastructureJsonConfigurationHelp
+\f1  (offline copy)\
+\'95	
+\f2 supervisor-config-help.json
+\f1  - Reference rows for 
+\f2 Show-SupervisorJsonConfigurationHelp
+\f1  (offline copy)\
+\'95	
+\f2 argocd-deployment.yml
+\f1  - ArgoCD deployment YAML template\
+\'95	
+\f2 1.1.0-25100889.yml
+\f1  - ArgoCD operator package template\
+\'95	
+\f2 harbor-data-values-v2.14.2.yml
+\f1  - Harbor supervisor service data values template\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+\f1  - Harbor Supervisor Service Carvel package template\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Show-InfrastructureJsonConfigurationHelp\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Displays a reference table for configuring the 
+\f2 infrastructure.json
+\f1  file (Key, Required, Notes).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Parameters:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 Format
+\f1  (String, optional) - Output format. Valid values: 
+\f2 Auto
+\f1  (default), 
+\f2 List
+\f1 , 
+\f2 Table
+\f1 , 
+\f2 GridView
+\f1 . Default: 
+\f2 Auto
+\f1 \
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 Filter
+\f1  (String, optional) - Filters configuration elements by Element Name using wildcard matching. The filter is automatically wrapped with wildcards (*) on both sides.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Examples:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Display infrastructure.json configuration reference (auto-detects best format)\uc0\u8232 Show-InfrastructureJsonConfigurationHelp\u8232 \u8232 # Use list format for narrow screens\u8232 Show-InfrastructureJsonConfigurationHelp -Format List\u8232 \u8232 # Use table format for wide screens (with separators)\u8232 Show-InfrastructureJsonConfigurationHelp -Format Table\u8232 \u8232 # Use interactive grid view (Windows PowerShell only)\u8232 Show-InfrastructureJsonConfigurationHelp -Format GridView\u8232 \u8232 # Filter to show only argoCD related elements\u8232 Show-InfrastructureJsonConfigurationHelp -Filter argoCD\u8232 \u8232 # Combine filter with format\u8232 Show-InfrastructureJsonConfigurationHelp -Filter storagePolicy -Format List\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Format Options:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Auto
+\f1\b0 : Automatically selects the best format based on terminal width\
+\'95	
+\f0\b List
+\f1\b0 : Vertical layout, ideal for narrow screens (40-50+ characters)\
+\'95	
+\f0\b Table
+\f1\b0 : Table format with horizontal separators, ideal for wide screens (120+ characters)\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b GridView
+\f1\b0 : Interactive window with sorting/filtering (Windows PowerShell only)\
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 The output includes detailed information about:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	vCenter and ESX host configuration\
+\'95	Cluster and datacenter settings\
+\'95	Storage policy and datastore configuration\
+\'95	Virtual Distributed Switch (VDS) settings\
+\'95	Port group and network configuration\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	ArgoCD operator and deployment settings\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Show-SupervisorJsonConfigurationHelp\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Displays a reference table for configuring the 
+\f2 supervisor.json
+\f1  file (Key, Required, Notes).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Parameters:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 Format
+\f1  (String, optional) - Output format. Valid values: 
+\f2 Auto
+\f1  (default), 
+\f2 List
+\f1 , 
+\f2 Table
+\f1 , 
+\f2 GridView
+\f1 . Default: 
+\f2 Auto
+\f1 \
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 Filter
+\f1  (String, optional) - Filters configuration elements by Element Name using wildcard matching. The filter is automatically wrapped with wildcards (*) on both sides.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Examples:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Display supervisor.json configuration reference (auto-detects best format)\uc0\u8232 Show-SupervisorJsonConfigurationHelp\u8232 \u8232 # Use list format for narrow screens\u8232 Show-SupervisorJsonConfigurationHelp -Format List\u8232 \u8232 # Use table format for wide screens (with separators)\u8232 Show-SupervisorJsonConfigurationHelp -Format Table\u8232 \u8232 # Use interactive grid view (Windows PowerShell only)\u8232 Show-SupervisorJsonConfigurationHelp -Format GridView\u8232 \u8232 # Filter to show only tkgsComponentSpec related elements\u8232 Show-SupervisorJsonConfigurationHelp -Filter tkgsComponentSpec\u8232 \u8232 # Filter for load balancer elements\u8232 Show-SupervisorJsonConfigurationHelp -Filter flb -Format List\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Format Options:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Auto
+\f1\b0 : Automatically selects the best format based on terminal width\
+\'95	
+\f0\b List
+\f1\b0 : Vertical layout, ideal for narrow screens (40-50+ characters)\
+\'95	
+\f0\b Table
+\f1\b0 : Table format with horizontal separators, ideal for wide screens (120+ characters)\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b GridView
+\f1\b0 : Interactive window with sorting/filtering (Windows PowerShell only)\
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 The output includes detailed information about:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	Supervisor control plane configuration (VM count, size)\
+\'95	Foundation Load Balancer settings (name, size, availability)\
+\'95	Network IP ranges and assignments\
+\'95	DNS, NTP, and search domain configuration\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	VKS management and workload network settings\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Configuration Files\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Deployment is driven by two JSON inputs: 
+\f2 infrastructure.json
+\f1  (vCenter, clusters, networking, storage, ArgoCD paths) and 
+\f2 supervisor.json
+\f1  (supervisor sizing, load balancer, and network IP ranges). Each 
+\f2 edgeSite
+\f1  in 
+\f2 infrastructure.json
+\f1  
+\f2 clusters[]
+\f1  must have a matching 
+\f2 edgeSite
+\f1  in 
+\f2 supervisor.json
+\f1  
+\f2 tkgsSiteSpec[]
+\f1 .\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 infrastructure.json\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 This file defines vCenter connection, datacenter, and shared naming prefixes; then one or more clusters, each with ESX hosts, storage type, networking segments, and ArgoCD paths. Many fields are 
+\f0\b optional
+\f1\b0  and have defaults so you can omit them for a minimal config.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Structure:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f4\b common
+\f1\b0  \'96 Settings used for all clusters (one vCenter, one datacenter, shared prefixes and content library). Prefixes and 
+\f2 esxUser
+\f1  are optional; when omitted, defaults apply (see tables below).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f4\b clusters
+\f1\b0  \'96 Array of cluster objects. Each cluster is identified by 
+\f2 edgeSite
+\f1  (must match a site in 
+\f2 supervisor.json
+\f1 ). Per-cluster you define ESX hosts, storage type, and network segments. ArgoCD YAML paths may be defined here to override the common defaults.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Important behavior:
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Uplinks:
+\f1\b0  There is no 
+\f2 numUplinks
+\f1  field. The number of VDS uplinks is taken from the length of 
+\f2 nicList
+\f1  (e.g. two NICs in 
+\f2 nicList
+\f1  means two uplinks). 
+\f0\b nicList
+\f1\b0  may be defined at 
+\f0\b common
+\f1\b0  (applies to all clusters) or per 
+\f0\b clusters[]
+\f1\b0  (cluster overrides common). At least one definition is mandatory: either 
+\f2 common.nicList
+\f1  or 
+\f2 clusters[].nicList
+\f1  for each cluster. When both are defined, the cluster value takes precedence. Effective list must have 2 or 4 NICs.\
+\'95	
+\f0\b Storage:
+\f1\b0  Use 
+\f2 storagePolicy.storageType
+\f1  (
+\f2 VMFS
+\f1 , 
+\f2 vSAN-ESA
+\f1 , or 
+\f2 vSAN-OSA
+\f1 ). The tag catalog name can be omitted; it defaults to 
+\f2 \{storageType\}-Storage-TagCatalog
+\f1  (e.g. 
+\f2 VMFS-Storage-TagCatalog
+\f1 ).\
+\'95	
+\f0\b vSAN witness:
+\f1\b0  
+\f2 vSanWitnessVmName
+\f1  may be defined at 
+\f2 common
+\f1  (applies to all vSAN clusters) or per 
+\f2 clusters[]
+\f1  (cluster root level only; cluster overrides common). Required for vSAN-OSA and vSAN-ESA storage types; not used for VMFS.\
+\'95	
+\f0\b vSphere HA admission (vSAN OSA/ESA only):
+\f1\b0  
+\f2 haPolicy
+\f1  may be defined at 
+\f2 common
+\f1  or per 
+\f2 clusters[]
+\f1  (cluster overrides common). Omitted means 
+\f4\b slotBased
+\f1\b0  (host failures tolerated = 1, slot-style admission). 
+\f4\b reservationBased
+\f1\b0  reserves CPU and memory using cluster percentage admission (same as the previous module default for multi-host). 
+\f4\b disabled
+\f1\b0  leaves HA on with admission control off (VM restart only, no capacity reservation). These values apply when the workflow re-applies HA after moving management to the VDS and when the vSAN alarm check remediates 
+\f0\b vSphere HA host status
+\f1\b0 . 
+\f0\b VMFS
+\f1\b0  clusters are not governed by this JSON key; HA re-apply after the VDS step continues to use 
+\f0\b reservationBased
+\f1\b0  so behavior matches earlier releases. When the key is present, JSON validation accepts only the three strings above.\
+\'95	
+\f0\b ArgoCD YAML paths:
+\f1\b0  
+\f2 supervisorServices.argoCdOperatorYamlPath
+\f1  and 
+\f2 supervisorServices.argoCdDeploymentYamlPath
+\f1  may be defined at 
+\f2 common
+\f1  (applies to all clusters) or per 
+\f2 clusters[]
+\f1  (cluster overrides common). If any cluster omits both paths, 
+\f2 common.supervisorServices
+\f1  must define them; if every cluster defines its own paths, 
+\f2 common.supervisorServices
+\f1  is not required. Cluster-level always takes priority when both levels are defined. 
+\f2 supervisorServices.nameSpacePrefix
+\f1  defaults to 
+\f2 argocd
+\f1  if omitted. 
+\f2 supervisorServices.vmClass
+\f1  is optional; when omitted, the script assigns all VM classes reported by vCenter to the ArgoCD namespace.\
+\'95	
+\f0\b Disabling supervisor services:
+\f1\b0  Set 
+\f2 supervisorServices.disableArgoCD: true
+\f1  or 
+\f2 supervisorServices.disableHarbor: true
+\f1  at 
+\f2 common
+\f1  (affects all clusters) or per 
+\f2 clusters[]
+\f1  (overrides common for that cluster only). Both default to 
+\f2 false
+\f1  (enabled). When 
+\f2 disableArgoCD
+\f1  is true, the ArgoCD service, namespace, operator, and instance steps are all skipped and the ArgoCD YAML paths do not need to be configured. When 
+\f2 disableHarbor
+\f1  is true, Harbor service registration, data values generation, and installation are all skipped; 
+\f2 harborConfiguration
+\f1  is not required and 
+\f2 harborServiceYamlPath
+\f1  does not need to be configured.\
+\'95	
+\f0\b Harbor configuration:
+\f1\b0  Each cluster needs a 
+\f2 harborConfiguration
+\f1  block unless 
+\f2 disableHarbor
+\f1  is true.\
+\pard\tx360\pardeftab720\li720\fi-360\partightenfactor0
+\cf0 \'96	
+\f0\b Hostname:
+\f1\b0  
+\f2 harborConfiguration.hostname
+\f1  is required (FQDN or IP that DNS accepts).\
+\'96	
+\f0\b Volume sizes:
+\f1\b0  Optional 
+\f2 registryVolumeSize
+\f1 , 
+\f2 jobserviceVolumeSize
+\f1 , 
+\f2 databaseVolumeSize
+\f1 , 
+\f2 redisVolumeSize
+\f1 , 
+\f2 trivyVolumeSize
+\f1  use 
+\f2 <positive integer>Gi
+\f1  (for example 
+\f2 10Gi
+\f1 ).\
+\'96	
+\f0\b Secrets:
+\f1\b0  Optional keys map into the Harbor data values YAML. Prefix with 
+\f2 $env:VAR
+\f1  to load at runtime so secrets stay out of JSON.\
+\'96	
+\f0\b Prompts:
+\f1\b0  If 
+\f2 $env:
+\f1  is used and the variable is unset, the script asks once during pre-flight (masked input) and caches the value for the process. Plain text in JSON is never prompted for.\
+\'96	
+\f0\b TLS:
+\f1\b0  
+\f2 tlsCrt
+\f1  and 
+\f2 tlsKey
+\f1  are PEM file paths and must appear together; optional 
+\f2 caCrt
+\f1  only when both are set. Paths are validated before deploy.\
+\'96	
+\f0\b Service YAML:
+\f1\b0  Download the Harbor Supervisor Service Carvel package from Broadcom; set 
+\f2 common.supervisorServices.harborServiceYamlPath
+\f1 .\
+\pard\tx360\pardeftab720\li720\fi-360\sa180\partightenfactor0
+\cf0 \'96	
+\f0\b Order and rollback:
+\f1\b0  Harbor installs after Argo CD. Failure rolls back Harbor only so you can fix and re-run. 
+\f2 -CleanUp Harbor
+\f1  removes Harbor without touching Supervisor or Argo CD.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Network segment names
+\f1\b0  must be lower-case and RFC1123-compliant; they are matched to supervisor.json network references (case-sensitive).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Required vs optional:
+\f1\b0  In the tables below, 
+\f0\b Req
+\f1\b0  is 
+\f0\b Yes
+\f1\b0  only when the value must be set for your environment; 
+\f0\b No
+\f1\b0  means the field can be omitted and a default or derived value is used (described in the Notes column).\
+
+\f0\b common\
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f1\b0 \cf0 Field\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Req\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Notes\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vCenterName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vCenter FQDN, 9.0 or later. Script needs HTTPS access.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vCenterUser
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vCenter login (SSO supported); example UPN 
+\f2 administrator@vsphere.local
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vSanWitnessVmName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vSAN witness VM name or FQDN; used by vSAN-OSA/ESA.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 haPolicy
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vSAN-OSA/ESA multi-host HA admission: 
+\f2 slotBased
+\f1  (default when omitted), 
+\f2 reservationBased
+\f1 , or 
+\f2 disabled
+\f1 . Validated when the key exists.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 esxUser
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ESX login. Omit to use default 
+\f2 root
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 esxUniquePasswordPerHost
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. Default false when not defined (one password for all hosts). true = prompt per host.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 nonInteractivePassword
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 labEnvironment
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. When true, some vSAN health checks are relaxed.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 datacenterName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Existing vSphere datacenter; clusters are created under it.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 clusterNamePrefix
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Prefix for cluster names. Omit for default 
+\f2 cluster
+\f1 ; format 
+\f2 \{prefix\}-\{edgeSite\}
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 datastoreNamePrefix
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Prefix for datastore names. Omit for default 
+\f2 datastore
+\f1 ; format 
+\f2 \{prefix\}-\{edgeSite\}
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorNamePrefix
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Prefix for supervisor names. Omit for default 
+\f2 supervisor
+\f1 ; format 
+\f2 \{prefix\}-\{edgeSite\}
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vdsNamePrefix
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Prefix for VDS names. Omit for default 
+\f2 VDS
+\f1 ; format 
+\f2 \{prefix\}-\{edgeSite\}
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorContentLibraryDatastore
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 When the key is present, datastore for supervisor content library (must already exist); script runs Initialize-SupervisorContentLibrary. When the key is omitted (removed) entirely, the content library workflow is skipped.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorContentLibrarySubscriptionUrl
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 When 
+\f2 supervisorContentLibraryDatastore
+\f1  key is present, subscription URL for the content library. If this key is omitted, the default is the {\field{\*\fldinst{HYPERLINK "https://wp-content.vmware.com/supervisor/v1/latest/lib.json"}}{\fldrslt \ul VMware supervisor content library}} subscription URL. Only used when datastore key is present.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vLcmImageName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vLCM image name in vCenter Image Catalog; omit to choose at run time.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vSanvMotionVmKernelMtuValue
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and vSAN Witness (vmk3) are always 1500. Must be a number between 1500 and 9190 (numbers only; validated at JSON load). Use 1500 when the physical path does not support jumbo frames.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 nicList
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of NICs for the VDS (e.g. 
+\f2 [\{"name":"vmnic1"\},\{"name":"vmnic2"\}]
+\f1 ). Number of uplinks = length of nicList. Required at common or per cluster; cluster overrides common. Must have 2 or 4 NICs.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.argoCdOperatorYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Default ArgoCD operator YAML path for all clusters (escape backslashes on Windows). Required here if any cluster omits this path at the cluster level; not required if every cluster defines its own. Ignored when 
+\f2 disableArgoCD
+\f1  is true.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.argoCdDeploymentYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Default ArgoCD instance YAML path for all clusters; namespace in file must match 
+\f2 nameSpacePrefix
+\f1 . Required here if any cluster omits this path at the cluster level; not required if every cluster defines its own. Ignored when 
+\f2 disableArgoCD
+\f1  is true.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.disableArgoCD
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. When true, skips ArgoCD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins. Default: false.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.disableHarbor
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. When true, skips Harbor deployment (service registration, data values generation, installation) for all clusters. Cluster-level override wins. Default: false.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.harborDataTemplateYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Path to the Harbor data values YAML template (e.g. 
+\f2 harbor-data-values-v2.14.2.yml
+\f1 ). The script mutates a per-site copy of this file at runtime; the original is never modified. Required unless 
+\f2 disableHarbor
+\f1  is true for all clusters.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.harborServiceYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Path to the Harbor Supervisor Service Carvel package YAML (e.g. 
+\f2 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+\f1 ). Copied to your working directory by 
+\f2 Copy-ModernEdgeAtScaleTemplates
+\f1 . Required unless 
+\f2 disableHarbor
+\f1  is true for all clusters.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 contextName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 VCF context name used by VCF CLI for ArgoCD.\
+\cell \lastrow\row
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 clusters[] (each element)\
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f1\b0 \cf0 Field\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Req\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Notes\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 edgeSite
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Unique site ID; must match one 
+\f2 tkgsSiteSpec[].edgeSite
+\f1  in supervisor.json.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 nicList
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Optional override for this cluster. When present (2 or 4 NICs), overrides 
+\f2 common.nicList
+\f1 . At least one of 
+\f2 common.nicList
+\f1  or 
+\f2 clusters[].nicList
+\f1  must be defined per cluster.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 esxHosts
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of ESX FQDNs or IPs; script needs HTTPS access to each host.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 vSanWitnessVmName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 vSAN witness VM name or FQDN for this cluster. Overrides 
+\f2 common.vSanWitnessVmName
+\f1 . Required (at cluster or common level) for vSAN-OSA and vSAN-ESA; not used for VMFS.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 haPolicy
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Overrides 
+\f2 common.haPolicy
+\f1  for this cluster when set. Same values and vSAN-only behavior as 
+\f2 common.haPolicy
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.argoCdOperatorYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ArgoCD operator YAML path for this cluster (escape backslashes on Windows). Overrides 
+\f2 common.supervisorServices.argoCdOperatorYamlPath
+\f1  when defined. Required here if the common level does not define it. Ignored when 
+\f2 disableArgoCD
+\f1  is true.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.argoCdDeploymentYamlPath
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ArgoCD instance YAML path for this cluster; namespace in file must match 
+\f2 nameSpacePrefix
+\f1 . Overrides 
+\f2 common.supervisorServices.argoCdDeploymentYamlPath
+\f1  when defined. Required here if the common level does not define it. Ignored when 
+\f2 disableArgoCD
+\f1  is true.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.disableArgoCD
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. Overrides 
+\f2 common.supervisorServices.disableArgoCD
+\f1  for this cluster only. When true, skips ArgoCD deployment for this cluster. Default: false.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.disableHarbor
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Boolean. Overrides 
+\f2 common.supervisorServices.disableHarbor
+\f1  for this cluster only. When true, skips Harbor deployment (service registration, data values generation, installation) for this cluster. Default: false.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.nameSpacePrefix
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ArgoCD namespace prefix. Omit for default 
+\f2 argocd
+\f1 ; script appends cluster MoRef for uniqueness.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 supervisorServices.vmClass
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.hostname
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f0\b \cf0 Required unless 
+\f4 disableHarbor
+\f0  is true.
+\f1\b0  DNS-compatible FQDN or IP for the Harbor registry (e.g. 
+\f2 harbor.site1.example.com
+\f1 ). Sets the 
+\f2 hostname
+\f1  key in the Harbor data values YAML.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.registryVolumeSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for 
+\f2 persistence.persistentVolumeClaim.registry.size
+\f1 . Format: positive integer followed by 
+\f2 Gi
+\f1  (e.g. 
+\f2 10Gi
+\f1 ). Omit to use the template default.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.jobserviceVolumeSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for 
+\f2 persistence.persistentVolumeClaim.jobservice.jobLog.size
+\f1 . Format: 
+\f2 <N>Gi
+\f1 . Omit to use the template default.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.databaseVolumeSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for 
+\f2 persistence.persistentVolumeClaim.database.size
+\f1 . Format: 
+\f2 <N>Gi
+\f1 . Omit to use the template default.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.redisVolumeSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for 
+\f2 persistence.persistentVolumeClaim.redis.size
+\f1 . Format: 
+\f2 <N>Gi
+\f1 . Omit to use the template default.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.trivyVolumeSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for 
+\f2 persistence.persistentVolumeClaim.trivy.size
+\f1 . Format: 
+\f2 <N>Gi
+\f1 . Omit to use the template default.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.harborAdminPassword
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the Harbor admin password (
+\f2 harborAdminPassword
+\f1  in YAML). Prefix with 
+\f2 $env:
+\f1  to resolve from an environment variable at runtime (e.g. 
+\f2 $env:HARBOR_ADMIN_PW
+\f1 ). If the variable is unset at runtime, the script prompts interactively (masked input) and caches the value in that environment variable for the remainder of the run.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.secretKey
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the encryption secret key (
+\f2 secretKey
+\f1  in YAML). Harbor uses this as an AES-128 encryption key: 
+\f0\b must be exactly 16 characters
+\f1\b0 . Plain-text values of the wrong length are rejected at pre-flight with a clear error before deployment begins. 
+\f2 $env:
+\f1  references are validated after resolution before the YAML is submitted \'97 a resolved value of the wrong length also throws a pre-deployment error. Supports 
+\f2 $env:
+\f1  resolution with interactive fallback prompt when unset.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.databasePassword
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the internal PostgreSQL password (
+\f2 database.password
+\f1  in YAML). Supports 
+\f2 $env:
+\f1  resolution with interactive fallback prompt when unset.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.coreSecret
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the core inter-service secret (
+\f2 core.secret
+\f1  in YAML). Supports 
+\f2 $env:
+\f1  resolution with interactive fallback prompt when unset.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.jobserviceSecret
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the jobservice inter-service secret (
+\f2 jobservice.secret
+\f1  in YAML). Supports 
+\f2 $env:
+\f1  resolution with interactive fallback prompt when unset.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.registrySecret
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override for the registry upload-state secret (
+\f2 registry.secret
+\f1  in YAML). Supports 
+\f2 $env:
+\f1  resolution with interactive fallback prompt when unset.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.tlsCrt
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Path to a PEM-encoded TLS certificate file. Required when 
+\f2 tlsKey
+\f1  is set; both must be defined together. Contents are injected as 
+\f2 tls.crt
+\f1  under 
+\f2 tlsCertificate
+\f1  in the YAML. File existence is validated before deployment.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.tlsKey
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Path to a PEM-encoded TLS private key file. Required when 
+\f2 tlsCrt
+\f1  is set; both must be defined together. Contents are injected as 
+\f2 tls.key
+\f1  under 
+\f2 tlsCertificate
+\f1  in the YAML. File existence is validated before deployment.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 harborConfiguration.caCrt
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Path to a PEM-encoded CA certificate file. Only valid when both 
+\f2 tlsCrt
+\f1  and 
+\f2 tlsKey
+\f1  are defined. Contents are injected as 
+\f2 ca.crt
+\f1  under 
+\f2 tlsCertificate
+\f1  in the YAML. File existence is validated before deployment.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 storagePolicy.storagePolicyTagCatalog
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Tag catalog for storage policy. Omit for default 
+\f2 \{storageType\}-Storage-TagCatalog
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 storagePolicy.storageType
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Storage type: 
+\f2 VMFS
+\f1 , 
+\f2 vSAN-ESA
+\f1 , or 
+\f2 vSAN-OSA
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networking.networkSegments
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of segments; names must match supervisor.json network references.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networking.networkSegments[].name
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Segment name; lower-case, RFC1123; must match supervisor.json.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networking.networkSegments[].vlanId
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 VLAN ID (0\'964095); unique within this cluster.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networking.networkSegments[].gateway
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Gateway in CIDR (e.g. 
+\f2 10.30.10.1/24
+\f1 ); mapped into supervisor by segment name.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networking.networkingVmKernelInterfaces
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Conditional\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f0\b \cf0 Required for vSAN-ESA and vSAN-OSA only
+\f1\b0  (not VMFS). At least two entries: 
+\f0\b vMotion
+\f1\b0 , 
+\f0\b vSAN
+\f1\b0  (required). Optional third: 
+\f0\b vSAN Witness
+\f1\b0 . When vSAN Witness is omitted, mgmt (vmk0) is tagged with vSAN witness traffic in addition to mgmt; when present, a dedicated witness VMkernel (vmk3) is created. Each entry: 
+\f2 service
+\f1 , 
+\f2 vlanId
+\f1  (0\'964095), 
+\f2 netmask
+\f1  (valid IPv4 netmask), 
+\f2 ipList
+\f1  (exactly two unique IPv4s, one per host). Only the 
+\f0\b vSAN Witness
+\f1\b0  entry requires 
+\f2 gateway
+\f1  (VMkernel interfaces are not configured with a gateway by the script).\
+\cell \lastrow\row
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Configuration Help:
+\f1\b0  Run 
+\f2 Show-InfrastructureJsonConfigurationHelp
+\f1  to view the full reference (Key, Required, Notes). Use 
+\f2 -Format List
+\f1  for narrow screens, 
+\f2 -Format Table
+\f1  for wide; 
+\f2 -Filter
+\f1  for wildcard search on keys.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 supervisor.json\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Top-level keys: 
+\f2 commonSupervisorSpec
+\f1  (shared supervisor and FLB settings) and 
+\f2 tkgsSiteSpec
+\f1  (array of per-site config). Each 
+\f2 tkgsSiteSpec[].edgeSite
+\f1  must match one 
+\f2 clusters[].edgeSite
+\f1  in 
+\f2 infrastructure.json
+\f1 .\
+The following are 
+\f0\b script parameters
+\f1\b0  (not in supervisor JSON) with fixed defaults: 
+\f2 flbProvider
+\f1  (VSPHERE_FOUNDATION), 
+\f2 flbNetworkIpAssignmentMode
+\f1 , 
+\f2 tkgsPrimaryWorkloadIpAssignmentMode
+\f1 , 
+\f2 tkgsMgmtIpAssignmentMode
+\f1  (all STATIC), and FLB network personas (management: Management; virtual server: FRONTEND, WORKLOAD). See 
+\f2 Add-Supervisor
+\f1  and 
+\f2 Get-SupervisorConfigurationFromJson
+\f1  help.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 commonSupervisorSpec\
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f1\b0 \cf0 Field\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Req\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Notes\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 controlPlaneVMCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 1
+\f1  or 
+\f2 3
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 controlPlaneSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 TINY
+\f1 , 
+\f2 SMALL
+\f1 , 
+\f2 MEDIUM
+\f1 , or 
+\f2 LARGE
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 flbAvailability
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 SINGLE_NODE
+\f1  or 
+\f2 ACTIVE_PASSIVE
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 flbSize
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 SMALL
+\f1 , 
+\f2 MEDIUM
+\f1 , 
+\f2 LARGE
+\f1 , or 
+\f2 X-LARGE
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 flbNetworkType
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Use 
+\f2 DVPG
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networkSearchDomains
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of DNS search domains.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 networkNtpServers
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of NTP servers.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 dnsServers
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Array of DNS servers.\
+\cell \lastrow\row
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 tkgsSiteSpec[] (each element)\
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f1\b0 \cf0 Field\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Req\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Notes\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 edgeSite
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Must match 
+\f2 infrastructure.json
+\f1  
+\f2 clusters[].edgeSite
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 FLB name for this site.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVipStartIP
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for FLB virtual IP range.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVipIPCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Count of VIPs from flbVipStartIP.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Must match infra 
+\f2 networkSegments[].name
+\f1 ; gateway from infra.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for FLB management network.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 IP count for FLB management.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkGateway
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override gateway (otherwise from infra by name).\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Match infra segment name; gateway from infra.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for FLB virtual server network.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 IP count; default may be used.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkGateway
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Override gateway (otherwise from infra by name).\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsMgmtNetworkSpec.tkgsMgmtNetworkName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Must match infra segment name.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for VKS management network.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 IP count for VKS management.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Must match infra segment name.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for workload VIP range.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 IP count for workload VIP range.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Yes\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Start IP for workload service range.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 No\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Count (e.g. 256 or 512); must occupy full CIDR.\
+\cell \lastrow\row
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Configuration Help
+\f1\b0 : Run 
+\f2 Show-SupervisorJsonConfigurationHelp
+\f1  to view the full reference (Key, Required, Notes). Use 
+\f2 -Format List
+\f1  for narrow screens or 
+\f2 -Format Table
+\f1  for wide; 
+\f2 -Filter
+\f1  for wildcard search on keys.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Harbor and ArgoCD Deployment Notes\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 Harbor: Secret Management and Just-in-Time Environment Variables\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Harbor requires six secrets. Each 
+\f2 harborConfiguration
+\f1  secret field supports two modes:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Plain-text in JSON
+\f1\b0  \'96 Value is used as-is. Not recommended for production secrets in version-controlled files.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f4\b $env:VARNAME
+\f0  reference
+\f1\b0  \'96 Resolved from the named environment variable at runtime. If the variable is not set when the script runs, you are prompted interactively (masked input) during the pre-flight phase \'97 before any deployment step begins. The entered value is stored in the process environment for the remainder of the run so each variable is prompted for at most once.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Setting environment variables on Windows before running (recommended for automation):
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 $env:HARBOR_ADMIN_PASSWORD = "MyAdminPassword1"\uc0\u8232 $env:SECRET_KEY             = "MySecretKey12345"   # Must be exactly 16 characters (AES-128)\u8232 $env:DATABASE_PASSWORD      = "MyDatabasePw1"\u8232 $env:CORE_SECRET_KEY        = "MyCoreSecret1"\u8232 $env:JOBSERVICE_SECRET_KEY  = "MyJobSvcSecret1"\u8232 $env:REGISTRY_SECRET_KEY    = "MyRegSecret1"\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 If env vars are not pre-set,
+\f1\b0  the script prompts at the start of the run (before connecting to vCenter):\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [WARNING] Environment variable "HARBOR_ADMIN_PASSWORD" (harborConfiguration.harborAdminPassword)\uc0\u8232           is not set. Prompting for interactive input.\u8232 Enter value for harborConfiguration.harborAdminPassword (env:HARBOR_ADMIN_PASSWORD): ****\u8232 \u8232 [WARNING] Environment variable "SECRET_KEY" (harborConfiguration.secretKey) is not set.\u8232           Prompting for interactive input.\u8232 Enter value for harborConfiguration.secretKey (env:SECRET_KEY): ****************\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f4\b \cf0 secretKey
+\f0  length:
+\f1\b0  Must be exactly 
+\f0\b 16 characters
+\f1\b0  (AES-128). This constraint is enforced at the point of entry \'97 whether the value came from a pre-set env var or interactive input:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Pre-set env var with wrong length:
+\f1\b0  An error is logged, the variable is cleared, and you are prompted to enter a corrected 16-character value before deployment proceeds.\
+\'95	
+\f0\b Interactive input with wrong length:
+\f1\b0  The error is shown immediately and the prompt repeats until a valid 16-character value is entered (or Ctrl+C to abort).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Plain-text value in JSON with wrong length:
+\f1\b0  Caught at pre-flight validation (
+\f2 -ValidateOnly
+\f1  or at the start of any run) before any deployment begins.\
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 Example session when 
+\f2 SECRET_KEY
+\f1  is set to an 8-character value:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [ERROR] Environment variable "SECRET_KEY" (harborConfiguration.secretKey) has 8 character(s)\uc0\u8232         but must be exactly 16.\u8232 Would you like to re-enter harborConfiguration.secretKey? (Y/N): Y\u8232 [WARNING] Prompting for corrected value for harborConfiguration.secretKey (env:SECRET_KEY).\u8232 Enter value for harborConfiguration.secretKey (env:SECRET_KEY): ________\u8232 [ERROR] harborConfiguration.secretKey must be exactly 16 character(s) but the entered value\u8232         is 8 character(s).\u8232 Would you like to re-enter harborConfiguration.secretKey? (Y/N): Y\u8232 Enter value for harborConfiguration.secretKey (env:SECRET_KEY): ________________\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 Choosing 
+\f0\b N
+\f1\b0  at the 
+\f2 (Y/N)
+\f1  prompt aborts the deployment cleanly before any vCenter connection or deployment step:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 Would you like to re-enter harborConfiguration.secretKey? (Y/N): N\uc0\u8232 [ERROR] User chose not to re-enter harborConfiguration.secretKey. Aborting deployment.\u8232 Exception: Deployment aborted: harborConfiguration.secretKey must be exactly 16 character(s).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 TLS certificate and private key validation:
+\f1\b0  
+\f2 tlsCrt
+\f1  and 
+\f2 caCrt
+\f1  must contain PEM certificates (
+\f2 -----BEGIN CERTIFICATE-----
+\f1 ). 
+\f2 tlsKey
+\f1  must contain a PEM private key. The script validates the first line of each file before deployment and produces a clear error if the types are swapped (a common mistake when the 
+\f2 .crt
+\f1  and 
+\f2 .key
+\f1  file paths are accidentally transposed).\
+
+\f0\b Debug log redaction:
+\f1\b0  When running with 
+\f2 -LogLevel DEBUG
+\f1 , all secret values in the YAML dump are replaced with 
+\f2 [REDACTED]
+\f1 . The private key PEM block (
+\f2 tls.key
+\f1 ) is redacted line-by-line. The TLS certificate (
+\f2 tls.crt
+\f1 ) is left visible as it is public material. The key name and YAML structure remain intact for structural debugging.\
+
+\f0\b Saving the Harbor data values file (
+\f4 -SaveHarborYaml
+\f0 ):
+\f1\b0  By default, the temporary Harbor data values YAML is deleted after successful installation. Specify 
+\f2 -SaveHarborYaml
+\f1  to move it to a 
+\f2 HarborYaml
+\f1  subdirectory under the module directory instead:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 Start-ModernEdgeAtScale -SaveHarborYaml\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 The directory is created automatically. If it cannot be created, deployment exits with an error before Harbor installation begins.\
+\pard\pardeftab720\li720\sa180\partightenfactor0
+
+\f0\b \cf0 Security warning:
+\f1\b0  The saved file contains 
+\f0\b Harbor passwords and secrets in plain text
+\f1\b0 . A 
+\f2 [WARNING]
+\f1  is logged whenever this switch is used. A redacted copy is available in the deployment log. Treat the 
+\f2 HarborYaml
+\f1  directory like a credentials store \'97 restrict access, exclude it from source control, and 
+\f0\b delete the file immediately
+\f1\b0  after resolving the issue.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Harbor credentials display:
+\f1\b0  After a successful Harbor deployment, the script always prints the Harbor login details (URL, admin username, and password) directly to the console, regardless of the configured 
+\f2 LogLevel
+\f1 . This ensures credentials are never silently swallowed even when running at a high log level.\
+
+\f0\b Supervisor container image registry registration:
+\f1\b0  After Harbor succeeds, the module registers it on the Supervisor (
+\f0\b Supervisor 
+\f5 \uc0\u8594 
+\f0  Configure 
+\f5 \uc0\u8594 
+\f0  Container Registries
+\f1\b0  in vCenter) using the Harbor VIP, admin login, and optional 
+\f2 caCrt
+\f1 , and sets it as the default registry.\
+On 
+\f2 -CleanUp Harbor
+\f1 , 
+\f2 -CleanUp Supervisor
+\f1 , or 
+\f2 -CleanUp All
+\f1 , that registration is removed before the Harbor service uninstall. Failures there log as warnings; finish the step in vCenter if needed.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 ArgoCD: Deployment Output, Namespace Uniqueness, and Fallback\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs24 \cf0 Deployment output:
+\f1\b0  After a successful ArgoCD instance deployment, the script logs the initial admin credentials and provides the command to change them:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [INFO] Login as user "admin" using temporary password: vEHJgoj3wGtHQDlI\uc0\u8232 [INFO] To update your password run: "argocd.exe account update-password\u8232        --server 10.40.12.203 --account admin --insecure"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 Change the password immediately after deployment using the provided command.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Namespace uniqueness:
+\f1\b0  The ArgoCD namespace in 
+\f2 argocd-deployment.yml
+\f1  is automatically suffixed with the cluster MoRef (e.g. 
+\f2 argocd
+\f1  
+\f3 \uc0\u8594 
+\f1  
+\f2 argocd-c462
+\f1 ). This prevents conflicts when multiple supervisor clusters share the same vCenter. The base namespace in 
+\f2 argocd-deployment.yml
+\f1  must match 
+\f2 supervisorServices.nameSpacePrefix
+\f1  in 
+\f2 infrastructure.json
+\f1 ; the suffix is appended automatically.\
+
+\f0\b ArgoCD rollback and retry:
+\f1\b0  If ArgoCD deployment fails (pods do not reach ready state, instance timeout, or YAML misconfiguration), rollback removes only the ArgoCD namespace. The supervisor and Harbor remain intact. To fix the YAML and retry:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # 1. Remove only the ArgoCD namespace; supervisor and Harbor remain intact.\uc0\u8232 Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\u8232 \u8232 # 2. Fix your argocd-deployment.yml, then re-run.\u8232 #    Supervisor and Harbor steps are idempotently skipped.\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Harbor rollback and retry:
+\f1\b0  Harbor failure rolls back only the Harbor Supervisor Service. The supervisor and ArgoCD remain intact and are idempotently verified (not re-deployed) on retry:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # 1. If you declined the rollback prompt or the service is stuck in ERROR state:\uc0\u8232 Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\u8232 \u8232 # 2. Fix the issue (see Troubleshooting below), then retry.\u8232 #    Supervisor and ArgoCD steps are idempotently skipped.\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Autonomous (unattended) runs:
+\f1\b0  Use 
+\f2 -RollbackOnFailure $true
+\f1  to roll back automatically on any failure without prompting. Use 
+\f2 -RollbackOnFailure $false
+\f1  to skip rollback and continue to the next site. Omit the parameter for an interactive Y/N/Always prompt at each failure.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Logging\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 The module provides comprehensive logging with multiple levels:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b DEBUG
+\f1\b0 : Detailed diagnostic information for troubleshooting\
+\'95	
+\f0\b INFO
+\f1\b0 : General informational messages about deployment progress\
+\'95	
+\f0\b ADVISORY
+\f1\b0 : Important notices that don't indicate problems\
+\'95	
+\f0\b WARNING
+\f1\b0 : Warning messages about potential issues\
+\'95	
+\f0\b EXCEPTION
+\f1\b0 : Caught exceptions that were handled\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b ERROR
+\f1\b0 : Error messages indicating failures\
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 Log files are created in the 
+\f2 logs
+\f1  subdirectory with the naming pattern:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 logs/ModernEdgeAtScale-YYYY-MM-DD.log\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Troubleshooting\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 Template Files Not Found\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 If 
+\f2 Copy-ModernEdgeAtScaleTemplates
+\f1  cannot find template files:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Check module installation path\uc0\u8232 (Get-Module -Name ModernEdgeAtScale -ListAvailable).ModuleBase\u8232 \u8232 # Verify templates exist\u8232 Test-Path "$((Get-Module ModernEdgeAtScale -ListAvailable).ModuleBase)\\Templates"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Module Not Found\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 If the module is not recognized:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Check if module is installed\uc0\u8232 Get-Module -Name ModernEdgeAtScale -ListAvailable\u8232 \u8232 # Check module path\u8232 $env:PSModulePath\u8232 \u8232 # Reinstall if needed\u8232 Install-Module -Name ModernEdgeAtScale -Force\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Deployment Failures\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 1.	
+\f0\b Enable DEBUG logging
+\f1\b0 : 
+\f2 Start-ModernEdgeAtScale -LogLevel DEBUG
+\f1 \
+2.	
+\f0\b Check log files
+\f1\b0 : Review 
+\f2 logs/ModernEdgeAtScale-*.log
+\f1 \
+3.	
+\f0\b Validate JSON files
+\f1\b0 : Ensure configuration files are valid JSON\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 4.	
+\f0\b Verify prerequisites
+\f1\b0 : Confirm VCF.PowerCLI 9.0+, kubectl, and vcf CLI are available\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Cleanup: Management Restore or VDS Removal Fails\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Cleanup no longer requires 
+\f2 clusters.networking.temporaryManagementIp
+\f1 . Management (vmk0) is moved from the VDS to a standard switch programmatically using the same API as vCenter\'92s 
+\f0\b Migrate VMkernel Adapter
+\f1\b0  wizard. If that fails, the script reports the error and instructs you to move vmk0 manually in vCenter, then re-run cleanup.\
+If cleanup reports "could not remove any pNIC from VDS" (vSphere rolled back to avoid disconnecting the host) or "Port group mgmt is in use":\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 1.	In vCenter go to 
+\f0\b Host 
+\f5 \uc0\u8594 
+\f0  Configure 
+\f5 \uc0\u8594 
+\f0  Networking 
+\f5 \uc0\u8594 
+\f0  VMkernel adapters
+\f1\b0  for each host in the cluster.\
+2.	Edit 
+\f0\b vmk0
+\f1\b0  and change its port group from the distributed "mgmt" port group to a standard switch (e.g. create a temporary vSwitch with one pNIC and a Management port group, or use an existing standard switch).\
+3.	Save so vmk0 is on a standard switch on all hosts.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 4.	Re-run cleanup with the same parameters (e.g. 
+\f2 -EdgeSite site2 -CleanUp Compute -Force
+\f1 ). With management off the VDS, cleanup will skip restore and remove the VDS and cluster.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Harbor: secretKey Wrong Length\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs24 \cf0 When using 
+\f4 $env:
+\f0  references:
+\f1\b0  The script detects a wrong-length value during the pre-flight prompting phase and asks whether you want to re-enter:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [ERROR] Environment variable "SECRET_KEY" (harborConfiguration.secretKey) has 8 character(s)\uc0\u8232         but must be exactly 16.\u8232 Would you like to re-enter harborConfiguration.secretKey? (Y/N): Y\u8232 [WARNING] Prompting for corrected value for harborConfiguration.secretKey (env:SECRET_KEY).\u8232 Enter value for harborConfiguration.secretKey (env:SECRET_KEY): ________________\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1 \cf0 \'95	
+\f0\b Y
+\f1\b0  \'97 re-prompts. The Y/N question repeats after each wrong-length entry.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b N
+\f1\b0  \'97 aborts deployment cleanly. No rollback is needed; nothing has been deployed yet.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 When using a plain-text value in JSON:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [ERROR] clusters[].harborConfiguration.secretKey for edgeSite "site1" must be\uc0\u8232         exactly 16 characters but is 8 character(s). Harbor uses it as an AES-128\u8232         encryption key.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Fix:
+\f1\b0  Update the 
+\f2 secretKey
+\f1  value in 
+\f2 infrastructure.json
+\f1  to exactly 16 characters, then re-run. No rollback is needed.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Harbor: TLS Certificate and Key Swapped (PEM Type Mismatch)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs24 \cf0 Error:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 [ERROR] clusters[].harborConfiguration.tlsCrt must contain a PEM certificate\uc0\u8232         (-----BEGIN CERTIFICATE-----) but the file at "...\\tls.crt" begins with\u8232         "-----BEGIN PRIVATE KEY-----" for edgeSite "site1".\u8232         Check that tlsCrt and tlsKey paths are not swapped.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Fix:
+\f1\b0  Verify that 
+\f2 tlsCrt
+\f1  points to the certificate file and 
+\f2 tlsKey
+\f1  points to the private key file. This error is caught at pre-flight validation before any deployment begins.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Harbor: Service Enters ERROR State\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 If Harbor enters an 
+\f2 ERROR
+\f1  state shortly after installation (within 5\'9610 seconds of the first status poll):\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 1.	
+\f0\b Check vCenter Events
+\f1\b0  (Menu 
+\f3 \uc0\u8594 
+\f1  Events) for messages containing 
+\f2 "Registering harbor.tanzu.vmware.com... already exists"
+\f1 . If present, this is a vCenter async conflict: delete the service from 
+\f0\b Menu 
+\f5 \uc0\u8594 
+\f0  Supervisor Management 
+\f5 \uc0\u8594 
+\f0  Services
+\f1\b0 , then roll back and re-run.\
+2.	
+\f0\b Check the secretKey length
+\f1\b0  \'97 Harbor will fail immediately if 
+\f2 secretKey
+\f1  is not exactly 16 characters. Look for 
+\f2 [ERROR]
+\f1  messages about secretKey length in the pre-flight output.\
+3.	
+\f0\b Check the vCenter Events for detailed error text
+\f1\b0  \'97 the 
+\f2 ERROR
+\f1  message from the script (e.g. 
+\f2 "OCI Registry"
+\f1 ) identifies the failing component but not the root cause. The full error is in vCenter Events for the supervisor.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 4.	
+\f0\b Admission or scheduling:
+\f1\b0  HA admission can block new VMs even when free capacity looks sufficient. For vSAN OSA/ESA, try 
+\f4\b haPolicy
+\f1\b0  in 
+\f2 infrastructure.json
+\f1  (
+\f2 slotBased
+\f1 , 
+\f2 reservationBased
+\f1 , or 
+\f2 disabled
+\f1 ) or change HA admission in vCenter, then retry.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Recovery:
+\f1\b0 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Roll back Harbor only (supervisor and ArgoCD remain).\uc0\u8232 Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\u8232 \u8232 # Fix the issue, then retry.\u8232 Start-ModernEdgeAtScale -EdgeSite "site1"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Common Issues\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b "Templates directory not found"
+\f1\b0 : Reinstall the module or verify FileList in manifest\
+\'95	
+\f0\b "Required template files not found"
+\f1\b0 : Run 
+\f2 Copy-ModernEdgeAtScaleTemplates
+\f1  to verify files exist\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b "Unable to determine module installation path"
+\f1\b0 : Ensure module is properly installed via 
+\f2 Install-Module
+\f1 \
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Requirements\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 PowerShell Module Dependencies\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b VCF.PowerCLI
+\f1\b0 \
+\pard\pardeftab720\li360\sa180\partightenfactor0
+
+\f2 \cf0 Install-Module -Name VCF.PowerCLI\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 External Tools\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b kubectl
+\f1\b0 : Required for ArgoCD operations\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b vcf CLI
+\f1\b0 : Required for supervisor management operations\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Environment\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	VMware Cloud Foundation 9.x\
+\'95	vCenter Server with administrative access\
+\'95	ESX hosts in connected state\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	Network connectivity to vCenter and ESX hosts\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Version History\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt \ul CHANGELOG.md}} for detailed version history.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Version 1.0.0.3 (Current)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Summary aligned with {\field{\*\fldinst{HYPERLINK "RELEASE_NOTES.md"}}{\fldrslt \ul RELEASE_NOTES.md}}:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	Refactored as a module.\
+\'95	
+\f0\b vLCM
+\f1\b0 : Cluster images from the vCenter image catalog (JSON or interactive); compliance check before the supervisor workflow.\
+\'95	
+\f0\b Multi-cluster / multi-edge
+\f1\b0 : Several clusters in one vCenter; multiple edge sites from shared 
+\f2 infrastructure.json
+\f1  / 
+\f2 supervisor.json
+\f1  (breaking JSON changes for multi-node and multi-edge).\
+\'95	
+\f0\b Supervisor
+\f1\b0 : Automatic content catalog creation; automatic upgrade to the latest supervisor version after deployment.\
+\'95	
+\f0\b Argo CD and Harbor
+\f1\b0 : Login details per edge site; Harbor per edge site; optional 
+\f0\b ComputeOnly
+\f1\b0  deployment; disable Argo CD or Harbor in JSON (non-default).\
+\'95	
+\f0\b Cluster and networking
+\f1\b0 : Retreat mode (KB316514, vCLS absent); stretched vSAN (
+\f0\b ESA
+\f1\b0  and 
+\f0\b OSA
+\f1\b0 ); optional 
+\f4\b haPolicy
+\f1\b0  for vSAN multi-host HA admission (
+\f2 slotBased
+\f1  / 
+\f2 reservationBased
+\f1  / 
+\f2 disabled
+\f1 ); witness validation; disk group and disk claim; VMkernel checks for data nodes and witness; verify witness OVA matches ESA vs OSA.\
+\'95	
+\f0\b vSAN operations
+\f1\b0 : Automatic disk claim; VMFS largest-disk selection; health checks (lab mode suppresses selected checks); sync configuration to hosts before supervisor; verify cluster is not partitioned before supervisor; auto-rebalance at 30%; warn if ESA and OSA data nodes contribute unequal disk counts.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Operations
+\f1\b0 : User prompted for rollback when compute or supervisor rollback fails (supervisor failure rolls back supervisor only); optional non-interactive authentication via environment variables.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Version 1.0.0.2\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	Significant reliability and performance improvements\
+\'95	Cross-platform compatibility fixes\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	Enhanced error handling and logging\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Contributing\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 This module is maintained by Broadcom. For issues, feature requests, or contributions, please refer to the project repository.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 License\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Copyright (c) 2025 Broadcom. All Rights Reserved.\
+See the module manifest or LICENSE file for full license details.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Support\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 For support and documentation:\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f0\b Project Repository
+\f1\b0 : {\field{\*\fldinst{HYPERLINK "https://github.com/vmware/powershell-module-for-simple-supervisor-deployment-at-scale"}}{\fldrslt \ul GitHub Repository}}\
+\'95	
+\f0\b Documentation
+\f1\b0 : See module help: 
+\f2 Get-Help Start-ModernEdgeAtScale -Full
+\f1 \
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b VMware Cloud Foundation Documentation
+\f1\b0 : {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cloud-foundation.html"}}{\fldrslt \ul VCF Documentation}}\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 Support troubleshooting\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Use the 
+\f0\b log file
+\f1\b0  under 
+\f2 logs/
+\f1  (see 
+\f2 New-LogFile
+\f1  / run output for the path). Search the log for the same keywords as the console.\
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrt\brdrnil \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Symptom / throw text\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Log hints\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 What to do\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 VCF.PowerCLI is not installed
+\f1  or 
+\f2 below the minimum required
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 (ERROR)
+\f1  lines from 
+\f2 Initialize-ScriptVcfPowerCliModuleVersion
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Install {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/administration-sdks-cli-and-tools/introduction-to-vmware-vsphere-powercli.html"}}{\fldrslt \ul VCF PowerCLI}} 
+\f0\b 9.0+
+\f1\b0 ; run 
+\f2 Get-Module VCF.PowerCLI -ListAvailable
+\f1 .\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 No vCenter password supplied
+\f1  / REST 
+\f2 Success = false
+\f1  with password message\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 New-VCenterRestApiSession
+\f1  or 
+\f2 Get-SupervisorId
+\f1  ERROR\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Main flow: ensure 
+\f0\b Connect-Vcenter
+\f1\b0  succeeded (sets 
+\f2 Script:VcenterInsecurePassword
+\f1 ). Ad-hoc REST: pass 
+\f4\b -VcenterPassword
+\f1\b0  (SecureString) or 
+\f4\b -VcenterInsecurePassword
+\f1\b0 . See {\field{\*\fldinst{HYPERLINK "PASSWORD_HANDLING.md"}}{\fldrslt \ul PASSWORD_HANDLING.md}}.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 401
+\f1  / 
+\f2 Unauthorized
+\f1  (REST session)\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ERROR + WARNING credential lines after 
+\f2 New-VCenterRestApiSession
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Wrong SSO password, locked user, or missing API privileges\'97not the ESXi root password. Confirm 
+\f2 common.vCenterUser
+\f1  and account role.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 SSL / certificate / TLS (REST)\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 ERROR containing 
+\f2 SSL
+\f1  or 
+\f2 certificate
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Lab: use 
+\f4\b -InsecureTls
+\f1\b0  where supported, import vCenter CA, or align 
+\f2 Set-PowerCLIConfiguration -InvalidCertificateAction
+\f1  with your policy.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 Required cmdlet ... was not found
+\f1  (supervisor upgrade / Harbor / Argo service spec)\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 DEBUG around 
+\f2 Get-VcfSdkInitializeCommand
+\f1 \
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f0\b \cf0 Import-Module VCF.PowerCLI
+\f1\b0  in the same session; version must be 
+\f0\b 9.0+
+\f1\b0 . Cmdlet names differ slightly between builds; the module resolves them when the SDK is loaded.\
+\cell \row
+
+\itap1\trowd \taflags1 \trgaph108\trleft-108 \trbrdrl\brdrnil \trbrdrt\brdrnil \trbrdrr\brdrnil 
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx2880
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx5760
+\clvertalc \clshdrawnil \clbrdrt\brdrs\brdrw20\brdrcf2 \clbrdrl\brdrs\brdrw20\brdrcf2 \clbrdrb\brdrs\brdrw20\brdrcf2 \clbrdrr\brdrs\brdrw20\brdrcf2 \clpadl100 \clpadr100 \gaph\cellx8640
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Supervisor / namespace API failures\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+
+\f2 \cf0 (ERROR)
+\f1  with cmdlet or REST path\
+\cell 
+\pard\intbl\itap1\pardeftab720\partightenfactor0
+\cf0 Capture 
+\f0\b log + vCenter version + VCF.PowerCLI version
+\f1\b0  (
+\f2 Get-Module VCF.PowerCLI -ListAvailable
+\f1 ). Open a support issue with that bundle.\
+\cell \lastrow\row
+\pard\pardeftab720\sa180\partightenfactor0
+\cf0 \
+Automated 
+\f0\b smoke tests
+\f1\b0  (no vCenter): from the module directory run 
+\f2 Invoke-Pester ./Tests -Output Normal
+\f1 .\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Related Resources\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	{\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cloud-foundation.html"}}{\fldrslt \ul VMware Cloud Foundation Documentation}}\
+\'95	{\field{\*\fldinst{HYPERLINK "https://blogs.vmware.com/cloud-foundation/2025/07/14/modernizing-your-edge-with-single-node-vsphere-supervisor-in-vmware-cloud-foundation-9-0/"}}{\fldrslt \ul Single-Node vSphere Supervisor Design Guidance}}\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	{\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/using-argo-cd-service/argocd-custom-resrouce-reference.html"}}{\fldrslt \ul ArgoCD Service Documentation}}\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Execution Steps\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs28 \cf0 1. Install VCF.PowerCLI Module\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Install the required PowerCLI module for VCF.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 2. Install module and copy template files\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\fs24 \cf0 Recommended:
+\f1\b0  Install 
+\f0\b ModernEdgeAtScale
+\f1\b0  per {\field{\*\fldinst{HYPERLINK "#installation"}}{\fldrslt \ul Installation}}, run 
+\f2 Import-Module ModernEdgeAtScale
+\f1 , then copy the bundled templates to your working directory:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 That copies eight files (paths in 
+\f2 infrastructure.json
+\f1  must point to where you placed them):\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	
+\f2 infrastructure.json
+\f1  \'96 vCenter, clusters, networks, storage, supervisor service YAML paths, Harbor settings\
+\'95	
+\f2 supervisor.json
+\f1  \'96 Supervisor networking, load balancer, sizing\
+\'95	
+\f2 infrastructure-config-help.json
+\f1  \'96 Reference table source for 
+\f2 Show-InfrastructureJsonConfigurationHelp
+\f1  (offline copy alongside your JSON)\
+\'95	
+\f2 supervisor-config-help.json
+\f1  \'96 Reference table source for 
+\f2 Show-SupervisorJsonConfigurationHelp
+\f1  (offline copy alongside your JSON)\
+\'95	
+\f2 argocd-deployment.yml
+\f1  \'96 Argo CD instance CustomResource spec (often usable as-is for lab; customize for production)\
+\'95	
+\f2 1.1.0-25100889.yml
+\f1  \'96 Argo CD operator Carvel package (usually unchanged)\
+\'95	
+\f2 harbor-data-values-v2.14.2.yml
+\f1  \'96 Harbor registry data values (hostname, TLS, secrets)\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f2 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+\f1  \'96 Harbor Supervisor Service package (usually unchanged)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Alternate:
+\f1\b0  If you use a zip bundle instead of the gallery module, extract it and use the same filenames (typically under 
+\f2 Templates
+\f1  next to the 
+\f2 .psm1
+\f1 ). Update paths in 
+\f2 infrastructure.json
+\f1  to match your machine.\
+For sample JSON and 
+\f2 Start-ModernEdgeAtScale
+\f1  usage, see {\field{\*\fldinst{HYPERLINK "EXAMPLE.md"}}{\fldrslt \ul EXAMPLE.md}}.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 3. Configure infrastructure.json\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Open 
+\f2 infrastructure.json
+\f1  and review all the fields, updating as required for your environment. 
+\f0\b Accuracy here is crucial for successful deployment.
+\f1\b0 \
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+\cf0 \'95	Set 
+\f2 supervisorServices.argoCdOperatorYamlPath
+\f1  and 
+\f2 supervisorServices.argoCdDeploymentYamlPath
+\f1  to your copies of the operator YAML and 
+\f2 argocd-deployment.yml
+\f1  unless Argo CD is disabled (
+\f2 supervisorServices.disableArgoCD
+\f1 ).\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	Configure Harbor template paths and 
+\f2 harborConfiguration
+\f1  unless Harbor is disabled (
+\f2 supervisorServices.disableHarbor
+\f1 ).\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Argo CD namespace:
+\f1\b0  The base namespace in 
+\f2 argocd-deployment.yml
+\f1  must match 
+\f2 supervisorServices.nameSpacePrefix
+\f1  (default 
+\f2 argocd
+\f1 ). During deployment the script appends the cluster MoRef (e.g. 
+\f2 argocd
+\f1  
+\f3 \uc0\u8594 
+\f1  
+\f2 argocd-c462
+\f1 ) so multiple supervisors on one vCenter do not collide. Edit 
+\f2 argocd-deployment.yml
+\f1  only when you need a non-default instance spec; see {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/using-argo-cd-service/argocd-custom-resrouce-reference.html"}}{\fldrslt \ul Argo CD service documentation}}.\
+
+\f0\b Quick Reference
+\f1\b0 : Use the built-in helper function to view the configuration reference table:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Auto-detects best format based on terminal width\uc0\u8232 Show-InfrastructureJsonConfigurationHelp\u8232 \u8232 # Or specify format explicitly\u8232 Show-InfrastructureJsonConfigurationHelp -Format List    # For narrow screens\u8232 Show-InfrastructureJsonConfigurationHelp -Format Table     # For wide screens\u8232 Show-InfrastructureJsonConfigurationHelp -Format GridView # Interactive (Windows only)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 Alternatively, refer to the table in 
+\f2 Admin.Guide.Single.Node.Supervisor.rtf
+\f1  for detailed configuration guidance.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Optional:
+\f1\b0  Run 
+\f2 Start-ModernEdgeAtScale -ValidateOnly
+\f1  to validate JSON and YAML paths without connecting to vCenter. See {\field{\*\fldinst{HYPERLINK "EXAMPLE.md"}}{\fldrslt \ul EXAMPLE.md}} for sample output.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 4. Configure supervisor.json\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 Open 
+\f2 supervisor.json
+\f1  and review all the fields, updating as required for your environment.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b \cf0 Quick Reference
+\f1\b0 : Use the built-in helper function to view the configuration reference table:\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f2 \cf0 # Auto-detects best format based on terminal width\uc0\u8232 Show-SupervisorJsonConfigurationHelp\u8232 \u8232 # Or specify format explicitly\u8232 Show-SupervisorJsonConfigurationHelp -Format List    # For narrow screens\u8232 Show-SupervisorJsonConfigurationHelp -Format Table     # For wide screens\u8232 Show-SupervisorJsonConfigurationHelp -Format GridView # Interactive (Windows only)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1 \cf0 Alternatively, refer to the table in 
+\f2 Admin.Guide.Single.Node.Supervisor.rtf
+\f1  for detailed configuration guidance.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 5. Argo CD operator YAML (optional)\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 If Broadcom publishes a newer Argo CD operator package than the template (
+\f2 1.1.0-25100889.yml
+\f1 ), download it from the product documentation and set 
+\f2 supervisorServices.argoCdOperatorYamlPath
+\f1  in 
+\f2 infrastructure.json
+\f1  to that file.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs28 \cf0 6. Install VCF CLI\
+\pard\tx360\pardeftab720\li360\fi-360\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	Install the VCF CLI per Broadcom: {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt \ul Installing and Using VCF CLI v9}}. First-run terms and CEIP are described there; set those before unattended automation.\
+\'95	
+\f0\b Windows:
+\f1\b0  The installer typically provides 
+\f2 vcf.exe
+\f1 . The module accepts 
+\f4\b vcf.exe
+\f0  or 
+\f4 vcf
+\f1\b0  on PATH (it picks the first name that resolves). Rename or adjust only if your deployment standard requires a specific filename.\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+\cf0 \'95	
+\f0\b Linux / macOS:
+\f1\b0  Use the 
+\f2 vcf
+\f1  binary from the same documentation. Install 
+\f0\b kubectl
+\f1\b0  from {\field{\*\fldinst{HYPERLINK "https://kubernetes.io/docs/tasks/tools/"}}{\fldrslt \ul Kubernetes install tools}} if you have not already.\
+\pard\pardeftab720\sa180\partightenfactor0
+
+\f0\b\fs32 \cf0 Important Notes\
+\pard\tx360\pardeftab720\li360\fi-360\sa180\partightenfactor0
+
+\f1\b0\fs24 \cf0 \'95	
+\f0\b Networks:
+\f1\b0  Expect the four-network edge layout (management, workload, two load balancer segments) and four VLAN IDs in 
+\f2 infrastructure.json
+\f1 , matching the design docs linked above.\
+\'95	
+\f0\b CLI tools:
+\f1\b0  Install 
+\f0\b kubectl
+\f1\b0  ({\field{\*\fldinst{HYPERLINK "https://kubernetes.io/docs/tasks/tools/"}}{\fldrslt \ul Kubernetes install tools}}) and the 
+\f0\b VCF CLI
+\f1\b0  ({\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt \ul Installing and Using VCF CLI v9}}) before you run the module (see step 6).\
+\'95	
+\f0\b Platforms:
+\f1\b0  Tested on Windows and macOS with PowerShell 7.4+.\
+}
