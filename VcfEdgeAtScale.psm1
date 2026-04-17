@@ -26,7 +26,7 @@
 #
 # =============================================================================
 #
-# PowerShell Module: ModernEdgeAtScale
+# PowerShell Module: VcfEdgeAtScale
 # Module Version: 1.0.0.3
 # Last modified: 2026-04-13
 #
@@ -37,7 +37,7 @@
 #   Private — VDS, VMkernel cleanup, management restore
 #   Private — supervisor, Harbor, Argo CD, workload networking
 #   Private — cleanup, deployment bootstrap, validation, vLCM helpers
-#   Exported — Start-ModernEdgeAtScale, templates, configuration help
+#   Exported — Start-VcfEdgeAtScale, templates, configuration help
 #
 #region Script scope variables
 $Script:ModuleVersion = '1.0.0.3'
@@ -69,11 +69,11 @@ $Script:LogLevelHierarchy = @{
     "ERROR" = 5
 }
 
-# Initialize log level (will be set by Start-ModernEdgeAtScale)
+# Initialize log level (will be set by Start-VcfEdgeAtScale)
 $Script:ConfiguredLogLevel = "INFO"
 # When $true, Invoke-PauseBeforeRollbackIfRequested will skip its prompt (cleanup confirmation is sufficient). Set during -CleanUp cleanup.
 $Script:CleanUpOnly = $false
-# Rollback on failure: $null = prompt (Y/N/Always), $true = always rollback (unattended), $false = never rollback (leave site broken, continue to next). Set by Start-ModernEdgeAtScale -RollbackOnFailure.
+# Rollback on failure: $null = prompt (Y/N/Always), $true = always rollback (unattended), $false = never rollback (leave site broken, continue to next). Set by Start-VcfEdgeAtScale -RollbackOnFailure.
 $Script:RollbackOnFailurePreference = $null
 # When user chooses "Always" at the prompt, no further prompts for remaining sites; always rollback. Reset at start of each run.
 $Script:RollbackAlwaysFromPrompt = $false
@@ -89,11 +89,13 @@ $Script:ArgoCDPhaseStarted = $false
 $Script:HarborPhaseStarted = $false
 # Highest installed VCF.PowerCLI version after Initialize-ScriptVcfPowerCliModuleVersion (used for 9.0 vs 9.1 compatibility gates).
 $Script:VcfPowerCliModuleVersion = $null
+# Parent directory of the infrastructure JSON file; set by Update-InfrastructureJsonReferencedFilePaths for Resolve-InfrastructureReferencedFilePath when combining supervisorServices parentDirectory with file names.
+$Script:InfrastructureJsonParentForPathResolution = $null
 
-# Enforce minimum engine version (must match ModernEdgeAtScale.psd1 PowerShellVersion).
+# Enforce minimum engine version (must match VcfEdgeAtScale.psd1 PowerShellVersion).
 $Script:MinimumPowerShellEngineVersion = [Version]"7.4"
 if ($PSVersionTable.PSVersion -lt $Script:MinimumPowerShellEngineVersion) {
-    throw "ModernEdgeAtScale requires PowerShell $($Script:MinimumPowerShellEngineVersion) or later. Current version is $($PSVersionTable.PSVersion). Install a newer pwsh and retry."
+    throw "VcfEdgeAtScale requires PowerShell $($Script:MinimumPowerShellEngineVersion) or later. Current version is $($PSVersionTable.PSVersion). Install a newer pwsh and retry."
 }
 
 #endregion
@@ -706,9 +708,9 @@ Function New-LogFile {
         Creates a log file with automatic directory structure and environment logging.
 
         .DESCRIPTION
-        The New-LogFile function establishes the logging infrastructure for the VCF PowerShell
-        Toolbox by creating a timestamped log file in a specified directory. The function creates
-        one log file using the format mm-dd-yyyy, ensuring logs are organized chronologically.
+        The New-LogFile function establishes the logging infrastructure for the VcfEdgeAtScale module by creating
+        a daily log file under the module root. The function creates
+        one log file using the format yyyy-MM-dd, ensuring logs are organized chronologically.
         If the log directory doesn't exist, it will be created automatically. When a new log file
         is created, the function automatically calls Get-EnvironmentSetup to record system
         information for troubleshooting purposes.
@@ -719,7 +721,7 @@ Function New-LogFile {
 
         .PARAMETER Prefix
         Specifies the prefix for the log file name. The final log file will be named
-        "{Prefix}-{mm-dd-yyyy}.log". Default value is "VCF.PS.Toolbox".
+        "{Prefix}-{yyyy-MM-dd}.log". Default value is "VcfEdgeAtScale".
 
         .PARAMETER Directory
         Specifies the directory name where log files will be stored, relative to the script root.
@@ -727,7 +729,7 @@ Function New-LogFile {
 
         .EXAMPLE
         New-LogFile
-        Creates a log file with default settings: "logs/VCF.PS.Toolbox-01-15-2024.log"
+        Creates a log file with default settings: "logs/VcfEdgeAtScale-2024-01-15.log"
 
         .EXAMPLE
         New-LogFile -Directory "audit" -Prefix "SecurityAudit"
@@ -741,7 +743,7 @@ Function New-LogFile {
 
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Directory = "logs",
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Prefix = "ModernEdgeAtScale"
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Prefix = "VcfEdgeAtScale"
     )
 
     # Generate timestamp for daily log file naming (yyyy-MM-dd format).
@@ -1400,7 +1402,7 @@ Function Invoke-VcenterReconnectIfNeeded {
         (3) interactive prompt for vCenter password.
         Intended for use in long-running deployment flows (e.g. after supervisor wait timeout) where the
         PowerCLI session may have expired. Requires Script:vCenterName and Script:VCenterUser to be set
-        (e.g. from Start-ModernEdgeAtScale). On successful reconnect, updates
+        (e.g. from Start-VcfEdgeAtScale). On successful reconnect, updates
         Script:VcenterInsecurePassword so REST API callers (Get-SupervisorId, etc.) continue to work.
 
         .OUTPUTS
@@ -1410,7 +1412,7 @@ Function Invoke-VcenterReconnectIfNeeded {
     Param ()
 
     if ([String]::IsNullOrWhiteSpace($Script:vCenterName) -or [String]::IsNullOrWhiteSpace($Script:VCenterUser)) {
-        throw "Invoke-VcenterReconnectIfNeeded requires Script:vCenterName and Script:VCenterUser to be set (e.g. from Start-ModernEdgeAtScale)."
+        throw "Invoke-VcenterReconnectIfNeeded requires Script:vCenterName and Script:VCenterUser to be set (e.g. from Start-VcfEdgeAtScale)."
     }
     $connectionTest = Test-VcenterConnection -ServerName $Script:vCenterName
     if ($connectionTest.IsConnected) {
@@ -8779,7 +8781,9 @@ Function Invoke-PauseBeforeRollbackIfRequested {
         "ProceedWithRollback" or "DoNotRollback".
 
         .NOTES
-        Uses Read-Host for Y/N/A in prompt mode. One invalid response skips rollback (DoNotRollback) to avoid log flood in non-interactive runs. MaxPromptRetries prevents runaway if Read-Host returns immediately.         Use -RollbackOnFailure $true to rollback without prompt.
+        Uses Read-Host for Y/N/A in prompt mode. One invalid response skips rollback (DoNotRollback) to avoid log flood in non-interactive runs. MaxPromptRetries prevents runaway if Read-Host returns immediately. Use -RollbackOnFailure $true to rollback without prompt.
+
+        Answering N (or -RollbackOnFailure $false) is intended for extended manual debugging while the site stays in its failed state. When you are done debugging, run the appropriate scoped cleanup (for example -CleanUp ArgoCD, -CleanUp Harbor, -CleanUp Supervisor, -CleanUp Compute, or -CleanUp All with -EdgeSite as needed) before the next full deployment so the retry starts from a consistent baseline.
     #>
 
     [CmdletBinding()]
@@ -11506,7 +11510,7 @@ Function Get-EsxDatastoreInfo {
         - Requires PowerCLI modules to be installed (VMware.VimAutomation.Core)
         - Health check criteria includes accessibility, state, and free space (warning if < 10%)
         - Uses Write-LogMessage with -SuppressOutputToScreen for consistent logging throughout the script
-        - Follows the error handling patterns of the ModernEdgeAtScale module
+        - Follows the error handling patterns of the VcfEdgeAtScale module
         - Refactored into modular helper functions for improved maintainability and testability
     #>
 
@@ -11914,7 +11918,7 @@ Function Wait-HarborServiceNamespaceTermination {
     Write-LogMessage -Type WARNING -Message "  3. Force-delete pods: kubectl delete pod --all -n <ns> --force --grace-period=0"
     Write-LogMessage -Type WARNING -Message "  4. Remove finalizers (last resort; may leave orphaned NSX-T/LB resources):"
     Write-LogMessage -Type WARNING -Message "     kubectl patch namespace <ns> -p '{`"metadata`":{`"finalizers`":null}}' --type=merge"
-    Write-LogMessage -Type WARNING -Message "Once all stuck namespaces are gone, re-run: Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite <site>"
+    Write-LogMessage -Type WARNING -Message "Once all stuck namespaces are gone, re-run: Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite <site>"
 }
 Function Remove-HarborContainerImageRegistry {
 
@@ -19250,7 +19254,7 @@ Function Install-HarborSupervisorService {
                     }
                     Write-LogMessage -Type ERROR -Message "Harbor installation failed: $cleanErrorMessage."
                     Write-Output ""
-                    Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update harborServiceYamlPath to a compatible version."
+                    Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update supervisorServices.harborServiceYamlFileName (and parentDirectory) to a compatible Carvel package file."
                     throw "Deployment failed. Check logs for details."
                 }
                 default {
@@ -22248,7 +22252,7 @@ Function New-HarborDataValuesFile {
 
         .PARAMETER HarborTemplateFilePath
         Full path to the Harbor data values YAML template file. Typically the value of
-        common.supervisorServices.harborDataTemplateYamlPath from infrastructure.json.
+        common.supervisorServices.harborDataTemplateYamlFileName (with parentDirectory) from infrastructure.json.
 
         .PARAMETER Hostname
         The DNS-compatible FQDN (or IP) that Harbor will be accessed at (e.g. "harbor.example.com").
@@ -24327,7 +24331,7 @@ Function Test-JsonShallowValidation {
     )
 
     if ($ComputeOnly) {
-        Write-LogMessage -Type INFO -Message "ComputeOnly: skipping supervisor.json shallow validation (missing keys, nulls, and edgeSite pairing with supervisor.json)."
+        Write-LogMessage -Type INFO -Message "ComputeOnly: skipping supervisor.json shallow validation."
         $supervisorDataValidationResult = [PSCustomObject]@{ IsValid = $true; Summary = "skipped (ComputeOnly)" }
         $supervisorNullValidationResult = [PSCustomObject]@{ IsValid = $true; Summary = "skipped (ComputeOnly)" }
     } else {
@@ -24450,6 +24454,20 @@ Function Test-JsonShallowValidation {
             Write-LogMessage -Type ERROR -Message "common.nonInteractivePassword must be true or false (boolean). Current value type: $($nonInteractivePasswordValue.GetType().Name). Fix the value in $InfrastructureJson and re-run."
             throw "Deployment failed. common.nonInteractivePassword must be true or false (boolean). Check logs for details."
         }
+    }
+
+    if (-not $ComputeOnly) {
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating supervisor service YAML and Harbor TLS paths (shallow check)..."
+        $inputDataForServicePaths = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputDataForServicePaths
+        $clustersForServicePaths = if ($EdgeSite) {
+            $edgeSitesForServicePaths = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputDataForServicePaths
+            @($inputDataForServicePaths.clusters | Where-Object { $_.edgeSite -in $edgeSitesForServicePaths })
+        } else {
+            @($inputDataForServicePaths.clusters)
+        }
+        Test-JsonShallowSupervisorServicesPathConfiguration -ClustersToValidate $clustersForServicePaths -InputData $inputDataForServicePaths
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Supervisor service YAML and Harbor TLS shallow path validation passed."
     }
 
     # If all validation results are valid, write a success message.
@@ -25742,7 +25760,7 @@ Function Test-VcenterAndEsxReachability {
         Verifies TCP port reachability for vCenter and a list of ESX hosts; throws if any target is unreachable.
 
         .DESCRIPTION
-        Used by Initialize-ModernEdgeAtScale to fail fast before credential prompts when vCenter or ESX hosts are unreachable on the given port (default 443).
+        Used by Initialize-VcfEdgeAtScale to fail fast before credential prompts when vCenter or ESX hosts are unreachable on the given port (default 443).
         .PARAMETER VcenterName
         vCenter hostname or IP to test.
         .PARAMETER EsxHosts
@@ -26527,18 +26545,96 @@ Function Test-JsonIpAddressesInCidrRanges {
 
     return $validationFailures
 }
+
+Function Test-JsonShallowSupervisorServicesPathConfiguration {
+
+    <#
+        .SYNOPSIS
+        Verifies that Argo CD, Harbor Carvel YAML, and Harbor TLS paths resolve to existing files after path expansion.
+
+        .DESCRIPTION
+        Intended for shallow validation after Update-InfrastructureJsonReferencedFilePaths. Uses
+        Get-EffectiveSupervisorServicesYamlPath for Argo and Harbor supervisor YAMLs (parentDirectory
+        + *YamlFileName or legacy *YamlPath). For Harbor TLS entries present on clusters where Harbor
+        is enabled, checks Test-Path on clusters[].harborConfiguration paths already expanded by Update.
+
+        .PARAMETER ClustersToValidate
+        Cluster objects from the same InputData instance passed to Update-InfrastructureJsonReferencedFilePaths.
+
+        .PARAMETER InputData
+        Parsed infrastructure JSON (Harbor TLS paths must already be expanded by Update-InfrastructureJsonReferencedFilePaths).
+
+        .OUTPUTS
+        None. Throws when a required path is missing or not a leaf file.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClustersToValidate,
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$InputData
+    )
+
+    foreach ($cluster in $ClustersToValidate) {
+        $currentEdgeSite = $cluster.edgeSite
+
+        if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableArgoCD")) {
+            foreach ($logicalName in @("argoCdOperatorYamlPath", "argoCdDeploymentYamlPath")) {
+                $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
+                if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
+                    Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    throw "Deployment failed. Check logs for details."
+                }
+                if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+                    Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    throw "Deployment failed. Check logs for details."
+                }
+            }
+        }
+
+        if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableHarbor")) {
+            foreach ($logicalName in @("harborDataTemplateYamlPath", "harborServiceYamlPath")) {
+                $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
+                if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
+                    Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    throw "Deployment failed. Check logs for details."
+                }
+                if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
+                    Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    throw "Deployment failed. Check logs for details."
+                }
+            }
+
+            $hc = $cluster.harborConfiguration
+            if ($hc) {
+                foreach ($tlsProperty in @("tlsCrt", "tlsKey", "caCrt")) {
+                    if ($null -eq $hc.PSObject.Properties[$tlsProperty]) {
+                        continue
+                    }
+                    $tlsPath = [String]$hc.$tlsProperty
+                    if ([String]::IsNullOrWhiteSpace($tlsPath)) {
+                        continue
+                    }
+                    if (-not (Test-Path -LiteralPath $tlsPath -PathType Leaf)) {
+                        Write-LogMessage -Type ERROR -Message "Shallow path check: clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
+                        throw "Deployment failed. Check logs for details."
+                    }
+                }
+            }
+        }
+    }
+}
+
 Function Test-JsonYamlFilePaths {
 
     <#
         .SYNOPSIS
-        Validates ArgoCD YAML file path properties with common/cluster fallback logic.
+        Validates supervisor service YAML paths resolved from parentDirectory + file names or legacy *YamlPath keys.
 
         .DESCRIPTION
-        Validates that ArgoCD operator and deployment YAML file paths are in valid file path format.
-        Cluster-level paths (clusters[].supervisorServices) take priority over common-level paths
-        (common.supervisorServices). If any cluster is missing a cluster-level path, the common
-        level must define it; an error is reported otherwise. If all clusters define both paths at
-        the cluster level, the common level is not required.
+        For each Argo-enabled cluster, resolves argoCdOperatorYamlPath and argoCdDeploymentYamlPath via
+        Get-EffectiveSupervisorServicesYamlPath (cluster-over-common): either supervisorServices.parentDirectory
+        with the matching *YamlFileName, or legacy supervisorServices.argoCdOperatorYamlPath /
+        argoCdDeploymentYamlPath. The same applies to Harbor Carvel YAMLs when Harbor is enabled.
+        Resolved paths must match the FilePath validation preset.
 
         .PARAMETER ClustersToValidate
         Array of cluster objects to validate.
@@ -26556,37 +26652,37 @@ Function Test-JsonYamlFilePaths {
     )
 
     $validationFailures = 0
-    $commonSvc = if ($InputData -and $InputData.common) { $InputData.common.supervisorServices } else { $null }
 
-    foreach ($propertyName in @("argoCdOperatorYamlPath", "argoCdDeploymentYamlPath")) {
-        # Find clusters that do not define this path at the cluster level and that deploy Argo CD.
-        $clustersWithoutClusterLevel = @($ClustersToValidate | Where-Object {
-            -not (Get-EffectiveSupervisorServiceFlag -Cluster $_ -CommonData $InputData.common -FlagName "disableArgoCD") -and
-            -not ($_.supervisorServices -and -not [String]::IsNullOrWhiteSpace($_.supervisorServices.$propertyName))
-        })
-
-        # If any cluster relies on common, validate the common-level path.
-        if ($clustersWithoutClusterLevel.Count -gt 0) {
-            if ($null -eq $commonSvc -or [String]::IsNullOrWhiteSpace($commonSvc.$propertyName)) {
-                $missingEdgeSites = ($clustersWithoutClusterLevel | Select-Object -ExpandProperty edgeSite) -join ", "
-                Write-LogMessage -Type ERROR -Message "common.supervisorServices.$propertyName is required because cluster(s) '$missingEdgeSites' do not define it at the cluster level (clusters[].supervisorServices.$propertyName)."
-                $validationFailures++
-            } elseif (-not (Test-JsonPropertyFormat -InputData $commonSvc.$propertyName -ValidationPreset "FilePath")) {
-                Write-LogMessage -Type ERROR -Message "Invalid file path for common.supervisorServices.$propertyName."
-                $validationFailures++
-            }
-        }
-
-        # Validate format of each cluster-level path where explicitly defined (Argo CD enabled clusters only).
+    foreach ($logicalName in @("argoCdOperatorYamlPath", "argoCdDeploymentYamlPath")) {
         foreach ($cluster in $ClustersToValidate) {
             if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableArgoCD") {
                 continue
             }
-            if ($cluster.supervisorServices -and -not [String]::IsNullOrWhiteSpace($cluster.supervisorServices.$propertyName)) {
-                if (-not (Test-JsonPropertyFormat -InputData $cluster.supervisorServices.$propertyName -ValidationPreset "FilePath")) {
-                    Write-LogMessage -Type ERROR -Message "Invalid file path for clusters[].supervisorServices.$propertyName in cluster '$($cluster.edgeSite)'."
-                    $validationFailures++
-                }
+            $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
+            if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
+                Write-LogMessage -Type ERROR -Message "Could not resolve $logicalName for edgeSite `"$($cluster.edgeSite)`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                $validationFailures++
+                continue
+            }
+            if (-not (Test-JsonPropertyFormat -InputData $resolvedPath -ValidationPreset "FilePath")) {
+                Write-LogMessage -Type ERROR -Message "Invalid resolved path for $logicalName in cluster '$($cluster.edgeSite)': `"$resolvedPath`"."
+                $validationFailures++
+            }
+        }
+    }
+
+    $harborClusters = @($ClustersToValidate | Where-Object { -not (Get-EffectiveSupervisorServiceFlag -Cluster $_ -CommonData $InputData.common -FlagName "disableHarbor") })
+    foreach ($logicalName in @("harborDataTemplateYamlPath", "harborServiceYamlPath")) {
+        foreach ($cluster in $harborClusters) {
+            $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
+            if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
+                Write-LogMessage -Type ERROR -Message "Could not resolve $logicalName for edgeSite `"$($cluster.edgeSite)`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                $validationFailures++
+                continue
+            }
+            if (-not (Test-JsonPropertyFormat -InputData $resolvedPath -ValidationPreset "FilePath")) {
+                Write-LogMessage -Type ERROR -Message "Invalid resolved path for $logicalName in cluster '$($cluster.edgeSite)': `"$resolvedPath`"."
+                $validationFailures++
             }
         }
     }
@@ -26934,10 +27030,13 @@ Function Test-JsonHarborConfiguration {
         - secretKey, when specified as a plain-text literal (not a $env: reference), must be exactly
           16 characters (Harbor uses it as an AES-128 encryption key). Omitted secretKey leaves the
           Harbor data-values template defaults. $env: references are validated at pre-flight by
-          Invoke-HarborEnvVarPreflight via Resolve-HarborSecretValue (skipped when Start-ModernEdgeAtScale
+          Invoke-HarborEnvVarPreflight via Resolve-HarborSecretValue (skipped when Start-VcfEdgeAtScale
           is run with -ComputeOnly).
         - tlsCrt and tlsKey must both be defined together or both omitted. caCrt is only valid when
-          both tlsCrt and tlsKey are defined. File existence is verified for each provided path.
+          both tlsCrt and tlsKey are defined. When harborConfiguration.parentDirectory is set, tlsCrt,
+          tlsKey, and caCrt are file names (or relative path fragments) under that directory; when
+          parentDirectory is omitted, use full paths (legacy). Update-InfrastructureJsonReferencedFilePaths
+          expands paths before existence and PEM type checks.
 
         .PARAMETER ClustersToValidate
         Array of cluster objects to validate.
@@ -27035,12 +27134,12 @@ Function Test-JsonHarborConfiguration {
         )) {
             if (-not $tlsEntry.HasValue) { continue }
             $filePath = $cluster.harborConfiguration.($tlsEntry.Field)
-            if (-not (Test-Path -Path $filePath)) {
-                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.$($tlsEntry.Field) file not found: `"$filePath`" for edgeSite `"$currentEdgeSite`"."
+            if (-not (Test-Path -LiteralPath $filePath)) {
+                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.$($tlsEntry.Field) file not found: `"$filePath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
                 $validationFailures++
                 continue
             }
-            $pemFirstLine = (Get-Content -Path $filePath -TotalCount 1 -ErrorAction SilentlyContinue) -replace '\r', ''
+            $pemFirstLine = (Get-Content -LiteralPath $filePath -TotalCount 1 -ErrorAction SilentlyContinue) -replace '\r', ''
             if ($tlsEntry.ExpectCertificate) {
                 if ($pemFirstLine -ne "-----BEGIN CERTIFICATE-----") {
                     Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.$($tlsEntry.Field) must contain a PEM certificate (-----BEGIN CERTIFICATE-----) but the file at `"$filePath`" begins with `"$pemFirstLine`" for edgeSite `"$currentEdgeSite`". Check that tlsCrt and tlsKey paths are not swapped."
@@ -27114,8 +27213,9 @@ Function Test-JsonDeeperValidation {
     $deeperValidationFunctionStartTime = Get-Date
 
     $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+    Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
     if ($ComputeOnly) {
-        Write-LogMessage -Type INFO -Message "ComputeOnly: skipping supervisor.json load and deeper checks that require supervisor, Argo CD, Harbor, or TKGS (FLB, DNS, IP ranges, Argo YAML path format)."
+        Write-LogMessage -Type INFO -Message "ComputeOnly: skipping supervisor.json load and deeper checks that require supervisor, Argo CD, or Harbor."
         $supervisorData = $null
     } else {
         $supervisorData = ConvertFrom-JsonSafely -JsonFilePath $SupervisorJson
@@ -27135,10 +27235,16 @@ Function Test-JsonDeeperValidation {
         @($inputData.clusters)
     }
     $anyArgoEnabledForScope = $false
+    $anyHarborEnabledForScope = $false
     if (-not $ComputeOnly) {
         foreach ($clusterFlagRow in $clustersToValidateForFlags) {
             if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterFlagRow -CommonData $inputData.common -FlagName "disableArgoCD")) {
                 $anyArgoEnabledForScope = $true
+            }
+            if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterFlagRow -CommonData $inputData.common -FlagName "disableHarbor")) {
+                $anyHarborEnabledForScope = $true
+            }
+            if ($anyArgoEnabledForScope -and $anyHarborEnabledForScope) {
                 break
             }
         }
@@ -27268,8 +27374,8 @@ Function Test-JsonDeeperValidation {
         }
     }
 
-    # Test for existence of required yaml files (per cluster). Argo CD paths only; skipped when ComputeOnly or Argo CD disabled for all clusters in scope.
-    if (-not $ComputeOnly -and $inputData.clusters -and $anyArgoEnabledForScope) {
+    # Test supervisor service YAML path resolution (per cluster). Argo paths when Argo is enabled; Harbor Carvel YAML paths when Harbor is enabled. Skipped when ComputeOnly or both services disabled for all clusters in scope.
+    if (-not $ComputeOnly -and $inputData.clusters -and ($anyArgoEnabledForScope -or $anyHarborEnabledForScope)) {
         $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
             $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
         } else {
@@ -27619,7 +27725,7 @@ Function Find-VlcmImage {
         - Selection cannot be skipped - user must select an image (1-N) or cancel ('c')
         - If user cancels, the function throws an exception to stop deployment
         - Uses Write-LogMessage for consistent logging throughout the script
-        - Follows the error handling patterns of the ModernEdgeAtScale module
+        - Follows the error handling patterns of the VcfEdgeAtScale module
 
         .PARAMETER VlcmImageName
         Optional. When specified (e.g. from infrastructure JSON), the function attempts to find an image
@@ -27874,10 +27980,10 @@ Function Find-VlcmImage {
 
 #region Private — cleanup, deployment bootstrap, validation, vLCM helpers
 
-Function Invoke-ModernEdgeAtScaleCleanup {
+Function Invoke-VcfEdgeAtScaleCleanup {
     <#
         .SYNOPSIS
-        Runs the cleanup workflow for one or more edge clusters (Supervisor-only, Compute-only, All, or ArgoCD). Used by Initialize-ModernEdgeAtScale when -CleanUp is set.
+        Runs the cleanup workflow for one or more edge clusters (Supervisor-only, Compute-only, All, or ArgoCD). Used by Initialize-VcfEdgeAtScale when -CleanUp is set.
 
         .DESCRIPTION
         Sets Script:CleanUpOnly, then for each cluster: validates supervisor state, prompts for confirmation (unless labEnvironment and -Force), performs Supervisor-only, ArgoCD-only, Harbor-only, or Compute/All cleanup. For All cleanup the teardown order is: (1) remove Harbor Supervisor Service (PVCs must be gone before storage teardown), (2) remove ArgoCD namespace, (3) disable supervisor, (4) remove VMkernel interfaces, restore management to VSS, remove VDS, remove vSAN/VMFS and cluster. Throws if any cluster cleanup fails so the caller can exit without deploying.
@@ -27982,7 +28088,10 @@ Function Invoke-ModernEdgeAtScaleCleanup {
         $clusterObjectForCleanup = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
         $wcpList = @()
         if ($clusterObjectForCleanup) {
-            $wcpList = @(Invoke-ListNamespaceManagementClusters -ErrorAction SilentlyContinue | Where-Object { $_.clusterName -eq $clusterObjectForCleanup })
+            $clusterMoNameForWcp = $clusterObjectForCleanup.Name
+            $wcpList = @(Invoke-ListNamespaceManagementClusters -ErrorAction SilentlyContinue | Where-Object {
+                $null -ne $_.clusterName -and ($_.clusterName -eq $clusterMoNameForWcp -or $_.clusterName -eq $clusterName)
+            })
         }
         $wcpEntry = $wcpList | Select-Object -First 1
         $configStatus = if ($wcpEntry) { $wcpEntry.ConfigStatus } else { $null }
@@ -28155,7 +28264,7 @@ Function Invoke-ModernEdgeAtScaleCleanup {
             if (-not [String]::IsNullOrWhiteSpace($HarborServiceYamlPath) -and (Test-Path -Path $HarborServiceYamlPath)) {
                 $harborServiceIdentifier, $null = Get-ArgoCDServiceDetail -Path $HarborServiceYamlPath
             } else {
-                Write-LogMessage -Type WARNING -Message "HarborServiceYamlPath not provided or file not found; cannot determine Harbor service identifier for cluster `"$clusterName`". Provide the path via -HarborServiceYamlPath or update harborServiceYamlPath in infrastructure.json."
+                Write-LogMessage -Type WARNING -Message "Harbor service YAML not provided or file not found; cannot determine Harbor service identifier for cluster `"$clusterName`". Provide -HarborServiceYamlPath or set supervisorServices.parentDirectory and harborServiceYamlFileName in infrastructure.json."
             }
             if ([String]::IsNullOrWhiteSpace($harborServiceIdentifier)) {
                 Write-LogMessage -Type WARNING -Message "Could not determine Harbor service identifier for cluster `"$clusterName`". Skipping Harbor cleanup."
@@ -28375,7 +28484,7 @@ Function Get-VsanWitnessNameForCluster {
         Resolves the vSAN witness host name for a cluster from cluster root or common.
 
         .DESCRIPTION
-        Returns the first non-empty value from cluster.vSanWitnessVmName or InputData.common.vSanWitnessVmName. Used by Initialize-ModernEdgeAtScale to verify witness is in vCenter before creating the cluster.
+        Returns the first non-empty value from cluster.vSanWitnessVmName or InputData.common.vSanWitnessVmName. Used by Initialize-VcfEdgeAtScale to verify witness is in vCenter before creating the cluster.
         .PARAMETER Cluster
         Cluster object from infrastructure JSON (may have vSanWitnessVmName at the cluster root).
         .PARAMETER InputData
@@ -28441,28 +28550,114 @@ Function Get-EffectiveHaPolicyForCluster {
     return "reservationBased"
 }
 
+Function Get-EffectiveSupervisorServicesYamlPath {
+
+    <#
+        .SYNOPSIS
+        Resolves the full path to a supervisor service YAML file from parentDirectory and file name keys.
+
+        .DESCRIPTION
+        When **parentDirectory** (cluster then common) and the matching **\*YamlFileName** are both
+        set, builds Join-Path(parent, fileName) and passes it through
+        Resolve-InfrastructureReferencedFilePath. Otherwise falls back to legacy
+        **supervisorServices.argoCdOperatorYamlPath**, **argoCdDeploymentYamlPath**,
+        **harborDataTemplateYamlPath**, and **harborServiceYamlPath** (cluster over common), i.e.
+        fully qualified or resolvable paths as before.
+
+        .PARAMETER Cluster
+        Cluster object from infrastructure JSON (optional cluster-level supervisorServices overrides).
+
+        .PARAMETER CommonData
+        The common section of infrastructure JSON (supervisorServices defaults).
+
+        .PARAMETER LogicalYamlPathPropertyName
+        Logical key matching deployment usage: argoCdDeploymentYamlPath, argoCdOperatorYamlPath,
+        harborDataTemplateYamlPath, or harborServiceYamlPath (maps to *YamlFileName properties).
+
+        .OUTPUTS
+        [string] Resolved full path when the new or legacy configuration resolves; otherwise $null.
+
+        .EXAMPLE
+        $p = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "argoCdDeploymentYamlPath"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$CommonData,
+        [Parameter(Mandatory = $true)] [ValidateSet("argoCdDeploymentYamlPath", "argoCdOperatorYamlPath", "harborDataTemplateYamlPath", "harborServiceYamlPath")] [String]$LogicalYamlPathPropertyName
+    )
+
+    $fileNamePropertyName = switch ($LogicalYamlPathPropertyName) {
+        "argoCdDeploymentYamlPath"   { "argoCdDeploymentYamlFileName" }
+        "argoCdOperatorYamlPath"     { "argoCdOperatorYamlFileName" }
+        "harborDataTemplateYamlPath" { "harborDataTemplateYamlFileName" }
+        "harborServiceYamlPath"      { "harborServiceYamlFileName" }
+    }
+
+    $commonSvc = if ($CommonData -and $CommonData.supervisorServices) { $CommonData.supervisorServices } else { $null }
+    $clusterSvc = if ($Cluster -and $Cluster.supervisorServices) { $Cluster.supervisorServices } else { $null }
+
+    $parentRaw = $null
+    if ($clusterSvc -and $clusterSvc.PSObject.Properties["parentDirectory"] -and -not [String]::IsNullOrWhiteSpace([String]$clusterSvc.parentDirectory)) {
+        $parentRaw = [String]$clusterSvc.parentDirectory
+    } elseif ($commonSvc -and $commonSvc.PSObject.Properties["parentDirectory"] -and -not [String]::IsNullOrWhiteSpace([String]$commonSvc.parentDirectory)) {
+        $parentRaw = [String]$commonSvc.parentDirectory
+    }
+
+    $fileRaw = $null
+    if ($clusterSvc -and $clusterSvc.PSObject.Properties[$fileNamePropertyName] -and -not [String]::IsNullOrWhiteSpace([String]$clusterSvc.$fileNamePropertyName)) {
+        $fileRaw = [String]$clusterSvc.$fileNamePropertyName
+    } elseif ($commonSvc -and $commonSvc.PSObject.Properties[$fileNamePropertyName] -and -not [String]::IsNullOrWhiteSpace([String]$commonSvc.$fileNamePropertyName)) {
+        $fileRaw = [String]$commonSvc.$fileNamePropertyName
+    }
+
+    if (-not [String]::IsNullOrWhiteSpace($parentRaw) -and -not [String]::IsNullOrWhiteSpace($fileRaw)) {
+        $combined = $null
+        try {
+            $combined = [System.IO.Path]::GetFullPath((Join-Path -Path $parentRaw.Trim() -ChildPath $fileRaw.Trim()))
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Get-EffectiveSupervisorServicesYamlPath: could not combine parent and file name for $LogicalYamlPathPropertyName : $($_.Exception.Message)"
+            $combined = $null
+        }
+        if (-not [String]::IsNullOrWhiteSpace($combined)) {
+            return Resolve-InfrastructureReferencedFilePath -FilePath $combined -InfrastructureJsonDirectory $Script:InfrastructureJsonParentForPathResolution
+        }
+    }
+
+    $legacyPath = $null
+    if ($clusterSvc -and $clusterSvc.PSObject.Properties[$LogicalYamlPathPropertyName] -and -not [String]::IsNullOrWhiteSpace([String]$clusterSvc.$LogicalYamlPathPropertyName)) {
+        $legacyPath = [String]$clusterSvc.$LogicalYamlPathPropertyName
+    } elseif ($commonSvc -and $commonSvc.PSObject.Properties[$LogicalYamlPathPropertyName] -and -not [String]::IsNullOrWhiteSpace([String]$commonSvc.$LogicalYamlPathPropertyName)) {
+        $legacyPath = [String]$commonSvc.$LogicalYamlPathPropertyName
+    }
+    if (-not [String]::IsNullOrWhiteSpace($legacyPath)) {
+        return Resolve-InfrastructureReferencedFilePath -FilePath $legacyPath.Trim() -InfrastructureJsonDirectory $Script:InfrastructureJsonParentForPathResolution
+    }
+
+    return $null
+}
+
 Function Get-EffectiveArgoCdYamlPath {
 
     <#
         .SYNOPSIS
-        Resolves the effective ArgoCD YAML path for a cluster with common-level fallback.
+        Resolves the effective Argo CD operator or deployment YAML file path for a cluster.
 
         .DESCRIPTION
-        Returns the cluster-level path (clusters[].supervisorServices.[PropertyName]) if defined,
-        otherwise falls back to the common-level path (common.supervisorServices.[PropertyName]).
-        Cluster-level always takes priority when both are defined.
+        Delegates to Get-EffectiveSupervisorServicesYamlPath (parentDirectory + file names, or legacy
+        argoCdOperatorYamlPath / argoCdDeploymentYamlPath).
 
         .PARAMETER Cluster
-        Cluster object from infrastructure JSON (may have supervisorServices.[PropertyName]).
+        Cluster object from infrastructure JSON (may have supervisorServices overrides).
 
         .PARAMETER CommonData
         The common section of infrastructure JSON (for supervisorServices fallback).
 
         .PARAMETER PropertyName
-        The YAML path property to resolve.
+        argoCdOperatorYamlPath or argoCdDeploymentYamlPath (logical names).
 
         .OUTPUTS
-        [string] or $null if the property is not configured at either level.
+        [string] or $null if neither the new (parent + file name) nor legacy path is configured.
 
         .EXAMPLE
         $path = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputData.common -PropertyName "argoCdOperatorYamlPath"
@@ -28474,14 +28669,176 @@ Function Get-EffectiveArgoCdYamlPath {
         [Parameter(Mandatory = $true)] [ValidateSet("argoCdOperatorYamlPath", "argoCdDeploymentYamlPath")] [String]$PropertyName
     )
 
-    if ($Cluster -and $Cluster.supervisorServices -and -not [String]::IsNullOrWhiteSpace($Cluster.supervisorServices.$PropertyName)) {
-        return $Cluster.supervisorServices.$PropertyName
-    }
-    if ($CommonData -and $CommonData.supervisorServices -and -not [String]::IsNullOrWhiteSpace($CommonData.supervisorServices.$PropertyName)) {
-        return $CommonData.supervisorServices.$PropertyName
-    }
-    return $null
+    return Get-EffectiveSupervisorServicesYamlPath -Cluster $Cluster -CommonData $CommonData -LogicalYamlPathPropertyName $PropertyName
 }
+
+Function Resolve-InfrastructureReferencedFilePath {
+
+    <#
+        .SYNOPSIS
+        Resolves a filesystem path referenced from infrastructure JSON.
+
+        .DESCRIPTION
+        When the path is already absolute or relative and the file exists as given, returns the full
+        normalized path. When the path is relative and not found yet, tries the current PowerShell
+        location (working directory), then the directory containing infrastructure.json (when
+        provided). If no file is found, returns the trimmed original string so callers can surface
+        it in validation errors. Works on Windows, macOS, and Linux.
+
+        .PARAMETER FilePath
+        Path from JSON (absolute or relative).
+
+        .PARAMETER InfrastructureJsonDirectory
+        Optional directory of the infrastructure JSON file (parent folder). Used as a fallback
+        base for relative paths (for example YAML and certificate files stored next to the JSON).
+
+        .OUTPUTS
+        [String] Full path to an existing file, or the original path string when not resolved.
+
+        .EXAMPLE
+        Resolve-InfrastructureReferencedFilePath -FilePath "tls.crt.pem" -InfrastructureJsonDirectory "/path/to/config"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [String]$FilePath,
+        [Parameter(Mandatory = $false)] [AllowNull()] [String]$InfrastructureJsonDirectory
+    )
+
+    if ([String]::IsNullOrWhiteSpace($FilePath)) {
+        return $FilePath
+    }
+
+    $trimmed = $FilePath.Trim()
+    if (Test-Path -LiteralPath $trimmed -PathType Leaf) {
+        return (Get-Item -LiteralPath $trimmed).FullName
+    }
+
+    if ([System.IO.Path]::IsPathRooted($trimmed)) {
+        try {
+            $normalizedRooted = [System.IO.Path]::GetFullPath($trimmed)
+            if (Test-Path -LiteralPath $normalizedRooted -PathType Leaf) {
+                return (Get-Item -LiteralPath $normalizedRooted).FullName
+            }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Resolve-InfrastructureReferencedFilePath: could not normalize rooted path `"$trimmed`": $($_.Exception.Message)"
+        }
+        return $trimmed
+    }
+
+    $cwd = (Get-Location).ProviderPath
+    $candidates = [System.Collections.Generic.List[string]]::new()
+    try {
+        [void]$candidates.Add([System.IO.Path]::GetFullPath((Join-Path -Path $cwd -ChildPath $trimmed)))
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Resolve-InfrastructureReferencedFilePath: could not combine CWD with `"$trimmed`": $($_.Exception.Message)"
+    }
+    if (-not [String]::IsNullOrWhiteSpace($InfrastructureJsonDirectory)) {
+        try {
+            [void]$candidates.Add([System.IO.Path]::GetFullPath((Join-Path -Path $InfrastructureJsonDirectory -ChildPath $trimmed)))
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Resolve-InfrastructureReferencedFilePath: could not combine infrastructure JSON directory with `"$trimmed`": $($_.Exception.Message)"
+        }
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path -LiteralPath $candidate -PathType Leaf) {
+            return (Get-Item -LiteralPath $candidate).FullName
+        }
+    }
+
+    return $trimmed
+}
+
+Function Update-InfrastructureJsonReferencedFilePaths {
+
+    <#
+        .SYNOPSIS
+        Sets script scope for path resolution and expands Harbor TLS file names into full paths.
+
+        .DESCRIPTION
+        Resolves the parent folder of the infrastructure JSON file and assigns
+        $Script:InfrastructureJsonParentForPathResolution so Get-EffectiveSupervisorServicesYamlPath
+        can resolve combined supervisorServices paths. For each cluster.harborConfiguration, when
+        parentDirectory is set, rewrites tlsCrt, tlsKey, and caCrt from file names under that
+        directory to full paths; when parentDirectory is omitted, resolves each value as a full path
+        (legacy) with Resolve-InfrastructureReferencedFilePath. Argo CD and Harbor supervisor YAML
+        paths are resolved at read time from parentDirectory + *YamlFileName or legacy *YamlPath keys.
+
+        .PARAMETER InfrastructureJsonPath
+        Path to the infrastructure JSON file (used to locate the parent directory for relative paths).
+
+        .PARAMETER InputData
+        Parsed infrastructure JSON object (modified in place for Harbor TLS paths only).
+
+        .OUTPUTS
+        None.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJsonPath,
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$InputData
+    )
+
+    $Script:InfrastructureJsonParentForPathResolution = $null
+
+    if (-not $InputData) {
+        return
+    }
+
+    $infrastructureJsonDirectory = $null
+    try {
+        if (Test-Path -LiteralPath $InfrastructureJsonPath -PathType Leaf) {
+            $infrastructureJsonDirectory = Split-Path -Parent (Resolve-Path -LiteralPath $InfrastructureJsonPath).Path
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Update-InfrastructureJsonReferencedFilePaths: could not resolve directory for `"$InfrastructureJsonPath`": $($_.Exception.Message)"
+    }
+
+    $Script:InfrastructureJsonParentForPathResolution = $infrastructureJsonDirectory
+
+    if (-not $InputData.clusters) {
+        return
+    }
+
+    foreach ($cluster in @($InputData.clusters)) {
+        if (-not $cluster -or -not $cluster.harborConfiguration) {
+            continue
+        }
+        $hc = $cluster.harborConfiguration
+        $hasHarborParent = $hc.PSObject.Properties["parentDirectory"] -and -not [String]::IsNullOrWhiteSpace([String]$hc.parentDirectory)
+        foreach ($propertyName in @("caCrt", "tlsCrt", "tlsKey")) {
+            if ($null -eq $hc.PSObject.Properties[$propertyName]) {
+                continue
+            }
+            $namePart = [String]$hc.$propertyName
+            if ([String]::IsNullOrWhiteSpace($namePart)) {
+                continue
+            }
+            if ($hasHarborParent) {
+                $parentRaw = [String]$hc.parentDirectory.Trim()
+                $combined = $null
+                try {
+                    $combined = [System.IO.Path]::GetFullPath((Join-Path -Path $parentRaw -ChildPath $namePart.Trim()))
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Update-InfrastructureJsonReferencedFilePaths: could not combine harborConfiguration.parentDirectory with $propertyName for edgeSite `"$($cluster.edgeSite)`": $($_.Exception.Message)"
+                    continue
+                }
+                $resolved = Resolve-InfrastructureReferencedFilePath -FilePath $combined -InfrastructureJsonDirectory $infrastructureJsonDirectory
+                if ($resolved -ne $namePart) {
+                    Write-LogMessage -Type DEBUG -Message "Resolved clusters[].harborConfiguration.$propertyName (edgeSite `"$($cluster.edgeSite)`") from `"$namePart`" under parentDirectory to `"$resolved`"."
+                }
+                $hc.$propertyName = $resolved
+            } else {
+                $resolved = Resolve-InfrastructureReferencedFilePath -FilePath $namePart.Trim() -InfrastructureJsonDirectory $infrastructureJsonDirectory
+                if ($resolved -ne $namePart) {
+                    Write-LogMessage -Type DEBUG -Message "Resolved clusters[].harborConfiguration.$propertyName (edgeSite `"$($cluster.edgeSite)`", legacy path) from `"$namePart`" to `"$resolved`"."
+                }
+                $hc.$propertyName = $resolved
+            }
+        }
+    }
+}
+
 Function Get-EffectiveSupervisorServiceFlag {
 
     <#
@@ -28587,14 +28944,14 @@ Function Get-EffectiveVmkernelMtu {
     }
     return $DefaultMtu
 }
-Function Initialize-ModernEdgeAtScale {
+Function Initialize-VcfEdgeAtScale {
 
     <#
         .SYNOPSIS
-        Initializes a complete VMware vSphere one-node deployment environment.
+        Initializes and runs the full VcfEdgeAtScale edge deployment workflow against vCenter.
 
         .DESCRIPTION
-        This function performs a comprehensive initialization of a VMware vSphere one-node deployment environment.
+        This function performs a comprehensive initialization of the edge deployment environment.
         It reads configuration data from input JSON files and performs the following operations:
 
         - Extracts configuration variables for vCenter, ESX host, cluster, supervisor, datacenter, datastore, storage policies, virtual distributed switch, content library, and ArgoCD
@@ -28612,17 +28969,19 @@ Function Initialize-ModernEdgeAtScale {
         - Manages environment variables for password-less access
         - Properly disconnects from vCenter upon completion
 
+        .PARAMETER MaximumSupervisorsPerVcenter
+        Maximum number of supervisors allowed on the target vCenter before this run (default **50**, per vCenter 9 guidance). Override only for lab or vendor-directed scenarios.
+
         .NOTES
-        This function requires the Script:inputData and Script:supervisorData variables to be populated
-        from their respective JSON configuration files before execution.
+        This function loads **`InfrastructureJson`** and **`SupervisorJson`** from disk; callers do not need to pre-populate script-scope **`inputData`**.
 
         The function performs interactive credential prompts and establishes persistent vCenter connections.
         All operations are logged and the function handles cleanup of connections upon completion.
 
         .EXAMPLE
-        Initialize-ModernEdgeAtScale -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
+        Initialize-VcfEdgeAtScale -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
 
-        This will start the complete one-node deployment process using the specified configuration files.
+        Starts the full edge deployment workflow using the specified configuration files.
     #>
 
     [CmdletBinding()]
@@ -28632,12 +28991,13 @@ Function Initialize-ModernEdgeAtScale {
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(Mandatory = $false)] [Switch]$Force,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 128)] [Int]$MaximumSupervisorsPerVcenter = 50,
         [Parameter(Mandatory = $false)] [Switch]$SaveHarborYaml,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson
     )
 
     # Convert the input JSON file to a PowerShell object.
-    Write-LogMessage -Type DEBUG -Message "Entered Initialize-ModernEdgeAtScale function..."
+    Write-LogMessage -Type DEBUG -Message "Entered Initialize-VcfEdgeAtScale function..."
 
     if ($SaveHarborYaml) {
         Write-LogMessage -Type WARNING -Message "-SaveHarborYaml is set: the completed Harbor data values YAML file (containing all passwords and secrets in plain text) will be saved to the HarborYaml subdirectory. Treat this location like a credential store and ensure access is appropriately restricted."
@@ -28645,11 +29005,18 @@ Function Initialize-ModernEdgeAtScale {
 
     try {
         $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
 
         # Extract common variables.
         $Script:vCenterName = $inputData.common.vCenterName
         $Script:VCenterUser = $inputData.common.vCenterUser
-        $labEnvironment = ($null -ne $inputData.common.PSObject.Properties["labenvironment"] -and $inputData.common.labenvironment -eq $true)
+        $labEnvironment = $false
+        if ($inputData.common) {
+            $labEnvProp = $inputData.common.PSObject.Properties | Where-Object { $_.Name -ieq "labenvironment" } | Select-Object -First 1
+            if ($null -ne $labEnvProp) {
+                $labEnvironment = ($labEnvProp.Value -eq $true)
+            }
+        }
         # esxUniquePasswordPerHost: when false or not specified (default), one password for all hosts; when true, prompt per host. Internal $esxUniquePassword (true = one for all) inverts for existing logic.
         $esxUniquePassword = $true
         if ($inputData.common -and $null -ne $inputData.common.PSObject.Properties["esxUniquePasswordPerHost"]) {
@@ -28753,16 +29120,15 @@ Function Initialize-ModernEdgeAtScale {
             throw "Deployment failed. Check logs for details."
         }
 
-        # Enforce vCenter 9 supervisor limit (50 per vCenter); fail if already at limit so we cannot add another.
-        $maxSupervisorsPerVcenter = 50
+        # Enforce vCenter 9 supervisor limit (default 50 per vCenter per product guidance); fail if already at limit so we cannot add another.
         $supervisorCountResult = Get-VcenterSupervisorCount -ErrorAction SilentlyContinue
         if ($null -ne $supervisorCountResult) {
             $currentSupervisorCount = $supervisorCountResult.Count
-            Write-LogMessage -Type DEBUG -Message "vCenter `"$Script:vCenterName`" has $currentSupervisorCount supervisor(s). Maximum allowed before this deployment: $maxSupervisorsPerVcenter."
-            if ($currentSupervisorCount -ge $maxSupervisorsPerVcenter) {
-                Write-LogMessage -Type ERROR -Message "vCenter `"$Script:vCenterName`" has $currentSupervisorCount supervisor(s). vCenter 9 supports a maximum of $maxSupervisorsPerVcenter supervisors per vCenter."
+            Write-LogMessage -Type DEBUG -Message "vCenter `"$Script:vCenterName`" has $currentSupervisorCount supervisor(s). Maximum allowed before this deployment: $MaximumSupervisorsPerVcenter."
+            if ($currentSupervisorCount -ge $MaximumSupervisorsPerVcenter) {
+                Write-LogMessage -Type ERROR -Message "vCenter `"$Script:vCenterName`" has $currentSupervisorCount supervisor(s). vCenter 9 supports a maximum of $MaximumSupervisorsPerVcenter supervisors per vCenter."
                 Write-LogMessage -Type ERROR -Message "Deploy your new edge cluster to a different vCenter, or remove existing supervisors from this vCenter before re-running."
-                throw "Deployment failed. vCenter supervisor limit ($maxSupervisorsPerVcenter) reached or exceeded. Deploy to a new vCenter or free capacity. Check logs for details."
+                throw "[E-SUPERVISOR-LIMIT-001] Deployment failed. vCenter supervisor limit ($MaximumSupervisorsPerVcenter) reached or exceeded. Deploy to a new vCenter or free capacity. Check logs for details."
             }
         }
 
@@ -28781,10 +29147,19 @@ Function Initialize-ModernEdgeAtScale {
                 SupervisorNamePrefix = $supervisorNamePrefix
                 VdsNamePrefix      = $vdsNamePrefix
             }
-            if ($CleanUp -eq "Harbor" -and $inputData.common.supervisorServices.harborServiceYamlPath) {
-                $cleanupParams["HarborServiceYamlPath"] = $inputData.common.supervisorServices.harborServiceYamlPath
+            if ($CleanUp -eq "Harbor") {
+                $harborCleanupYamlPath = $null
+                foreach ($c in $clustersToProcess) {
+                    if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $c -CommonData $inputData.common -FlagName "disableHarbor")) {
+                        $harborCleanupYamlPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $c -CommonData $inputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
+                        break
+                    }
+                }
+                if ($harborCleanupYamlPath) {
+                    $cleanupParams["HarborServiceYamlPath"] = $harborCleanupYamlPath
+                }
             }
-            Invoke-ModernEdgeAtScaleCleanup @cleanupParams
+            Invoke-VcfEdgeAtScaleCleanup @cleanupParams
             Write-LogMessage -Type INFO -Message "CleanUp ($CleanUp) completed. Exiting without deployment."
             return
         }
@@ -29474,8 +29849,8 @@ Function Initialize-ModernEdgeAtScale {
             $harborServiceName = $null
             if (-not $disableHarbor) {
                 $Script:HarborPhaseStarted = $true
-                $harborServiceYamlPath = $inputData.common.supervisorServices.harborServiceYamlPath
-                $harborDataValuesTemplatePath = $inputData.common.supervisorServices.harborDataTemplateYamlPath
+                $harborServiceYamlPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
+                $harborDataValuesTemplatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
                 $harborConfig = $cluster.harborConfiguration
                 $harborTempYamlPath = $null
                 $harborYamlSaveDir = $null
@@ -29776,8 +30151,8 @@ Function Initialize-ModernEdgeAtScale {
         # This ensures no leaked connections regardless of how the function exits.
         Disconnect-Vcenter -AllServers -Silence
 
-        # When one password was used for all ESX hosts, clear the stored credentials from memory.
-        if ($esxUniquePassword -and $null -ne $esxPasswords) {
+        # Clear ESX credential cache from memory on any exit (normal, error, or interrupt).
+        if ($null -ne $esxPasswords) {
             $esxPasswords.Clear()
         }
     }
@@ -30745,7 +31120,7 @@ Function Invoke-HarborEnvVarPreflight {
         Resolves Harbor $env: secrets for the OSA cluster only.
 
         .NOTES
-        Start-ModernEdgeAtScale does not call this function when -ComputeOnly is set, so a cluster may keep
+        Start-VcfEdgeAtScale does not call this function when -ComputeOnly is set, so a cluster may keep
         harborConfiguration entries with $env: references for a later supervisor or Harbor deployment without
         defining those environment variables during compute-only preparation.
     #>
@@ -30792,15 +31167,15 @@ Function Invoke-HarborEnvVarPreflight {
 
 #region Exported — entry points, templates, configuration help
 
-Function Start-ModernEdgeAtScale {
+Function Start-VcfEdgeAtScale {
 
     <#
     .SYNOPSIS
-        Automates the end-to-end deployment of a simple vSphere Supervisor at scale in VMware Cloud Foundation 9.x.
+        Automates end-to-end vSphere Supervisor edge deployment at scale in VMware Cloud Foundation 9.x.
 
     .DESCRIPTION
-        Start-ModernEdgeAtScale is designed to streamline the deployment of a simple vSphere Supervisor in
-        VMware Cloud Foundation (VCF) 9.x environments. The function handles all aspects of the deployment including:
+        Start-VcfEdgeAtScale orchestrates vSphere Supervisor cluster preparation and deployment in
+        VMware Cloud Foundation (VCF) 9.x environments. The function handles the deployment workflow including:
 
         - vCenter and ESX host connection
         - ESX Cluster creation and host add
@@ -30813,6 +31188,11 @@ Function Start-ModernEdgeAtScale {
         Path to the infrastructure configuration JSON file.
 
         Default: "infrastructure.json"
+
+        Supervisor service YAML files and Harbor TLS PEM files are referenced by
+        supervisorServices.parentDirectory plus file name properties (and harborConfiguration.parentDirectory
+        plus tlsCrt, tlsKey, caCrt file names). Combined paths are normalized with
+        Resolve-InfrastructureReferencedFilePath (current directory and the infrastructure JSON directory).
 
     .PARAMETER SupervisorJson
         Path to the Supervisor Cluster configuration JSON file.
@@ -30854,61 +31234,69 @@ Function Start-ModernEdgeAtScale {
     .PARAMETER RollbackOnFailure
         Boolean. When $true: always rollback on failure (no prompt; for autonomous runs). When $false: never rollback; leave site in current state and continue to next site if any. When omitted: prompt with Yes/No/Always. Use $true or $false to bypass the prompt for unattended execution.
 
+        For normal retries after a failure, prefer rolling back (Y, Always, or -RollbackOnFailure $true)
+        so the environment returns to a known state before you fix configuration and re-run. Use
+        -RollbackOnFailure $false or answer N only when you intentionally leave the site partially
+        deployed for hands-on debugging in vCenter or kubectl. After you finish debugging, run the
+        matching scoped cleanup (for example Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite
+        <site>) or choose rollback at the next prompt so the next deployment does not stack on a
+        broken half-state.
+
     .PARAMETER SaveHarborYaml
         When specified, the completed Harbor data values YAML file is moved into a "HarborYaml" subdirectory under the module directory instead of being deleted. The directory is created automatically if it does not exist; if it cannot be created, deployment exits with an error before Harbor installation begins. The saved file matches the final rendered values used for installation; the deployment log includes a redacted copy. When omitted, the temporary file is deleted after successful installation.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale
+        Start-VcfEdgeAtScale
 
         Executes the deployment using default configuration files for all clusters.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -InfrastructureJson "config/site-a-infrastructure.json" -SupervisorJson "config/site-a-supervisor.json"
+        Start-VcfEdgeAtScale -InfrastructureJson "config/site-a-infrastructure.json" -SupervisorJson "config/site-a-supervisor.json"
 
         Executes the deployment using custom configuration files for all clusters.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -EdgeSite "site1"
+        Start-VcfEdgeAtScale -EdgeSite "site1"
 
         Executes the deployment for only the cluster with edgeSite "site1".
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -EdgeSite "site1,site2"
+        Start-VcfEdgeAtScale -EdgeSite "site1,site2"
 
         Executes the deployment for the clusters with edgeSite "site1" and "site2", in that order.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -Version
+        Start-VcfEdgeAtScale -Version
 
         Displays the module version and exits.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -CleanUp All
+        Start-VcfEdgeAtScale -CleanUp All
 
         Authenticates to vCenter, disables supervisor then removes compute (VDS, vSAN/VMFS, cluster) for each site, then exits. User must type "delete all for <edgeSite>" to confirm (or use -Force with labEnvironment true).
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -CleanUp Supervisor -EdgeSite site1
+        Start-VcfEdgeAtScale -CleanUp Supervisor -EdgeSite site1
 
         Removes only the supervisor for site1; compute remains. User must type "delete supervisor for site1" to confirm.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -ComputeOnly
+        Start-VcfEdgeAtScale -ComputeOnly
 
         Runs clusters, hosts, storage, VDS, and vLCM remediation for each cluster, then exits without enabling supervisor.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -RollbackOnFailure $true
+        Start-VcfEdgeAtScale -RollbackOnFailure $true
 
         Autonomous run: always rollback on failure without prompting.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
+        Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
 
         Validates both JSON files and YAML paths then exits without deploying.
 
     .EXAMPLE
-        Start-ModernEdgeAtScale -SaveHarborYaml
+        Start-VcfEdgeAtScale -SaveHarborYaml
 
         Deploys all clusters; after Harbor installation the completed data values YAML is moved to the "HarborYaml" subdirectory instead of being deleted.
 
@@ -30931,13 +31319,19 @@ Function Start-ModernEdgeAtScale {
         [Parameter(Mandatory = $false)] [Switch]$Version
     )
 
-    # Handle version flag
+    # Initialize configured log level from parameter (normalize to uppercase). Set before -Version so Write-LogMessage honors the threshold.
+    $Script:ConfiguredLogLevel = $LogLevel.ToUpper()
+
+    # Create the log file before -Version or deployment so file logging and log level filtering behave consistently.
+    New-LogFile
+
+    # Handle version flag (logging initialized; VCF.PowerCLI minimum is not required for version display).
     if ($Version) {
         $versionToDisplay = $null
 
         # Try to get version from loaded module first.
 
-        $loadedModule = Get-Module -Name "ModernEdgeAtScale"
+        $loadedModule = Get-Module -Name "VcfEdgeAtScale"
         if ($loadedModule -and $loadedModule.Version -and $loadedModule.Version -ne [version]"0.0") {
             $versionToDisplay = $loadedModule.Version.ToString()
         } else {
@@ -30949,14 +31343,14 @@ Function Start-ModernEdgeAtScale {
             } else {
                 # Try to find module path from loaded module.
 
-                $moduleInfo = Get-Module -Name "ModernEdgeAtScale" -ListAvailable | Select-Object -First 1
+                $moduleInfo = Get-Module -Name "VcfEdgeAtScale" -ListAvailable | Select-Object -First 1
                 if ($moduleInfo -and $moduleInfo.ModuleBase) {
                     $modulePath = $moduleInfo.ModuleBase
                 }
             }
 
             if ($modulePath) {
-                $manifestPath = Join-Path $modulePath "ModernEdgeAtScale.psd1"
+                $manifestPath = Join-Path $modulePath "VcfEdgeAtScale.psd1"
                 if (Test-Path $manifestPath) {
                     try {
                         $manifest = Import-PowerShellDataFile -Path $manifestPath
@@ -30975,182 +31369,187 @@ Function Start-ModernEdgeAtScale {
             }
         }
 
-        Write-LogMessage -Type INFO -Message "ModernEdgeAtScale version: $versionToDisplay"
+        Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $versionToDisplay"
         return
     }
 
-    # Set the progress preference to continue.
+    $savedProgressPreference = $Global:ProgressPreference
+    try {
+        $Global:ProgressPreference = "Continue"
 
-    $Global:ProgressPreference = 'Continue'
-
-    # Initialize configured log level from parameter (normalize to uppercase).
-    $Script:ConfiguredLogLevel = $LogLevel.ToUpper()
-
-    # Rollback on failure: only set from parameter when explicitly passed; omitted = prompt (Y/N/Always). $true = always rollback (no prompt), $false = never rollback.
-    if ($PSBoundParameters.ContainsKey("RollbackOnFailure")) {
-        $Script:RollbackOnFailurePreference = $RollbackOnFailure
-    } else {
-        $Script:RollbackOnFailurePreference = $null
-    }
-    $Script:RollbackAlwaysFromPrompt = $false
-
-    # Create New log file.
-    New-LogFile
-
-    # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
-    Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
-
-    # Log the configured log level.
-    Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
-
-    # Perform validation with progress indication.
-    Write-Output ""
-    $validationStartTime = Get-Date
-    $inputDataForYamlCheck = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
-    if ($EdgeSite) {
-        $edgeSitesArrayForValidation = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputDataForYamlCheck
-    } else {
-        $edgeSitesArrayForValidation = @()
-    }
-    $siteIndication = if ($edgeSitesArrayForValidation.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArrayForValidation -join '", "')`"" } else { "all sites" }
-
-    # Validate YAML file existence for required ArgoCD and Harbor files (cheap operation, do this first). Skip when -CleanUp is set (cleanup does not use deployment YAMLs). Skip when -ComputeOnly (no supervisor or services).
-    if ($CleanUp -notin @("Supervisor", "Compute", "All", "ArgoCD", "Harbor") -and -not $ComputeOnly) {
-    Write-LogMessage -Type DEBUG -Message "Validating YAML file existence for $siteIndication..."
-    $yamlValidationStartTime = Get-Date
-    $clustersToCheck = if ($edgeSitesArrayForValidation.Count -gt 0) {
-        $inputDataForYamlCheck.clusters | Where-Object { $_.edgeSite -in $edgeSitesArrayForValidation }
-    } else {
-        $inputDataForYamlCheck.clusters
-    }
-
-    $missingYamlFiles = @()
-    foreach ($cluster in $clustersToCheck) {
-        $currentEdgeSite = $cluster.edgeSite
-
-        # Skip ArgoCD YAML validation for clusters where ArgoCD is disabled.
-        if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $inputDataForYamlCheck.common -FlagName "disableArgoCD") {
-            Write-LogMessage -Type DEBUG -Message "ArgoCD is disabled for edgeSite `"$currentEdgeSite`"; skipping ArgoCD YAML path validation."
-            continue
-        }
-
-        $argoCdOperatorYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputDataForYamlCheck.common -PropertyName "argoCdOperatorYamlPath"
-        $argoCdDeploymentYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputDataForYamlCheck.common -PropertyName "argoCdDeploymentYamlPath"
-
-        if ($argoCdOperatorYamlPath) {
-            if (-not (Test-Path -Path $argoCdOperatorYamlPath)) {
-                $missingYamlFiles += [PSCustomObject]@{
-                    EdgeSite = $currentEdgeSite
-                    FileType = "ArgoCD Operator YAML"
-                    FilePath = $argoCdOperatorYamlPath
-                }
-            }
+        # Rollback on failure: only set from parameter when explicitly passed; omitted = prompt (Y/N/Always). $true = always rollback (no prompt), $false = never rollback.
+        if ($PSBoundParameters.ContainsKey("RollbackOnFailure")) {
+            $Script:RollbackOnFailurePreference = $RollbackOnFailure
         } else {
-            $missingYamlFiles += [PSCustomObject]@{
-                EdgeSite = $currentEdgeSite
-                FileType = "ArgoCD Operator YAML"
-                FilePath = "Not specified in configuration"
-            }
+            $Script:RollbackOnFailurePreference = $null
         }
+        $Script:RollbackAlwaysFromPrompt = $false
 
-        if ($argoCdDeploymentYamlPath) {
-            if (-not (Test-Path -Path $argoCdDeploymentYamlPath)) {
-                $missingYamlFiles += [PSCustomObject]@{
-                    EdgeSite = $currentEdgeSite
-                    FileType = "ArgoCD Deployment YAML"
-                    FilePath = $argoCdDeploymentYamlPath
-                }
-            }
-        } else {
-            $missingYamlFiles += [PSCustomObject]@{
-                EdgeSite = $currentEdgeSite
-                FileType = "ArgoCD Deployment YAML"
-                FilePath = "Not specified in configuration"
-            }
-        }
-    }
+        # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
+        Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
 
-    # Harbor YAML validation: harborServiceYamlPath and harborDataTemplateYamlPath are common-level; validate once
-    # if any cluster has Harbor enabled. harborDataTemplateYamlPath is the template (required to generate per-site files).
-    $anyHarborEnabled = $clustersToCheck | Where-Object {
-        -not (Get-EffectiveSupervisorServiceFlag -Cluster $_ -CommonData $inputDataForYamlCheck.common -FlagName "disableHarbor")
-    }
-    if ($anyHarborEnabled) {
-        $harborServiceYamlPathForValidation = $inputDataForYamlCheck.common.supervisorServices.harborServiceYamlPath
-        if ($harborServiceYamlPathForValidation) {
-            if (-not (Test-Path -Path $harborServiceYamlPathForValidation)) {
-                $missingYamlFiles += [PSCustomObject]@{
-                    EdgeSite = "common (all sites)"
-                    FileType = "Harbor Service YAML"
-                    FilePath = $harborServiceYamlPathForValidation
-                }
-            }
-        } else {
-            $missingYamlFiles += [PSCustomObject]@{
-                EdgeSite = "common (all sites)"
-                FileType = "Harbor Service YAML"
-                FilePath = "Not specified in configuration (common.supervisorServices.harborServiceYamlPath)"
-            }
-        }
-        $harborDataValuesTemplatePath = $inputDataForYamlCheck.common.supervisorServices.harborDataTemplateYamlPath
-        if ($harborDataValuesTemplatePath) {
-            if (-not (Test-Path -Path $harborDataValuesTemplatePath)) {
-                $missingYamlFiles += [PSCustomObject]@{
-                    EdgeSite = "common (all sites)"
-                    FileType = "Harbor Data Values YAML template"
-                    FilePath = $harborDataValuesTemplatePath
-                }
-            }
-        } else {
-            $missingYamlFiles += [PSCustomObject]@{
-                EdgeSite = "common (all sites)"
-                FileType = "Harbor Data Values YAML template"
-                FilePath = "Not specified in configuration (common.supervisorServices.harborDataTemplateYamlPath)"
-            }
-        }
-    }
+        # Log the configured log level.
+        Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
 
-    if ($missingYamlFiles.Count -gt 0) {
-        $errorMessage = "Required YAML files are missing or not accessible:`n"
-        foreach ($missingFile in $missingYamlFiles) {
-            $errorMessage += "  - EdgeSite `"$($missingFile.EdgeSite)`": $($missingFile.FileType) - $($missingFile.FilePath)`n"
+        # Perform validation with progress indication.
+        Write-Output ""
+        $validationStartTime = Get-Date
+        $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+        if ($null -eq $inputData) {
+            throw "[E-CONFIG-NULL-001] Infrastructure JSON produced no data after load. Check logs for details."
         }
-        Write-LogMessage -Type ERROR -Message $errorMessage
-        Write-LogMessage -Type ERROR -Message "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
-        throw "Required YAML files are missing. Check logs for details."
-    }
-
-    $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
-    Write-LogMessage -Type DEBUG -Message "YAML file validation completed for $siteIndication in $($yamlValidationElapsed.TotalSeconds.ToString('F2')) seconds."
-    } elseif ($ComputeOnly) {
-        Write-LogMessage -Type DEBUG -Message "ComputeOnly: skipping YAML file existence validation (Argo CD and Harbor are not deployed)."
-    } else {
-        Write-LogMessage -Type DEBUG -Message "Not performing YAML validation during cleanup."
-    }
-
-    # During cleanup, skip full JSON validation (shallow, deeper, network segment). Initialize-ModernEdgeAtScale will parse the JSON and resolve edge sites; invalid JSON will fail there.
-    if ($CleanUp -in @("Supervisor", "Compute", "All", "ArgoCD", "Harbor")) {
-        Write-LogMessage -Type DEBUG -Message "Cleanup mode: skipping full JSON validation; configuration will be parsed in Initialize-ModernEdgeAtScale."
-    } else {
-        Write-LogMessage -Type DEBUG -Message "Validating JSON configuration files for $siteIndication..."
-
-        # Perform shallow validation of input.json and supervisor.json configuration files (presence of properties only).
-        $shallowValidationStartTime = Get-Date
-        Write-LogMessage -Type INFO -Message "Checking for required JSON properties for $siteIndication..."
-        $shallowValidationParams = @{
-            InfrastructureJson = $InfrastructureJson
-            SupervisorJson = $SupervisorJson
-        }
-        if ($ComputeOnly) {
-            $shallowValidationParams.ComputeOnly = $true
-        }
+        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
         if ($EdgeSite) {
-            $shallowValidationParams.EdgeSite = $EdgeSite
+            $edgeSitesArrayForValidation = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputData
+        } else {
+            $edgeSitesArrayForValidation = @()
         }
-        Test-JsonShallowValidation @shallowValidationParams
-        $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
-        $totalElapsed = (Get-Date) - $validationStartTime
-        Write-LogMessage -Type DEBUG -Message "Required properties validation completed for $siteIndication in $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+        $siteIndication = if ($edgeSitesArrayForValidation.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArrayForValidation -join '", "')`"" } else { "all sites" }
+
+        # Validate YAML file existence for required ArgoCD and Harbor files (cheap operation, do this first). Skip when -CleanUp is set (cleanup does not use deployment YAMLs). Skip when -ComputeOnly (no supervisor or services).
+        if ($CleanUp -notin @("Supervisor", "Compute", "All", "ArgoCD", "Harbor") -and -not $ComputeOnly) {
+            Write-LogMessage -Type DEBUG -Message "Validating YAML file existence for $siteIndication..."
+            $yamlValidationStartTime = Get-Date
+            $clustersToCheck = if ($edgeSitesArrayForValidation.Count -gt 0) {
+                $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArrayForValidation }
+            } else {
+                $inputData.clusters
+            }
+
+            $missingYamlFiles = @()
+            foreach ($cluster in $clustersToCheck) {
+                $currentEdgeSite = $cluster.edgeSite
+
+                # Skip ArgoCD YAML validation for clusters where ArgoCD is disabled.
+                if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $inputData.common -FlagName "disableArgoCD") {
+                    Write-LogMessage -Type DEBUG -Message "ArgoCD is disabled for edgeSite `"$currentEdgeSite`"; skipping ArgoCD YAML path validation."
+                    continue
+                }
+
+                $argoCdOperatorYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputData.common -PropertyName "argoCdOperatorYamlPath"
+                $argoCdDeploymentYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputData.common -PropertyName "argoCdDeploymentYamlPath"
+
+                if ($argoCdOperatorYamlPath) {
+                    if (-not (Test-Path -LiteralPath $argoCdOperatorYamlPath)) {
+                        $missingYamlFiles += [PSCustomObject]@{
+                            EdgeSite = $currentEdgeSite
+                            FileType = "ArgoCD Operator YAML"
+                            FilePath = $argoCdOperatorYamlPath
+                        }
+                    }
+                } else {
+                    $missingYamlFiles += [PSCustomObject]@{
+                        EdgeSite = $currentEdgeSite
+                        FileType = "ArgoCD Operator YAML"
+                        FilePath = "Not specified in configuration"
+                    }
+                }
+
+                if ($argoCdDeploymentYamlPath) {
+                    if (-not (Test-Path -LiteralPath $argoCdDeploymentYamlPath)) {
+                        $missingYamlFiles += [PSCustomObject]@{
+                            EdgeSite = $currentEdgeSite
+                            FileType = "ArgoCD Deployment YAML"
+                            FilePath = $argoCdDeploymentYamlPath
+                        }
+                    }
+                } else {
+                    $missingYamlFiles += [PSCustomObject]@{
+                        EdgeSite = $currentEdgeSite
+                        FileType = "ArgoCD Deployment YAML"
+                        FilePath = "Not specified in configuration"
+                    }
+                }
+            }
+
+            # Harbor YAML validation: paths are Join-Path(supervisorServices.parentDirectory, *YamlFileName) with cluster/common fallback.
+            foreach ($cluster in $clustersToCheck) {
+                if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $inputData.common -FlagName "disableHarbor") {
+                    continue
+                }
+                $currentEdgeSite = $cluster.edgeSite
+                $harborServiceYamlPathForValidation = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
+                if ($harborServiceYamlPathForValidation) {
+                    if (-not (Test-Path -LiteralPath $harborServiceYamlPathForValidation)) {
+                        $missingYamlFiles += [PSCustomObject]@{
+                            EdgeSite = $currentEdgeSite
+                            FileType = "Harbor Service YAML"
+                            FilePath = $harborServiceYamlPathForValidation
+                        }
+                    }
+                } else {
+                    $missingYamlFiles += [PSCustomObject]@{
+                        EdgeSite = $currentEdgeSite
+                        FileType = "Harbor Service YAML"
+                        FilePath = "Not specified (supervisorServices.parentDirectory / harborServiceYamlFileName)"
+                    }
+                }
+                $harborDataValuesTemplatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
+                if ($harborDataValuesTemplatePath) {
+                    if (-not (Test-Path -LiteralPath $harborDataValuesTemplatePath)) {
+                        $missingYamlFiles += [PSCustomObject]@{
+                            EdgeSite = $currentEdgeSite
+                            FileType = "Harbor Data Values YAML template"
+                            FilePath = $harborDataValuesTemplatePath
+                        }
+                    }
+                } else {
+                    $missingYamlFiles += [PSCustomObject]@{
+                        EdgeSite = $currentEdgeSite
+                        FileType = "Harbor Data Values YAML template"
+                        FilePath = "Not specified (supervisorServices.parentDirectory / harborDataTemplateYamlFileName)"
+                    }
+                }
+            }
+
+            if ($missingYamlFiles.Count -gt 0) {
+                $errorMessage = "Required YAML files are missing or not accessible:`n"
+                foreach ($missingFile in $missingYamlFiles) {
+                    $errorMessage += "  - EdgeSite `"$($missingFile.EdgeSite)`": $($missingFile.FileType) - $($missingFile.FilePath)`n"
+                }
+                Write-LogMessage -Type ERROR -Message $errorMessage
+                Write-LogMessage -Type ERROR -Message "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
+                throw "[E-YAML-MISSING-001] Required YAML files are missing or not accessible. Check logs for details."
+            }
+
+            $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
+            Write-LogMessage -Type DEBUG -Message "YAML file validation completed for $siteIndication in $($yamlValidationElapsed.TotalSeconds.ToString('F2')) seconds."
+        } elseif ($ComputeOnly) {
+            Write-LogMessage -Type DEBUG -Message "ComputeOnly: skipping YAML file existence validation (Argo CD and Harbor are not deployed)."
+        } else {
+            Write-LogMessage -Type DEBUG -Message "Not performing YAML validation during cleanup."
+        }
+
+        # During cleanup, skip full JSON validation (shallow, deeper, network segment). Initialize-VcfEdgeAtScale will parse the JSON and resolve edge sites; invalid JSON will fail there.
+        if ($CleanUp -in @("Supervisor", "Compute", "All", "ArgoCD", "Harbor")) {
+            Write-LogMessage -Type DEBUG -Message "Cleanup mode: skipping full JSON validation; configuration will be parsed in Initialize-VcfEdgeAtScale."
+        } else {
+            Write-LogMessage -Type DEBUG -Message "Validating JSON configuration files for $siteIndication..."
+
+            # Perform shallow validation of input.json and supervisor.json configuration files (presence of properties only).
+            $shallowValidationStartTime = Get-Date
+            Write-LogMessage -Type INFO -Message "Checking for required JSON properties for $siteIndication..."
+            $shallowValidationParams = @{
+                InfrastructureJson = $InfrastructureJson
+                SupervisorJson = $SupervisorJson
+            }
+            if ($ComputeOnly) {
+                $shallowValidationParams.ComputeOnly = $true
+            }
+            if ($EdgeSite) {
+                $shallowValidationParams.EdgeSite = $EdgeSite
+            }
+            try {
+                Test-JsonShallowValidation @shallowValidationParams
+                $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
+                $totalElapsed = (Get-Date) - $validationStartTime
+                Write-LogMessage -Type DEBUG -Message "Required properties validation completed for $siteIndication in $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+            }
+            catch {
+                $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
+                Write-LogMessage -Type ERROR -Message "Required properties validation failed for $siteIndication after $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds."
+                throw
+            }
 
         # Perform deeper validation of input.json and supervisor.json configuration files (pattern matching of values).
         $deeperValidationStartTime = Get-Date
@@ -31177,10 +31576,9 @@ Function Start-ModernEdgeAtScale {
             throw
         }
 
-        # Load JSON data for network segment name uniqueness validation.
+        # Network segment name uniqueness validation (reuse parsed infrastructure object; paths already updated).
         $networkValidationStartTime = Get-Date
         Write-LogMessage -Type DEBUG -Message "Validating network segment names for $siteIndication..."
-        $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
 
         # Validate network segment name uniqueness within infrastructure.json.
         $networkSegmentValidationParams = @{
@@ -31193,7 +31591,7 @@ Function Start-ModernEdgeAtScale {
         if (-not $networkSegmentNameValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
             Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate network segment names. Please fix the naming conflicts and try again."
-            throw "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
+            throw "[E-NETSEG-001] Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
         } else {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Network segment name uniqueness validation passed."
         }
@@ -31270,48 +31668,51 @@ Function Start-ModernEdgeAtScale {
         }
     }
 
-    # Initialize the one node deployment.
-    $initParams = @{
-        InfrastructureJson = $InfrastructureJson
-        SupervisorJson     = $SupervisorJson
+        # Initialize the edge deployment workflow.
+        $initParams = @{
+            InfrastructureJson = $InfrastructureJson
+            SupervisorJson     = $SupervisorJson
+        }
+        if ($EdgeSite) {
+            $initParams.EdgeSite = $EdgeSite
+        }
+        if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
+            $initParams.CleanUp = $CleanUp
+        }
+        if ($ComputeOnly) {
+            $initParams.ComputeOnly = $true
+        }
+        if ($Force) {
+            $initParams.Force = $true
+        }
+        if ($SaveHarborYaml) {
+            $initParams.SaveHarborYaml = $true
+        }
+        Initialize-VcfEdgeAtScale @initParams
+    } finally {
+        $Global:ProgressPreference = $savedProgressPreference
     }
-    if ($EdgeSite) {
-        $initParams.EdgeSite = $EdgeSite
-    }
-    if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
-        $initParams.CleanUp = $CleanUp
-    }
-    if ($ComputeOnly) {
-        $initParams.ComputeOnly = $true
-    }
-    if ($Force) {
-        $initParams.Force = $true
-    }
-    if ($SaveHarborYaml) {
-        $initParams.SaveHarborYaml = $true
-    }
-    Initialize-ModernEdgeAtScale @initParams
 }
 
-Function Show-ModernEdgeAtScaleVersion {
+Function Show-VcfEdgeAtScaleVersion {
 
     <#
     .SYNOPSIS
-        Displays the version information for the ModernEdgeAtScale module.
+        Displays the version information for the VcfEdgeAtScale module.
 
     .DESCRIPTION
-        Shows the current version of the ModernEdgeAtScale module.
+        Shows the current version of the VcfEdgeAtScale module.
 
     .EXAMPLE
-        Show-ModernEdgeAtScaleVersion
+        Show-VcfEdgeAtScaleVersion
 
-        Displays: "ModernEdgeAtScale version: 1.0.0.2"
+        Displays: "VcfEdgeAtScale version: 1.0.0.2"
     #>
 
     [CmdletBinding()]
     param()
 
-    Write-LogMessage -Type INFO -Message "ModernEdgeAtScale version: $Script:ModuleVersion"
+    Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $Script:ModuleVersion"
 }
 Function Get-ModuleTemplatesPath {
 
@@ -31320,10 +31721,10 @@ Function Get-ModuleTemplatesPath {
         Resolves the full path to the module's Templates directory.
 
         .DESCRIPTION
-        Returns the path to the ModernEdgeAtScale Templates directory containing
+        Returns the path to the VcfEdgeAtScale Templates directory containing
         infrastructure.json, supervisor.json, argocd-deployment.yml, 1.1.0-25100889.yml, and
         harbor-data-values-v2.14.2.yml. Uses
-        Module.ModuleBase when available, then PSScriptRoot (with ModernEdgeAtScale subdirectory
+        Module.ModuleBase when available, then PSScriptRoot (with VcfEdgeAtScale subdirectory
         fallback for development), then Get-Module -ListAvailable. Throws if the Templates directory
         does not exist.
 
@@ -31335,7 +31736,7 @@ Function Get-ModuleTemplatesPath {
         $jsonPath = Join-Path $templatesPath "infrastructure.json"
 
         .NOTES
-        Used by Copy-ModernEdgeAtScaleTemplates. Requires Write-LogMessage for error logging.
+        Used by Copy-VcfEdgeAtScaleTemplates. Requires Write-LogMessage for error logging.
     #>
 
     Param ()
@@ -31347,13 +31748,13 @@ Function Get-ModuleTemplatesPath {
         $moduleBase = $PSScriptRoot
         $templatesCheck = Join-Path $moduleBase "Templates"
         if (-not (Test-Path $templatesCheck)) {
-            $subDirCheck = Join-Path $moduleBase (Join-Path "ModernEdgeAtScale" "Templates")
+            $subDirCheck = Join-Path $moduleBase (Join-Path "VcfEdgeAtScale" "Templates")
             if (Test-Path $subDirCheck) {
-                $moduleBase = Join-Path $moduleBase "ModernEdgeAtScale"
+                $moduleBase = Join-Path $moduleBase "VcfEdgeAtScale"
             }
         }
     } else {
-        $moduleInfo = Get-Module -Name "ModernEdgeAtScale" -ListAvailable | Select-Object -First 1
+        $moduleInfo = Get-Module -Name "VcfEdgeAtScale" -ListAvailable | Select-Object -First 1
         if ($moduleInfo -and $moduleInfo.ModuleBase) {
             $moduleBase = $moduleInfo.ModuleBase
         }
@@ -31372,14 +31773,14 @@ Function Get-ModuleTemplatesPath {
 
     return $templatesPath
 }
-Function Copy-ModernEdgeAtScaleTemplates {
+Function Copy-VcfEdgeAtScaleTemplates {
 
     <#
     .SYNOPSIS
         Copies supervisor deployment template files to a specified location.
 
     .DESCRIPTION
-        Copy-ModernEdgeAtScaleTemplates copies all eight required template files from the module's Templates
+        Copy-VcfEdgeAtScaleTemplates copies all eight required template files from the module's Templates
         directory to a specified destination: infrastructure.json, supervisor.json, infrastructure-config-help.json,
         supervisor-config-help.json, argocd-deployment.yml, 1.1.0-25100889.yml, harbor-data-values-v2.14.2.yml, and
         legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml. If any of these files are missing from
@@ -31398,17 +31799,17 @@ Function Copy-ModernEdgeAtScaleTemplates {
         Shows what would happen if the function runs. The function is executed but no changes are made.
 
     .EXAMPLE
-        Copy-ModernEdgeAtScaleTemplates
+        Copy-VcfEdgeAtScaleTemplates
 
         Copies all eight template files (including infrastructure-config-help.json and supervisor-config-help.json) to the current working directory.
 
     .EXAMPLE
-        Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"
+        Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config"
 
         Copies all template files to the ./config subdirectory.
 
     .EXAMPLE
-        Copy-ModernEdgeAtScaleTemplates -WhatIf
+        Copy-VcfEdgeAtScaleTemplates -WhatIf
 
         Shows what files would be copied without actually copying them.
 
@@ -31416,7 +31817,7 @@ Function Copy-ModernEdgeAtScaleTemplates {
         Template files are located in the module's Templates subdirectory. You can also access them directly
         using the module path:
 
-        $modulePath = (Get-Module -Name ModernEdgeAtScale -ListAvailable).ModuleBase
+        $modulePath = (Get-Module -Name VcfEdgeAtScale -ListAvailable).ModuleBase
         $templatePath = Join-Path $modulePath "Templates"
 
         The template files contain example values that must be modified for your specific environment.
@@ -31427,7 +31828,7 @@ Function Copy-ModernEdgeAtScaleTemplates {
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$DestinationPath = $PWD
     )
 
-    Write-LogMessage -Type DEBUG -Message "Entered Copy-ModernEdgeAtScaleTemplates function..."
+    Write-LogMessage -Type DEBUG -Message "Entered Copy-VcfEdgeAtScaleTemplates function..."
 
     # Validate destination path
     if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
@@ -31951,4 +32352,4 @@ Function Show-SupervisorJsonConfigurationHelp {
 #endregion
 
 # Export the public functions.
-Export-ModuleMember -Function 'Start-ModernEdgeAtScale', 'Copy-ModernEdgeAtScaleTemplates', 'Show-InfrastructureJsonConfigurationHelp', 'Show-SupervisorJsonConfigurationHelp'
+Export-ModuleMember -Function 'Start-VcfEdgeAtScale', 'Copy-VcfEdgeAtScaleTemplates', 'Show-InfrastructureJsonConfigurationHelp', 'Show-SupervisorJsonConfigurationHelp'

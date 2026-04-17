@@ -1,4 +1,4 @@
-# Modern Edge at Scale Automation
+# VcfEdgeAtScale — VCF Edge at Scale
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-7.4%2B-blue.svg)](https://github.com/PowerShell/PowerShell)
 [![License](https://img.shields.io/badge/License-Broadcom-green.svg)](LICENSE.md)
@@ -7,7 +7,13 @@
 
 ## Overview
 
-**ModernEdgeAtScale** deploys a vSphere Supervisor end to end in **VCF 9.x**, following the [single-node supervisor design guidance](https://blogs.vmware.com/cloud-foundation/2025/07/14/modernizing-your-edge-with-single-node-vsphere-supervisor-in-vmware-cloud-foundation-9-0/). It uses **VCF PowerCLI 9.0 or later** plus `infrastructure.json` and `supervisor.json` to drive cluster, network, storage, Supervisor, Argo CD, and Harbor.
+**VcfEdgeAtScale** deploys a vSphere Supervisor end to end in **VCF 9.x**, following the [single-node supervisor design guidance](https://blogs.vmware.com/cloud-foundation/2025/07/14/modernizing-your-edge-with-single-node-vsphere-supervisor-in-vmware-cloud-foundation-9-0/). It uses **VCF PowerCLI 9.0 or later** plus `infrastructure.json` and `supervisor.json` to drive cluster, network, storage, Supervisor, Argo CD, and Harbor.
+
+## Customer distribution
+
+- **Validate first:** Run **`Start-VcfEdgeAtScale -ValidateOnly`** (and **`Invoke-Pester`** on the module tests) in a non-production environment before production rollout.
+- **Support boundary:** External links in this README point to Broadcom or community documentation for **VCF**, **PowerShell**, and **Kubernetes**; your support agreement for this automation is defined by whoever ships the package to you (for example your account team or internal platform team).
+- **Identity:** The module manifest uses a unique **GUID** for side-by-side installs; do not duplicate the same GUID across forked packages you intend to publish separately.
 
 ## Prerequisites
 
@@ -53,7 +59,7 @@ This automation performs the following:
 ### Operational modes
 
 - **Validate only** (`-ValidateOnly`): JSON checks (including network segments) and YAML path checks only; no vCenter session and no deployment.
-- **Compute only** (`-ComputeOnly`): Cluster, hosts, storage, VDS, and vLCM through remediation; stops before Supervisor, Argo CD, and Harbor. JSON/YAML validation is limited to compute paths (supervisor.json, Argo/Harbor YAML, and `common.contextName` are not required).
+- **Compute only** (`-ComputeOnly`): Cluster, hosts, storage, VDS, and vLCM through remediation; stops before Supervisor, Argo CD, and Harbor. JSON/YAML validation is limited to compute paths (supervisor.json, Argo/Harbor YAML, and `common.contextName` are not required). **`Start-VcfEdgeAtScale`** does not run **`Invoke-HarborEnvVarPreflight`** in this mode, so **`harborConfiguration`** may still list **`$env:`** secrets for a later full deploy without defining those variables during compute-only preparation.
 - **Cleanup** (`-CleanUp`): Removes the chosen scope without deploying. Values: `Supervisor`, `Compute`, `All`, `ArgoCD`, `Harbor`.
   - **Supervisor:** Disable Supervisor; compute stays.
   - **Compute:** Remove VDS, storage, and cluster; fails if Supervisor is still enabled.
@@ -61,11 +67,11 @@ This automation performs the following:
   - **ArgoCD:** Remove the Argo CD supervisor namespace for that cluster; script waits until it is gone.
   - **Harbor:** Remove the Harbor Supervisor Service from the supervisor; script waits until it is gone.
   - Typed confirmation is required unless `-Force` is used with `common.labenvironment` true (for example `delete harbor for site1`; use your cleanup scope and edge site name).
-- **Rollback on failure:** Rollback follows the failure point (compute, Supervisor, Argo CD namespace, or Harbor service). `-RollbackOnFailure` selects always, never, or prompt (Y/N/Always).
+- **Rollback on failure:** Rollback follows the failure point (compute, Supervisor, Argo CD namespace, or Harbor service). `-RollbackOnFailure` selects always, never, or prompt (Y/N/Always). For a normal fix-and-retry workflow, choose rollback (Y, A, or `-RollbackOnFailure $true`) before you change configuration and run again. Use N or `-RollbackOnFailure $false` only when you deliberately keep a partial deployment open for hands-on debugging; when you are finished, run the matching `-CleanUp` scope (see **Cleanup** above) for that edge site so the next run does not stack on a broken half-state.
 
 ### Helper functions
 
-- **Copy-ModernEdgeAtScaleTemplates**: Copies all eight template files from the module (infrastructure.json, supervisor.json, infrastructure-config-help.json, supervisor-config-help.json, argocd-deployment.yml, ArgoCD operator YAML, Harbor data values YAML, and Harbor Supervisor Service package YAML) to your working directory.
+- **Copy-VcfEdgeAtScaleTemplates**: Copies all eight template files from the module (infrastructure.json, supervisor.json, infrastructure-config-help.json, supervisor-config-help.json, argocd-deployment.yml, ArgoCD operator YAML, Harbor data values YAML, and Harbor Supervisor Service package YAML) to your working directory.
 - **Show-InfrastructureJsonConfigurationHelp** / **Show-SupervisorJsonConfigurationHelp**: Display configuration reference (Key, Required, Notes) for the JSON files (List, Table, GridView, or Auto by terminal width; optional `-Filter`).
 
 ## Installation
@@ -74,9 +80,9 @@ This automation performs the following:
 
 1. Download the module files from this repository
 2. Extract to your PowerShell modules directory:
-   - **Windows**: `$env:USERPROFILE\Documents\PowerShell\Modules\ModernEdgeAtScale\`
-   - **Linux/macOS**: `~/.local/share/powershell/Modules/ModernEdgeAtScale/`
-3. Import the module: `Import-Module ModernEdgeAtScale`
+   - **Windows**: `$env:USERPROFILE\Documents\PowerShell\Modules\VcfEdgeAtScale\`
+   - **Linux/macOS**: `~/.local/share/powershell/Modules/VcfEdgeAtScale/`
+3. Import the module: `Import-Module VcfEdgeAtScale`
 
 ## Quick Start
 
@@ -86,13 +92,13 @@ The module includes default configuration templates. Copy them to your working d
 
 ```powershell
 # Copy all template files to current directory
-Copy-ModernEdgeAtScaleTemplates
+Copy-VcfEdgeAtScaleTemplates
 
 # Or specify a destination
-Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"
+Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config"
 
 # Preview what would be copied (without actually copying)
-Copy-ModernEdgeAtScaleTemplates -WhatIf
+Copy-VcfEdgeAtScaleTemplates -WhatIf
 ```
 
 This will copy eight template files:
@@ -110,7 +116,7 @@ This will copy eight template files:
 
 Edit the template files with your environment-specific values:
 
-- **infrastructure.json**: Update vCenter details, ESX host, cluster name, network settings, storage configuration
+- **infrastructure.json**: Update vCenter details, ESX host, cluster name, network settings, storage configuration. **Supervisor service YAML** paths are normally `Join-Path(supervisorServices.parentDirectory, *YamlFileName)` (cluster can override `parentDirectory` or each file name). If you omit `parentDirectory` or a matching `*YamlFileName`, the module falls back to legacy full paths in **`supervisorServices.argoCdOperatorYamlPath`**, **`argoCdDeploymentYamlPath`**, **`harborDataTemplateYamlPath`**, and **`harborServiceYamlPath`** (cluster overrides common per key). **Harbor TLS** PEMs use `Join-Path(harborConfiguration.parentDirectory, fileName)` when **`harborConfiguration.parentDirectory`** is set; if it is omitted, set **`tlsCrt`**, **`tlsKey`**, and **`caCrt`** to full or infrastructure-relative paths. After combining or resolving, paths use the same directory search as the module’s path resolver (current directory, then the infrastructure JSON folder).
 - **supervisor.json**: Configure supervisor cluster settings, network IP ranges, load balancer configuration
 - **argocd-deployment.yml**: Configure ArgoCD instance settings. **Note:** The namespace value in this file will be automatically modified during deployment to ensure uniqueness (the cluster MoRef identifier will be appended). The namespace value in `infrastructure.json` should match the base namespace value in this file.
 - **1.1.0-25100889.yml**: Typically no changes needed (ArgoCD operator package)
@@ -152,24 +158,24 @@ These functions display a reference table with **Key**, **Required** (Yes/No/Con
 
 ```powershell
 # Deploy using default configuration files
-Start-ModernEdgeAtScale
+Start-VcfEdgeAtScale
 
 # Validate configuration files only (no vCenter connection or deployment)
-Start-ModernEdgeAtScale -ValidateOnly
+Start-VcfEdgeAtScale -ValidateOnly
 
 # Or specify custom file paths and log level
-Start-ModernEdgeAtScale `
+Start-VcfEdgeAtScale `
     -InfrastructureJson "./config/infrastructure.json" `
     -SupervisorJson "./config/supervisor.json" `
     -LogLevel INFO
 
 # Deploy a single site, or run cleanup (Supervisor / Compute / All / ArgoCD), or compute-only
-# See the Start-ModernEdgeAtScale section below for more examples.
+# See the Start-VcfEdgeAtScale section below for more examples.
 ```
 
 ## Module Functions
 
-### Start-ModernEdgeAtScale
+### Start-VcfEdgeAtScale
 
 Main deployment function that automates the complete vSphere Supervisor deployment process.
 
@@ -180,9 +186,9 @@ Main deployment function that automates the complete vSphere Supervisor deployme
 - `ComputeOnly` (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying ArgoCD.
 - `EdgeSite` (String, optional) - Comma-delimited list of edge site names (e.g. `"site1,site2"`). Deploy only clusters whose `edgeSite` matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.
 - `Force` (Switch, optional) - When `common.labenvironment` is true in infrastructure JSON, bypasses the cleanup confirmation prompt when using `-CleanUp`. Has no effect otherwise; a warning is shown if used without lab.
-- `InfrastructureJson` (String, optional) - Path to infrastructure configuration JSON file. Default: `"infrastructure.json"`.
+- `InfrastructureJson` (String, optional) - Path to infrastructure configuration JSON file. Default: `"infrastructure.json"`. **Inside** the JSON, `common.supervisorServices` / `clusters[].supervisorServices` may use **`parentDirectory`** plus **`argoCdOperatorYamlFileName`**, **`argoCdDeploymentYamlFileName`**, **`harborDataTemplateYamlFileName`**, and **`harborServiceYamlFileName`** (cluster overrides common per key), **or** legacy **`argoCdOperatorYamlPath`**, **`argoCdDeploymentYamlPath`**, **`harborDataTemplateYamlPath`**, and **`harborServiceYamlPath`** when the directory + file name style is not used. **`harborConfiguration`** may use **`parentDirectory`** with **`tlsCrt`**, **`tlsKey`**, and **`caCrt`** as file names, **or** omit **`parentDirectory`** and supply full paths for those PEM fields. Paths are resolved against the current directory and the infrastructure JSON folder before existence checks.
 - `LogLevel` (String, optional) - Minimum log level for console output. Valid values: `DEBUG`, `INFO`, `ADVISORY`, `WARNING`, `EXCEPTION`, `ERROR`. Default: `"INFO"`.
-- `RollbackOnFailure` (Boolean, optional) - When `$true`: always rollback on failure (no prompt; for autonomous runs). When `$false`: never rollback; leave site in current state and continue to next site if any. When omitted: prompt (Y/N/Always). Rollback scope is automatic by failure state (see **Rollback behavior** below).
+- `RollbackOnFailure` (Boolean, optional) - When `$true`: always rollback on failure (no prompt; for autonomous runs). When `$false`: never rollback; leave site in current state and continue to next site if any. When omitted: prompt (Y/N/Always). Rollback scope is automatic by failure state (see **Rollback behavior** below). **Operational guidance:** answer Y (or use `$true`) before you re-try after a failure so the site is torn back to a consistent state. Use `$false` or N only for intentional leave-as-is debugging; afterward run the appropriate `-CleanUp` for that scope and edge site (for example `-CleanUp Harbor -EdgeSite site1`) before another full deployment.
 - `SaveHarborYaml` (Switch, optional) - When specified, the per-site Harbor data values YAML generated at runtime is moved to a `HarborYaml` subdirectory under the module directory instead of being deleted after installation. **Warning:** this file contains Harbor passwords and secrets in plain text. A `[WARNING]` is shown whenever this switch is used. Delete the file immediately after inspecting it.
 - `SupervisorJson` (String, optional) - Path to supervisor configuration JSON file. Default: `"supervisor.json"`.
 - `ValidateOnly` (Switch, optional) - Run JSON validation (shallow, deeper, network segment uniqueness) and YAML checks where applicable, then exit without connecting to vCenter or deploying. With **`disableArgoCD`** / **`disableHarbor`** on all clusters in scope, Argo- or Harbor-specific rules and YAML checks are skipped; use **`-ValidateOnly -ComputeOnly`** to validate only compute-related JSON. Use to validate configuration files before deployment.
@@ -190,67 +196,69 @@ Main deployment function that automates the complete vSphere Supervisor deployme
 
 **Rollback behavior:** Scope follows where the run failed: compute or vSAN before Supervisor → full compute teardown; after compute but before Argo CD → Supervisor disabled only; Argo CD issues → namespace removed, Supervisor kept; Harbor issues → Harbor service removed only. `-RollbackOnFailure` sets prompt, always, or never.
 
+**Re-trying after a failure:** Prefer rolling back first (interactive Y or A, or `-RollbackOnFailure $true`). Skipping rollback (`N` or `-RollbackOnFailure $false`) is for manual inspection only. After debugging, either re-run and choose rollback at the next failure prompt, or force a clean baseline with `-CleanUp` (same scopes as **Cleanup** above): for example `Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite site1` if only the Argo CD namespace should be removed, `-CleanUp Harbor` if only Harbor should be removed, `-CleanUp Supervisor` to disable the supervisor, `-CleanUp Compute` to remove compute (fails if the supervisor is still enabled), or `-CleanUp All` for supervisor then compute. Then fix your JSON or YAML and deploy again.
+
 **Examples:**
 
 ```powershell
 # Basic deployment with default files
-Start-ModernEdgeAtScale
+Start-VcfEdgeAtScale
 
 # Deployment with custom configuration files
-Start-ModernEdgeAtScale `
+Start-VcfEdgeAtScale `
     -InfrastructureJson "config/prod-infrastructure.json" `
     -SupervisorJson "config/prod-supervisor.json"
 
 # Deployment with DEBUG logging for troubleshooting
-Start-ModernEdgeAtScale -LogLevel DEBUG
+Start-VcfEdgeAtScale -LogLevel DEBUG
 
 # Deploy only a specific edge site (targeted deployments or troubleshooting)
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 
 # Deploy multiple edge sites in order (comma-delimited; only comma is allowed as separator)
-Start-ModernEdgeAtScale -EdgeSite "site1,site2"
+Start-VcfEdgeAtScale -EdgeSite "site1,site2"
 
 # Deploy specific edge site(s) with custom configuration files
-Start-ModernEdgeAtScale `
+Start-VcfEdgeAtScale `
     -EdgeSite "site2" `
     -InfrastructureJson "./config/infrastructure.json" `
     -SupervisorJson "./config/supervisor.json"
 
 # Autonomous run: always rollback on failure without prompting
-Start-ModernEdgeAtScale -RollbackOnFailure $true
+Start-VcfEdgeAtScale -RollbackOnFailure $true
 
 # Never rollback on failure; leave site in current state and continue to next site
-Start-ModernEdgeAtScale -RollbackOnFailure $false
+Start-VcfEdgeAtScale -RollbackOnFailure $false
 
 # Compute-only: prepare clusters, hosts, storage, VDS, and vLCM; exit without enabling supervisor
-Start-ModernEdgeAtScale -ComputeOnly
+Start-VcfEdgeAtScale -ComputeOnly
 
 # Cleanup supervisor only for site1 (compute remains); you must type "delete supervisor for site1" to confirm
-Start-ModernEdgeAtScale -CleanUp Supervisor -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Supervisor -EdgeSite "site1"
 
 # Cleanup ArgoCD namespace only for site1 (supervisor and compute remain); confirm with "delete argocd for site1"
-Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
 
 # Cleanup Harbor Supervisor Service only for site1 (supervisor, ArgoCD, and compute remain); confirm with "delete harbor for site1"
-Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
 
 # Cleanup compute only for site1 (fails if supervisor is deployed); confirm with "delete compute for site1"
-Start-ModernEdgeAtScale -CleanUp Compute -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Compute -EdgeSite "site1"
 
 # Cleanup all (supervisor then compute) for all sites; confirm per site with "delete all for <edgeSite>"
-Start-ModernEdgeAtScale -CleanUp All
+Start-VcfEdgeAtScale -CleanUp All
 
 # Cleanup all with -Force when common.labenvironment is true in infrastructure.json (bypasses confirmation)
-Start-ModernEdgeAtScale -CleanUp All -Force
+Start-VcfEdgeAtScale -CleanUp All -Force
 
 # Accept bad vSAN health or vLCM compliance (proceed without Y/N prompts)
-Start-ModernEdgeAtScale -AcceptBadCheckResults
+Start-VcfEdgeAtScale -AcceptBadCheckResults
 
 # Validate JSON and YAML only (no deployment)
-Start-ModernEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
+Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure.json" -SupervisorJson "supervisor.json"
 
 # Check module version
-Start-ModernEdgeAtScale -Version
+Start-VcfEdgeAtScale -Version
 
 # ---------------------------------------------------------------------------
 # Harbor: pre-set environment variable secrets before running (recommended).
@@ -263,13 +271,13 @@ $env:DATABASE_PASSWORD      = "MyDatabasePw1"
 $env:CORE_SECRET_KEY        = "MyCoreSecret1"
 $env:JOBSERVICE_SECRET_KEY  = "MyJobSvcSecret1"
 $env:REGISTRY_SECRET_KEY    = "MyRegSecret1"
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 
 # Harbor: omit env vars to use just-in-time interactive prompting.
 # Any $env: reference that is unset triggers a masked prompt at startup
 # (before vCenter connection or any deployment step). The value is cached
 # in the process environment for the rest of the run — only prompted once.
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 # Console output when HARBOR_ADMIN_PASSWORD and SECRET_KEY are unset:
 #   [INFO] harborConfiguration.harborAdminPassword references environment variable
 #          "HARBOR_ADMIN_PASSWORD" which is not set.
@@ -282,9 +290,9 @@ Start-ModernEdgeAtScale -EdgeSite "site1"
 # ArgoCD: roll back the ArgoCD namespace only, fix YAML, and retry.
 # Supervisor and Harbor remain intact; their steps are idempotently skipped.
 # ---------------------------------------------------------------------------
-Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
 # ... fix argocd-deployment.yml ...
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 
 # ArgoCD: after a successful deployment the console shows the temporary password
 # and the command to change it:
@@ -296,12 +304,12 @@ Start-ModernEdgeAtScale -EdgeSite "site1"
 # Harbor: roll back Harbor only, fix configuration, and retry.
 # Supervisor and ArgoCD remain intact; their steps are idempotently skipped.
 # ---------------------------------------------------------------------------
-Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
 # ... fix infrastructure.json harborConfiguration ...
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 
 # Autonomous run with Harbor and ArgoCD: always rollback on failure, no prompts
-Start-ModernEdgeAtScale -RollbackOnFailure $true
+Start-VcfEdgeAtScale -RollbackOnFailure $true
 ```
 
 **EdgeSite Parameter Usage:**
@@ -324,7 +332,7 @@ The `-EdgeSite` parameter lets you target one or more edge sites from your infra
 - Each value must exactly match an `edgeSite` in your infrastructure.json `clusters[]` array. If any specified site is invalid, the workflow fails with the list of valid values.
 - All clusters in the same infrastructure.json share the same vCenter connection (from `common.vCenterName`), so the connection persists when processing multiple clusters.
 
-### Copy-ModernEdgeAtScaleTemplates
+### Copy-VcfEdgeAtScaleTemplates
 
 Copies all required template files from the module installation directory to a specified destination.
 
@@ -338,16 +346,16 @@ Copies all required template files from the module installation directory to a s
 
 ```powershell
 # Copy templates to current directory
-Copy-ModernEdgeAtScaleTemplates
+Copy-VcfEdgeAtScaleTemplates
 
 # Copy templates to specific directory
-Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"
+Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config"
 
 # Preview what would be copied
-Copy-ModernEdgeAtScaleTemplates -WhatIf
+Copy-VcfEdgeAtScaleTemplates -WhatIf
 
 # Copy with confirmation prompt
-Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config" -Confirm
+Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config" -Confirm
 ```
 
 **Template Files Included:**
@@ -465,7 +473,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 **Structure:**
 
 - **`common`** – Settings used for all clusters (one vCenter, one datacenter, shared prefixes and content library). Prefixes and `esxUser` are optional; when omitted, defaults apply (see tables below).
-- **`clusters`** – Array of cluster objects. Each cluster is identified by `edgeSite` (must match a site in `supervisor.json`). Per-cluster you define ESX hosts, storage type, and network segments. ArgoCD YAML paths may be defined here to override the common defaults.
+- **`clusters`** – Array of cluster objects. Each cluster is identified by `edgeSite` (must match a site in `supervisor.json`). Per-cluster you define ESX hosts, storage type, and network segments. **`supervisorServices`** file names, **`parentDirectory`**, or legacy **`*YamlPath`** keys may be defined here to override the common defaults.
 
 **Important behavior:**
 
@@ -474,15 +482,15 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 - **vSAN witness:** `vSanWitnessVmName` may be defined at `common` (applies to all vSAN clusters) or per `clusters[]` (cluster root level only; cluster overrides common). Required for vSAN-OSA and vSAN-ESA storage types; not used for VMFS.
 - **vSphere HA admission (vSAN OSA/ESA only):** `haPolicy` may be defined at `common` or per `clusters[]` (cluster overrides common). Omitted means **`reservationBased`** (CPU and memory percentage admission; default percentage is ceiling(100 / host count) unless overridden). **`slotBased`** uses host failures tolerated = 1 (slot-style admission). **`disabled`** leaves HA on with admission control off (VM restart only, no capacity reservation). These values apply when the workflow re-applies HA after moving management to the VDS and when the vSAN alarm check remediates **vSphere HA host status**. **VMFS** clusters are not governed by this JSON key; HA re-apply after the VDS step continues to use **reservationBased**. When the key is present, JSON validation accepts only the three strings above.
 - **vSAN Health — Stats Primary election:** The module **does not** add Stats Primary to the vSAN **silent-check** list (no `VsanHealthSetVsanClusterSilentChecks` for that test). When the post-witness health summary is non-green **only** for Stats Primary election/selection (including common `perfsvc.masterexist` / label variants on older builds), it **re-triggers** evaluation: ensures the vSAN performance service is enabled, runs **`Test-VsanClusterHealth`** when the cmdlet exists (with **`VMCreateTimeoutSeconds`** when supported—default 120), waits between attempts, and re-reads health up to **four** times (45 s between attempts by default). If it still only shows that finding, deployment **proceeds with a warning** so a transient leader election does not block the gate. `common.labenvironment: true` still applies **separate** lab-only silent checks for other tests. After a successful vSAN edge deployment, **`Test-VsanClusterHealth`** runs again when available. Manual remediation remains per [Broadcom KB 401679](https://knowledge.broadcom.com/external/article/401679/stats-primary-election-alert-via-vsan-he.html). The module does not SSH to ESXi to restart services automatically.
-- **ArgoCD YAML paths:** `supervisorServices.argoCdOperatorYamlPath` and `supervisorServices.argoCdDeploymentYamlPath` may be defined at `common` (applies to all clusters) or per `clusters[]` (cluster overrides common). If any cluster omits both paths, `common.supervisorServices` must define them; if every cluster defines its own paths, `common.supervisorServices` is not required. Cluster-level always takes priority when both levels are defined. `supervisorServices.nameSpacePrefix` defaults to `argocd` if omitted. `supervisorServices.vmClass` is optional; when omitted, the script assigns all VM classes reported by vCenter to the ArgoCD namespace.
-- **Disabling supervisor services:** Set `supervisorServices.disableArgoCD: true` or `supervisorServices.disableHarbor: true` at `common` (affects all clusters) or per `clusters[]` (overrides common for that cluster only). Both default to `false` (enabled). When `disableArgoCD` is true, the ArgoCD service, namespace, operator, and instance steps are all skipped and the ArgoCD YAML paths do not need to be configured. When `disableHarbor` is true, Harbor service registration, data values generation, and installation are all skipped; `harborConfiguration` is not required and `harborServiceYamlPath` does not need to be configured.
+- **Supervisor service YAML files:** Preferred: under `supervisorServices`, set **`parentDirectory`** (folder containing the YAML files) and **`argoCdOperatorYamlFileName`**, **`argoCdDeploymentYamlFileName`**, **`harborDataTemplateYamlFileName`**, and **`harborServiceYamlFileName`** (file names only). Define these at `common` and/or override per `clusters[].supervisorServices` (cluster wins per key). If a cluster omits a file name, the common value is used when resolving the combined path. **Legacy:** omit **`parentDirectory`** (and rely on **`\*YamlPath`** instead) by setting **`argoCdOperatorYamlPath`**, **`argoCdDeploymentYamlPath`**, **`harborDataTemplateYamlPath`**, and **`harborServiceYamlPath`** to full or JSON-relative paths at `common` and/or per cluster (cluster overrides common per key). When `disableArgoCD` is true, Argo paths are not required. When `disableHarbor` is true, Harbor YAML paths are not required. `supervisorServices.nameSpacePrefix` defaults to `argocd` if omitted. `supervisorServices.vmClass` is optional; when omitted, the script assigns all VM classes reported by vCenter to the ArgoCD namespace.
+- **Disabling supervisor services:** Set `supervisorServices.disableArgoCD: true` or `supervisorServices.disableHarbor: true` at `common` (affects all clusters) or per `clusters[]` (overrides common for that cluster only). Both default to `false` (enabled). When `disableArgoCD` is true, the ArgoCD service, namespace, operator, and instance steps are all skipped and Argo file names do not need to be configured. When `disableHarbor` is true, Harbor service registration, data values generation, and installation are all skipped; `harborConfiguration` is not required and Harbor YAML file names do not need to be configured.
 - **Harbor configuration:** Each cluster needs a `harborConfiguration` block unless `disableHarbor` is true.
   - **Hostname:** `harborConfiguration.hostname` is required (FQDN or IP that DNS accepts).
   - **Volume sizes:** Optional `registryVolumeSize`, `jobserviceVolumeSize`, `databaseVolumeSize`, `redisVolumeSize`, `trivyVolumeSize` use `<positive integer>Gi` (for example `10Gi`).
   - **Secrets:** Optional keys map into the Harbor data values YAML. Prefix with `$env:VAR` to load at runtime so secrets stay out of JSON.
   - **Prompts:** If `$env:` is used and the variable is unset, the script asks once during pre-flight (masked input) and caches the value for the process. Plain text in JSON is never prompted for.
-  - **TLS:** `tlsCrt` and `tlsKey` are PEM file paths and must appear together; optional `caCrt` only when both are set. Paths are validated before deploy.
-  - **Service YAML:** Download the Harbor Supervisor Service Carvel package from Broadcom; set `common.supervisorServices.harborServiceYamlPath`.
+  - **TLS:** When using custom TLS, either set **`harborConfiguration.parentDirectory`** and use **`tlsCrt`** / **`tlsKey`** as **file names** under that directory (both required together), with optional **`caCrt`** as a file name when both TLS files are set, **or** omit **`parentDirectory`** and set **`tlsCrt`**, **`tlsKey`**, and optional **`caCrt`** to full or infrastructure-relative PEM paths (legacy). Paths are validated before deploy.
+  - **Service YAML:** Download the Harbor Supervisor Service Carvel package from Broadcom; set **`harborServiceYamlFileName`** (with **`parentDirectory`**) under `supervisorServices`, or use legacy **`harborServiceYamlPath`** / **`harborDataTemplateYamlPath`**.
   - **Order and rollback:** Harbor installs after Argo CD. Failure rolls back Harbor only so you can fix and re-run. `-CleanUp Harbor` removes Harbor without touching Supervisor or Argo CD.
 - **Network segment names** must be lower-case and RFC1123-compliant; they are matched to supervisor.json network references (case-sensitive).
 
@@ -510,12 +518,17 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `vLcmImageName` | No | vLCM image name in vCenter Image Catalog; omit to choose at run time. |
 | `vSanvMotionVmKernelMtuValue` | No | Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and vSAN Witness (vmk3) are always 1500. Must be a number between 1500 and 9190 (numbers only; validated at JSON load). Use 1500 when the physical path does not support jumbo frames. |
 | `nicList` | Conditional | Array of NICs for the VDS (e.g. `[{"name":"vmnic1"},{"name":"vmnic2"}]`). Number of uplinks = length of nicList. Required at common or per cluster; cluster overrides common. Must have 2 or 4 NICs. |
-| `supervisorServices.argoCdOperatorYamlPath` | Conditional | Default ArgoCD operator YAML path for all clusters (escape backslashes on Windows). Required here if any cluster omits this path at the cluster level; not required if every cluster defines its own. Ignored when `disableArgoCD` is true. |
-| `supervisorServices.argoCdDeploymentYamlPath` | Conditional | Default ArgoCD instance YAML path for all clusters; namespace in file must match `nameSpacePrefix`. Required here if any cluster omits this path at the cluster level; not required if every cluster defines its own. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.parentDirectory` | Conditional | Directory for Argo CD and Harbor YAML files when using `*YamlFileName` keys (escape backslashes on Windows). Not required if every Argo- or Harbor-enabled cluster resolves paths via legacy `*YamlPath` properties at common or cluster level. |
+| `supervisorServices.argoCdOperatorYamlFileName` | Conditional | File name under `parentDirectory` for the Argo CD operator package. Use with `parentDirectory`, or use `supervisorServices.argoCdOperatorYamlPath` instead. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdDeploymentYamlFileName` | Conditional | File name under `parentDirectory` for the Argo CD instance YAML; namespace in file must match `nameSpacePrefix`. Use with `parentDirectory`, or use `supervisorServices.argoCdDeploymentYamlPath` instead. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdOperatorYamlPath` | Conditional | Legacy full path to the Argo CD operator package YAML. Used when `parentDirectory` + `argoCdOperatorYamlFileName` do not both resolve. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdDeploymentYamlPath` | Conditional | Legacy full path to the Argo CD instance YAML. Used when `parentDirectory` + `argoCdDeploymentYamlFileName` do not both resolve. Ignored when `disableArgoCD` is true. |
 | `supervisorServices.disableArgoCD` | No | Boolean. When true, skips ArgoCD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins. Default: false. |
 | `supervisorServices.disableHarbor` | No | Boolean. When true, skips Harbor deployment (service registration, data values generation, installation) for all clusters. Cluster-level override wins. Default: false. |
-| `supervisorServices.harborDataTemplateYamlPath` | Conditional | Path to the Harbor data values YAML template (e.g. `harbor-data-values-v2.14.2.yml`). The script mutates a per-site copy of this file at runtime; the original is never modified. Required unless `disableHarbor` is true for all clusters. |
-| `supervisorServices.harborServiceYamlPath` | Conditional | Path to the Harbor Supervisor Service Carvel package YAML (e.g. `legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml`). Copied to your working directory by `Copy-ModernEdgeAtScaleTemplates`. Required unless `disableHarbor` is true for all clusters. |
+| `supervisorServices.harborDataTemplateYamlFileName` | Conditional | File name under `parentDirectory` for the Harbor data values template (e.g. `harbor-data-values-v2.14.2.yml`). The script mutates a per-site copy at runtime. Use with `parentDirectory`, or use `supervisorServices.harborDataTemplateYamlPath` instead. Not required when `disableHarbor` is true for all clusters. |
+| `supervisorServices.harborServiceYamlFileName` | Conditional | File name under `parentDirectory` for the Harbor Carvel package YAML. Use with `parentDirectory`, or use `supervisorServices.harborServiceYamlPath` instead. Not required when `disableHarbor` is true for all clusters. |
+| `supervisorServices.harborDataTemplateYamlPath` | Conditional | Legacy full path to the Harbor data values template YAML. Used when `parentDirectory` + `harborDataTemplateYamlFileName` do not both resolve. Not required when `disableHarbor` is true for all clusters. |
+| `supervisorServices.harborServiceYamlPath` | Conditional | Legacy full path to the Harbor Supervisor Service Carvel package YAML. Used when `parentDirectory` + `harborServiceYamlFileName` do not both resolve. Not required when `disableHarbor` is true for all clusters. |
 | `contextName` | Yes | VCF context name used by VCF CLI for ArgoCD. |
 
 #### clusters[] (each element)
@@ -527,8 +540,15 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `esxHosts` | Yes | Array of ESX FQDNs or IPs; script needs HTTPS access to each host. |
 | `vSanWitnessVmName` | Conditional | vSAN witness VM name or FQDN for this cluster. Overrides `common.vSanWitnessVmName`. Required (at cluster or common level) for vSAN-OSA and vSAN-ESA; not used for VMFS. |
 | `haPolicy` | No | Overrides `common.haPolicy` for this cluster when set. Same values and vSAN-only behavior as `common.haPolicy`. |
-| `supervisorServices.argoCdOperatorYamlPath` | Conditional | ArgoCD operator YAML path for this cluster (escape backslashes on Windows). Overrides `common.supervisorServices.argoCdOperatorYamlPath` when defined. Required here if the common level does not define it. Ignored when `disableArgoCD` is true. |
-| `supervisorServices.argoCdDeploymentYamlPath` | Conditional | ArgoCD instance YAML path for this cluster; namespace in file must match `nameSpacePrefix`. Overrides `common.supervisorServices.argoCdDeploymentYamlPath` when defined. Required here if the common level does not define it. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.parentDirectory` | No | Overrides `common.supervisorServices.parentDirectory` for this cluster when set. |
+| `supervisorServices.argoCdOperatorYamlFileName` | Conditional | Overrides common file name for this cluster when defined. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdDeploymentYamlFileName` | Conditional | Overrides common file name for this cluster when defined. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdOperatorYamlPath` | Conditional | Per-cluster legacy path to the Argo CD operator YAML; overrides common when set. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.argoCdDeploymentYamlPath` | Conditional | Per-cluster legacy path to the Argo CD instance YAML; overrides common when set. Ignored when `disableArgoCD` is true. |
+| `supervisorServices.harborDataTemplateYamlFileName` | Conditional | Overrides common Harbor data template file name when defined. Ignored when `disableHarbor` is true. |
+| `supervisorServices.harborServiceYamlFileName` | Conditional | Overrides common Harbor service package file name when defined. Ignored when `disableHarbor` is true. |
+| `supervisorServices.harborDataTemplateYamlPath` | Conditional | Per-cluster legacy path to the Harbor data values template YAML; overrides common when set. Ignored when `disableHarbor` is true. |
+| `supervisorServices.harborServiceYamlPath` | Conditional | Per-cluster legacy path to the Harbor Carvel package YAML; overrides common when set. Ignored when `disableHarbor` is true. |
 | `supervisorServices.disableArgoCD` | No | Boolean. Overrides `common.supervisorServices.disableArgoCD` for this cluster only. When true, skips ArgoCD deployment for this cluster. Default: false. |
 | `supervisorServices.disableHarbor` | No | Boolean. Overrides `common.supervisorServices.disableHarbor` for this cluster only. When true, skips Harbor deployment (service registration, data values generation, installation) for this cluster. Default: false. |
 | `supervisorServices.nameSpacePrefix` | No | ArgoCD namespace prefix. Omit for default `argocd`; script appends cluster MoRef for uniqueness. |
@@ -545,9 +565,10 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `harborConfiguration.coreSecret` | No | Override for the core inter-service secret (`core.secret` in YAML). Supports `$env:` resolution with interactive fallback prompt when unset. |
 | `harborConfiguration.jobserviceSecret` | No | Override for the jobservice inter-service secret (`jobservice.secret` in YAML). Supports `$env:` resolution with interactive fallback prompt when unset. |
 | `harborConfiguration.registrySecret` | No | Override for the registry upload-state secret (`registry.secret` in YAML). Supports `$env:` resolution with interactive fallback prompt when unset. |
-| `harborConfiguration.tlsCrt` | Conditional | Path to a PEM-encoded TLS certificate file. Required when `tlsKey` is set; both must be defined together. Contents are injected as `tls.crt` under `tlsCertificate` in the YAML. File existence is validated before deployment. |
-| `harborConfiguration.tlsKey` | Conditional | Path to a PEM-encoded TLS private key file. Required when `tlsCrt` is set; both must be defined together. Contents are injected as `tls.key` under `tlsCertificate` in the YAML. File existence is validated before deployment. |
-| `harborConfiguration.caCrt` | No | Path to a PEM-encoded CA certificate file. Only valid when both `tlsCrt` and `tlsKey` are defined. Contents are injected as `ca.crt` under `tlsCertificate` in the YAML. File existence is validated before deployment. |
+| `harborConfiguration.parentDirectory` | Conditional | When set, directory for TLS PEM files; `tlsCrt` / `tlsKey` / `caCrt` are file names under this directory. Omit when using full paths for those fields (legacy). |
+| `harborConfiguration.tlsCrt` | Conditional | With `parentDirectory`: certificate **file name** (e.g. `tls.crt.pem`). Without `parentDirectory`: full or JSON-relative path to the PEM file. Required when `tlsKey` is set; both must be defined together. |
+| `harborConfiguration.tlsKey` | Conditional | With `parentDirectory`: private key **file name**. Without `parentDirectory`: full or JSON-relative path. Required when `tlsCrt` is set; both must be defined together. |
+| `harborConfiguration.caCrt` | No | With `parentDirectory`: CA **file name**. Without `parentDirectory`: full or JSON-relative path. Only valid when both `tlsCrt` and `tlsKey` are defined. |
 | `storagePolicy.storagePolicyTagCatalog` | No | Tag catalog for storage policy. Omit for default `{storageType}-Storage-TagCatalog`. |
 | `storagePolicy.storageType` | Yes | Storage type: `VMFS`, `vSAN-ESA`, or `vSAN-OSA`. |
 | `networking.networkSegments` | Yes | Array of segments; names must match supervisor.json network references. |
@@ -622,7 +643,7 @@ $env:DATABASE_PASSWORD      = "MyDatabasePw1"
 $env:CORE_SECRET_KEY        = "MyCoreSecret1"
 $env:JOBSERVICE_SECRET_KEY  = "MyJobSvcSecret1"
 $env:REGISTRY_SECRET_KEY    = "MyRegSecret1"
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 ```
 
 **If env vars are not pre-set,** the script prompts at the start of the run (before connecting to vCenter):
@@ -672,7 +693,7 @@ Exception: Deployment aborted: harborConfiguration.secretKey must be exactly 16 
 **Saving the Harbor data values file (`-SaveHarborYaml`):** By default, the temporary Harbor data values YAML is deleted after successful installation. Specify `-SaveHarborYaml` to move it to a `HarborYaml` subdirectory under the module directory instead:
 
 ```powershell
-Start-ModernEdgeAtScale -SaveHarborYaml
+Start-VcfEdgeAtScale -SaveHarborYaml
 ```
 
 The directory is created automatically. If it cannot be created, deployment exits with an error before Harbor installation begins.
@@ -703,25 +724,25 @@ Change the password immediately after deployment using the provided command.
 
 ```powershell
 # 1. Remove only the ArgoCD namespace; supervisor and Harbor remain intact.
-Start-ModernEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"
 
 # 2. Fix your argocd-deployment.yml, then re-run.
 #    Supervisor and Harbor steps are idempotently skipped.
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 ```
 
 **Harbor rollback and retry:** Harbor failure rolls back only the Harbor Supervisor Service. The supervisor and ArgoCD remain intact and are idempotently verified (not re-deployed) on retry:
 
 ```powershell
 # 1. If you declined the rollback prompt or the service is stuck in ERROR state:
-Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
 
 # 2. Fix the issue (see Troubleshooting below), then retry.
 #    Supervisor and ArgoCD steps are idempotently skipped.
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 ```
 
-**Autonomous (unattended) runs:** Use `-RollbackOnFailure $true` to roll back automatically on any failure without prompting. Use `-RollbackOnFailure $false` to skip rollback and continue to the next site. Omit the parameter for an interactive Y/N/Always prompt at each failure.
+**Autonomous (unattended) runs:** Use `-RollbackOnFailure $true` to roll back automatically on any failure without prompting (recommended default for unattended pipelines). Use `-RollbackOnFailure $false` only when you accept a partial deployment and will run scoped `-CleanUp` yourself before the next attempt. Omit the parameter for an interactive Y/N/Always prompt at each failure.
 
 ## Logging
 
@@ -737,21 +758,21 @@ The module provides comprehensive logging with multiple levels:
 Log files are created in the `logs` subdirectory with the naming pattern:
 
 ```text
-logs/ModernEdgeAtScale-YYYY-MM-DD.log
+logs/VcfEdgeAtScale-YYYY-MM-DD.log
 ```
 
 ## Troubleshooting
 
 ### Template Files Not Found
 
-If `Copy-ModernEdgeAtScaleTemplates` cannot find template files:
+If `Copy-VcfEdgeAtScaleTemplates` cannot find template files:
 
 ```powershell
 # Check module installation path
-(Get-Module -Name ModernEdgeAtScale -ListAvailable).ModuleBase
+(Get-Module -Name VcfEdgeAtScale -ListAvailable).ModuleBase
 
 # Verify templates exist
-Test-Path "$((Get-Module ModernEdgeAtScale -ListAvailable).ModuleBase)\Templates"
+Test-Path "$((Get-Module VcfEdgeAtScale -ListAvailable).ModuleBase)\Templates"
 ```
 
 ### Module Not Found
@@ -760,19 +781,19 @@ If the module is not recognized:
 
 ```powershell
 # Check if module is installed
-Get-Module -Name ModernEdgeAtScale -ListAvailable
+Get-Module -Name VcfEdgeAtScale -ListAvailable
 
 # Check module path
 $env:PSModulePath
 
 # Reinstall if needed
-Install-Module -Name ModernEdgeAtScale -Force
+Install-Module -Name VcfEdgeAtScale -Force
 ```
 
 ### Deployment Failures
 
-1. **Enable DEBUG logging**: `Start-ModernEdgeAtScale -LogLevel DEBUG`
-2. **Check log files**: Review `logs/ModernEdgeAtScale-*.log`
+1. **Enable DEBUG logging**: `Start-VcfEdgeAtScale -LogLevel DEBUG`
+2. **Check log files**: Review `logs/VcfEdgeAtScale-*.log`
 3. **Validate JSON files**: Ensure configuration files are valid JSON
 4. **Verify prerequisites**: Confirm VCF.PowerCLI 9.0+, kubectl, and vcf CLI are available
 
@@ -838,16 +859,16 @@ If Harbor enters an `ERROR` state shortly after installation (within 5–10 seco
 
 ```powershell
 # Roll back Harbor only (supervisor and ArgoCD remain).
-Start-ModernEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
+Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"
 
 # Fix the issue, then retry.
-Start-ModernEdgeAtScale -EdgeSite "site1"
+Start-VcfEdgeAtScale -EdgeSite "site1"
 ```
 
 ### Common Issues
 
 - **"Templates directory not found"**: Reinstall the module or verify FileList in manifest
-- **"Required template files not found"**: Run `Copy-ModernEdgeAtScaleTemplates` to verify files exist
+- **"Required template files not found"**: Run `Copy-VcfEdgeAtScaleTemplates` to verify files exist
 - **"Unable to determine module installation path"**: Ensure module is properly installed via `Install-Module`
 
 ## Requirements
@@ -901,7 +922,7 @@ This module is maintained by Broadcom. For issues, feature requests, or contribu
 
 ## License
 
-Copyright (c) 2025 Broadcom. All Rights Reserved.
+Copyright (c) 2026 Broadcom. All Rights Reserved.
 
 See the module manifest or LICENSE file for full license details.
 
@@ -909,8 +930,8 @@ See the module manifest or LICENSE file for full license details.
 
 For support and documentation:
 
-- **Project Repository**: [GitHub Repository](https://github.com/vmware/powershell-module-for-simple-supervisor-deployment-at-scale)
-- **Documentation**: See module help: `Get-Help Start-ModernEdgeAtScale -Full`
+- **Project Repository**: [GitHub Repository](https://github.com/vmware/powershell-module-for-vcf-edge-at-scale)
+- **Documentation**: See module help: `Get-Help Start-VcfEdgeAtScale -Full`
 - **VMware Cloud Foundation Documentation**: [VCF Documentation](https://techdocs.broadcom.com/us/en/vmware-cloud-foundation.html)
 
 ### Support troubleshooting
@@ -942,10 +963,10 @@ Install the required PowerCLI module for VCF.
 
 ### 2. Install module and copy template files
 
-**Recommended:** Install **ModernEdgeAtScale** per [Installation](#installation), run `Import-Module ModernEdgeAtScale`, then copy the bundled templates to your working directory:
+**Recommended:** Install **VcfEdgeAtScale** per [Installation](#installation), run `Import-Module VcfEdgeAtScale`, then copy the bundled templates to your working directory:
 
 ```powershell
-Copy-ModernEdgeAtScaleTemplates -DestinationPath "./config"
+Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config"
 ```
 
 That copies eight files (paths in `infrastructure.json` must point to where you placed them):
@@ -961,14 +982,14 @@ That copies eight files (paths in `infrastructure.json` must point to where you 
 
 **Alternate:** If you use a zip bundle instead of the gallery module, extract it and use the same filenames (typically under `Templates` next to the `.psm1`). Update paths in `infrastructure.json` to match your machine.
 
-For sample JSON and `Start-ModernEdgeAtScale` usage, see [EXAMPLE.md](EXAMPLE.md).
+For sample JSON and `Start-VcfEdgeAtScale` usage, see [EXAMPLE.md](EXAMPLE.md).
 
 ### 3. Configure infrastructure.json
 
 Open `infrastructure.json` and review all the fields, updating as required for your environment. **Accuracy here is crucial for successful deployment.**
 
-- Set `supervisorServices.argoCdOperatorYamlPath` and `supervisorServices.argoCdDeploymentYamlPath` to your copies of the operator YAML and `argocd-deployment.yml` unless Argo CD is disabled (`supervisorServices.disableArgoCD`).
-- Configure Harbor template paths and `harborConfiguration` unless Harbor is disabled (`supervisorServices.disableHarbor`).
+- Set `supervisorServices.parentDirectory` and `supervisorServices.argoCdOperatorYamlFileName` / `argoCdDeploymentYamlFileName` to your copies of the operator YAML and `argocd-deployment.yml` unless Argo CD is disabled (`supervisorServices.disableArgoCD`), or use legacy `argoCdOperatorYamlPath` / `argoCdDeploymentYamlPath` with full paths.
+- Configure Harbor template paths and `harborConfiguration` unless Harbor is disabled (`supervisorServices.disableHarbor`); use `*YamlFileName` + `parentDirectory` or legacy `harborDataTemplateYamlPath` / `harborServiceYamlPath`.
 
 **Argo CD namespace:** The base namespace in `argocd-deployment.yml` must match `supervisorServices.nameSpacePrefix` (default `argocd`). During deployment the script appends the cluster MoRef (e.g. `argocd` → `argocd-c462`) so multiple supervisors on one vCenter do not collide. Edit `argocd-deployment.yml` only when you need a non-default instance spec; see [Argo CD service documentation](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/using-argo-cd-service/argocd-custom-resrouce-reference.html).
 
@@ -986,7 +1007,7 @@ Show-InfrastructureJsonConfigurationHelp -Format GridView # Interactive (Windows
 
 Alternatively, refer to the table in `Admin.Guide.Single.Node.Supervisor.rtf` for detailed configuration guidance.
 
-**Optional:** Run `Start-ModernEdgeAtScale -ValidateOnly` to validate JSON and YAML paths without connecting to vCenter. See [EXAMPLE.md](EXAMPLE.md) for sample output.
+**Optional:** Run `Start-VcfEdgeAtScale -ValidateOnly` to validate JSON and YAML paths without connecting to vCenter. See [EXAMPLE.md](EXAMPLE.md) for sample output.
 
 ### 4. Configure supervisor.json
 
@@ -1008,7 +1029,7 @@ Alternatively, refer to the table in `Admin.Guide.Single.Node.Supervisor.rtf` fo
 
 ### 5. Argo CD operator YAML (optional)
 
-If Broadcom publishes a newer Argo CD operator package than the template (`1.1.0-25100889.yml`), download it from the product documentation and set `supervisorServices.argoCdOperatorYamlPath` in `infrastructure.json` to that file.
+If Broadcom publishes a newer Argo CD operator package than the template (`1.1.0-25100889.yml`), download it from the product documentation and set `supervisorServices.argoCdOperatorYamlFileName` in `infrastructure.json` to that file name (under `parentDirectory`), or set `supervisorServices.argoCdOperatorYamlPath` to the full path.
 
 ### 6. Install VCF CLI
 

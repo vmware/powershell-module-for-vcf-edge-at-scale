@@ -1,3 +1,5 @@
+# Releases
+
 ## 1.0.0.3
 
 - Configurable vSphere HA admission policy for vSAN stretched clusters (`common.haPolicy` / `clusters[].haPolicy`): **`reservationBased`** when omitted, or **`slotBased`** / **`disabled`** when set; validated when the key is set. VMFS clusters keep percentage-based admission on HA re-apply after the VDS step.
@@ -26,14 +28,13 @@
 - ComputeOnly deployment option.
 - vLCM image compliance check before supervisor workflow.
 - Ability to disable ArgoCD or Harbor services (non-default).
+- Updated ArgoCD version
 
-# 1.0.0.2 
+## 1.0.0.2 
 
 - Fixes Windows compatibility issues with YAML parsing and handling kubectl/vcf commands on Windows.
 - Improved error messages.
 
-# 1.0.0.1 
+## 1.0.0.1 
 
 - Initial Release.
-
-

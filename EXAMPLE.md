@@ -1,316 +1,29 @@
 # Usage Examples
 
-**Prerequisites:** PowerShell 7.4+, **VCF PowerCLI 9.0+** (`VCF.PowerCLI`; 9.0 and 9.1 supported), kubectl, and the VCF CLI (`vcf`), per [README.md](README.md).
-
-## Base JSON files - updated 2026-03-04
-
-### infrastructure.json
-
-```powershell
-{
-  "common": {
-    "nonInteractivePassword": true,
-    "labEnvironment": true,
-    "vCenterName": "10.191.174.202",
-    "vCenterUser": "administrator@vsphere.local",
-    "datacenterName": "UnitTest",
-    "vLcmImageName": "ESX902-ESA",
-    "nicList": [
-      { "name": "vmnic0" },
-      { "name": "vmnic1" }
-    ],
-    "contextName": "vcf-context-01"
-  },
-  "clusters": [
-    {
-      "edgeSite": "ESA",
-      "esxHosts": [
-        "10.191.171.173",
-        "10.191.171.174"
-      ],
-      "supervisorServices": {
-        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\1.1.0-25100889.yml",
-        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\argocd-deployment.yml",
-        "vSanWitnessVmName": "10.191.174.196"
-      },
-      "storagePolicy": {
-        "storageType": "vSAN-ESA"
-      },
-      "networking": {
-        "networkSegments": [
-          {
-            "name": "primaryworkloadnetwork",
-            "vlanId": "300",
-            "gateway": "10.30.10.1/24"
-          },
-          {
-            "name": "flbmanagementnetwork",
-            "vlanId": "301",
-            "gateway": "10.30.11.1/24"
-          },
-          {
-            "name": "virtualservernetwork",
-            "vlanId": "302",
-            "gateway": "10.30.12.1/24"
-          },
-          {
-            "name": "tkgsmgmtnetwork",
-            "vlanId": "303",
-            "gateway": "10.30.13.1/24"
-          }
-        ],
-        "networkingVmKernelInterfaces": [
-          {
-            "service": "vMotion",
-            "vlanId": "304",
-            "netmask": "255.255.255.0",
-            "ipList": ["10.30.14.12", "10.30.14.13"]
-          },
-          {
-            "service": "vSAN",
-            "vlanId": "305",
-            "netmask": "255.255.255.0",
-            "ipList": ["10.30.15.12", "10.30.15.13"]
-          }
-        ]
-      }
-    },
-    {
-      "edgeSite": "OSA",
-      "esxHosts": [
-        "10.191.171.201",
-        "10.191.171.171"
-      ],
-      "supervisorServices": {
-        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\1.1.0-25100889.yml",
-        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\argocd-deployment.yml",
-        "vSanWitnessVmName": "10.191.174.197"
-      },
-      "storagePolicy": {
-        "storageType": "vSAN-OSA"
-      },
-      "networking": {
-        "networkSegments": [
-          {
-            "name": "primaryworkloadnetwork-2",
-            "vlanId": "400",
-            "gateway": "10.40.10.1/24"
-          },
-          {
-            "name": "flbmanagementnetwork-2",
-            "vlanId": "401",
-            "gateway": "10.40.11.1/24"
-          },
-          {
-            "name": "virtualservernetwork-2",
-            "vlanId": "402",
-            "gateway": "10.40.12.1/24"
-          },
-          {
-            "name": "tkgsmgmtnetwork-2",
-            "vlanId": "403",
-            "gateway": "10.40.13.1/24"
-          }
-        ],
-        "networkingVmKernelInterfaces": [
-          {
-            "service": "vMotion",
-            "vlanId": "404",
-            "netmask": "255.255.255.0",
-            "ipList": ["10.40.14.12", "10.40.14.13"]
-          },
-          {
-            "service": "vSAN",
-            "vlanId": "405",
-            "netmask": "255.255.255.0",
-            "ipList": ["10.40.15.12", "10.40.15.13"]
-          }
-        ]
-      }
-    },
-    {
-      "edgeSite": "VMFS",
-      "esxHosts": [
-        "10.191.171.172"
-      ],
-      "supervisorServices": {
-        "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\1.1.0-25100889.yml",
-        "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\argocd-deployment.yml"
-      },
-      "storagePolicy": {
-        "storageType": "VMFS"
-      },
-      "networking": {
-        "networkSegments": [
-          {
-            "name": "primaryworkloadnetwork-3",
-            "vlanId": "500",
-            "gateway": "10.50.10.1/24"
-          },
-          {
-            "name": "flbmanagementnetwork-3",
-            "vlanId": "501",
-            "gateway": "10.50.11.1/24"
-          },
-          {
-            "name": "virtualservernetwork-3",
-            "vlanId": "502",
-            "gateway": "10.50.12.1/24"
-          },
-          {
-            "name": "tkgsmgmtnetwork-3",
-            "vlanId": "503",
-            "gateway": "10.50.13.1/24"
-          }
-        ]
-      }
-    }
-  ]
-}
-```
-
-### supervisor.json
-
-```powershell
-{
-  "commonSupervisorSpec": {
-    "controlPlaneVMCount": 1,
-    "controlPlaneSize": "SMALL",
-    "flbAvailability": "SINGLE_NODE",
-    "flbSize": "MEDIUM",
-    "flbNetworkType": "DVPG",
-    "networkSearchDomains": [
-      "vcfedge.demo"
-    ],
-    "networkNtpServers": [
-      "10.34.14.20"
-    ],
-    "dnsServers": [
-      "10.191.174.20"
-    ]
-  },
-  "tkgsSiteSpec": [
-    {
-      "edgeSite": "ESA",
-      "foundationLoadBalancerComponents": {
-        "flbName": "flb-site1",
-        "flbVipStartIP": "10.30.12.201",
-        "flbVipIPCount": 50,
-        "flbManagementNetwork": {
-          "flbNetworkName": "flbmanagementnetwork",
-          "flbNetworkIpAddressStartingIp": "10.30.11.101",
-          "flbNetworkIpAddressCount": 40
-        },
-        "flbVirtualServerNetwork": {
-          "flbNetworkName": "virtualservernetwork",
-          "flbNetworkIpAddressStartingIp": "10.30.12.141",
-          "flbNetworkIpAddressCount": 60
-        }
-      },
-      "tkgsMgmtNetworkSpec": {
-        "tkgsMgmtNetworkName": "tkgsmgmtnetwork",
-        "tkgsMgmtNetworkStartingIp": "10.30.13.100",
-        "tkgsMgmtNetworkIPCount": 7
-      },
-      "tkgsPrimaryWorkloadNetwork": {
-        "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork",
-        "tkgsPrimaryWorkloadNetworkStartingIp": "10.30.10.101",
-        "tkgsPrimaryWorkloadNetworkIPCount": 100,
-        "tkgsWorkloadServiceStartIp": "10.97.0.0",
-        "tkgsWorkloadServiceCount": 512
-      }
-    },
-    {
-      "edgeSite": "OSA",
-      "foundationLoadBalancerComponents": {
-        "flbName": "flb-site2",
-        "flbVipStartIP": "10.40.12.201",
-        "flbVipIPCount": 50,
-        "flbManagementNetwork": {
-          "flbNetworkName": "flbmanagementnetwork-2",
-          "flbNetworkIpAddressStartingIp": "10.40.11.101",
-          "flbNetworkIpAddressCount": 40,
-          "flbNetworkGateway": "10.40.11.1/24"
-        },
-        "flbVirtualServerNetwork": {
-          "flbNetworkName": "virtualservernetwork-2",
-          "flbNetworkIpAddressStartingIp": "10.40.12.141",
-          "flbNetworkIpAddressCount": 60,
-          "flbNetworkGateway": "10.40.12.1/24"
-        }
-      },
-      "tkgsMgmtNetworkSpec": {
-        "tkgsMgmtNetworkName": "tkgsmgmtnetwork-2",
-        "tkgsMgmtNetworkStartingIp": "10.40.13.100",
-        "tkgsMgmtNetworkIPCount": 7
-      },
-      "tkgsPrimaryWorkloadNetwork": {
-        "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork-2",
-        "tkgsPrimaryWorkloadNetworkStartingIp": "10.40.10.101",
-        "tkgsPrimaryWorkloadNetworkIPCount": 100,
-        "tkgsWorkloadServiceStartIp": "10.97.0.0",
-        "tkgsWorkloadServiceCount": 512
-      }
-    },
-    {
-      "edgeSite": "VMFS",
-      "foundationLoadBalancerComponents": {
-        "flbName": "flb-site3",
-        "flbVipStartIP": "10.50.12.201",
-        "flbVipIPCount": 50,
-        "flbManagementNetwork": {
-          "flbNetworkName": "flbmanagementnetwork-3",
-          "flbNetworkIpAddressStartingIp": "10.50.11.101",
-          "flbNetworkIpAddressCount": 40,
-          "flbNetworkGateway": "10.50.11.1/24"
-        },
-        "flbVirtualServerNetwork": {
-          "flbNetworkName": "virtualservernetwork-3",
-          "flbNetworkIpAddressStartingIp": "10.50.12.141",
-          "flbNetworkIpAddressCount": 60,
-          "flbNetworkGateway": "10.50.12.1/24"
-        }
-      },
-      "tkgsMgmtNetworkSpec": {
-        "tkgsMgmtNetworkName": "tkgsmgmtnetwork-3",
-        "tkgsMgmtNetworkStartingIp": "10.50.13.100",
-        "tkgsMgmtNetworkIPCount": 7
-      },
-      "tkgsPrimaryWorkloadNetwork": {
-        "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork-3",
-        "tkgsPrimaryWorkloadNetworkStartingIp": "10.50.10.101",
-        "tkgsPrimaryWorkloadNetworkIPCount": 100,
-        "tkgsWorkloadServiceStartIp": "10.97.0.0",
-        "tkgsWorkloadServiceCount": 512
-      }
-    }
-  ]
-}
-
-```
+**Prerequisites:** PowerShell 7.4+, VCF PowerCLI 9.0+,  kubectl, VCF CLI (`vcf`), per [README.md](README.md).
 
 ## Show help for all public functions - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -?
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -?
 
 NAME
-    Start-ModernEdgeAtScale
+    Start-VcfEdgeAtScale
 
 SYNOPSIS
-    Automates the end-to-end deployment of a simple vSphere Supervisor at scale in VMware Cloud Foundation 9.x.
+    Automates end-to-end vSphere Supervisor edge deployment at scale in VMware Cloud Foundation 9.x.
 
 
 SYNTAX
-    Start-ModernEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-ComputeOnly]
+    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-ComputeOnly]
     [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [[-InfrastructureJson] <String>]
     [[-LogLevel] <String>] [[-RollbackOnFailure] <Nullable`1>] [[-SupervisorJson] <String>] [-ValidateOnly] [-Version]
     [<CommonParameters>]
 
 
 DESCRIPTION
-    Start-ModernEdgeAtScale is designed to streamline the deployment of a simple vSphere Supervisor in
-    VMware Cloud Foundation (VCF) 9.x environments. The function handles all aspects of the deployment including:
+    Start-VcfEdgeAtScale orchestrates vSphere Supervisor cluster preparation and deployment in
+    VMware Cloud Foundation (VCF) 9.x environments. The function handles the deployment workflow including:
 
     - vCenter and ESX host connection
     - ESX Cluster creation and host add
@@ -323,9 +36,9 @@ DESCRIPTION
 RELATED LINKS
 
 REMARKS
-    To see the examples, type: "Get-Help Start-ModernEdgeAtScale -Examples"
-    For more information, type: "Get-Help Start-ModernEdgeAtScale -Detailed"
-    For technical information, type: "Get-Help Start-ModernEdgeAtScale -Full"
+    To see the examples, type: "Get-Help Start-VcfEdgeAtScale -Examples"
+    For more information, type: "Get-Help Start-VcfEdgeAtScale -Detailed"
+    For technical information, type: "Get-Help Start-VcfEdgeAtScale -Full"
 
 PS C:\Users\Administrator> show-SupervisorJsonConfigurationHelp -?
 
@@ -384,12 +97,12 @@ REMARKS
 ## Example of ValidateOnly (JSON) - 2026-03-04
 
 ```powershell
- PS C:\Users\Administrator> start-ModernEdgeAtScale -ValidateOnly
+ PS C:\Users\Administrator> Start-VcfEdgeAtScale -ValidateOnly
 
 [INFO] Checking for required JSON properties for all sites...
 [INFO] Validating property formats and values for all sites...
 [INFO] ValidateOnly: validation passed. Exiting without deployment.
-PS C:\Users\Administrator> start-ModernEdgeAtScale -ValidateOnly -EdgeSite ESA
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -ValidateOnly -EdgeSite ESA
 
 [INFO] Checking for required JSON properties for edgeSite(s) "ESA"...
 [INFO] Validating property formats and values for edgeSite(s) "ESA"...
@@ -508,7 +221,7 @@ tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount              
 
 ```powershell
 
-PS C:\Users\Administrator> start-ModernEdgeAtScale
+PS C:\Users\Administrator> Start-VcfEdgeAtScale
 
 [INFO] Checking for required JSON properties for all sites...
 [INFO] Validating property formats and values for all sites...
@@ -930,7 +643,7 @@ ESX902-ESA  9.0.2.0.25148076
 ## Validate idempotency of one deployment against fully deployed site - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -edgesite ESA
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -edgesite ESA
 
 [INFO] Checking for required JSON properties for edgeSite(s) "ESA"...
 [INFO] Validating property formats and values for edgeSite(s) "ESA"...
@@ -1021,7 +734,7 @@ PS C:\Users\Administrator> start-ModernEdgeAtScale -edgesite ESA
 ## Cleanup ArgoCD app (one site, force option (no prompt)) - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -Edgesite OSA -Cleanup argocd -Force
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite OSA -Cleanup argocd -Force
 
 [INFO] Processing 1 edge site(s): OSA...
 [INFO] Beginning workflow for edgeSite: "OSA".
@@ -1037,7 +750,7 @@ PS C:\Users\Administrator> start-ModernEdgeAtScale -Edgesite OSA -Cleanup argocd
 ## Example of cleanup of supervisor for one site - 2026-03-05
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -Edgesite OSA -Cleanup supervisor
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite OSA -Cleanup supervisor
 
 [INFO] Processing 1 edge site(s): OSA...
 [INFO] Beginning workflow for edgeSite: "OSA".
@@ -1059,7 +772,7 @@ To confirm cleanup, type exactly (or copy/paste): delete supervisor for OSA
 ## Example of cleanup of compute for one site - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -edgesite OSA -Cleanup compute
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -edgesite OSA -Cleanup compute
 
 [INFO] Processing 1 edge site(s): OSA...
 [INFO] Beginning workflow for edgeSite: "OSA".
@@ -1090,7 +803,7 @@ To confirm cleanup, type exactly (or copy/paste): delete compute for OSA
 ## Example of cleanup of one site (all resources) - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -Edgesite ESA -Cleanup all
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite ESA -Cleanup all
 
 [INFO] Processing 1 edge site(s): ESA...
 [INFO] Beginning workflow for edgeSite: "ESA".
@@ -1125,7 +838,7 @@ delete all for ESA
 ## Example of deployment of one site (four NICs, two vDSs) - 2026-03-04
 
 ```powershell
-PPS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite OSA
+PPS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite OSA
 
 [INFO] Checking for required JSON properties for edgeSite(s) "OSA"...
 [INFO] Validating property formats and values for edgeSite(s) "OSA"...
@@ -1295,7 +1008,7 @@ Id VMHostName     CanonicalName                        CapacityGB Model         
 ## Example of compute-only one-site deployment (one vDS, two NIC), UN/PW - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite ESA -ComputeOnly
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite ESA -ComputeOnly
 
 [INFO] Checking for required JSON properties for edgeSite(s) "ESA"...
 [INFO] Validating property formats and values for edgeSite(s) "ESA"...
@@ -1389,7 +1102,7 @@ Id VMHostName     CanonicalName                        CapacityGB Model
 ## Example of deploying two sites (vSAN-OSA, vSAN-ESA) - 2026-03-05
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite "OSA,ESA"
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite "OSA,ESA"
 
 [INFO] Checking for required JSON properties for edgeSite(s) "OSA", "ESA"...
 [INFO] Validating property formats and values for edgeSite(s) "OSA", "ESA"...
@@ -1405,7 +1118,7 @@ PS C:\Users\Administrator>
 >> $env:VCENTER_COMMON_PASSWORD="VMware1!VMware1!"
 >> $env:ESX_COMMON_PASSWORD="VMware1!VMware1!"
 >>
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite "OSA,ESA"
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite "OSA,ESA"
 
 [INFO] Checking for required JSON properties for edgeSite(s) "OSA", "ESA"...
 [INFO] Validating property formats and values for edgeSite(s) "OSA", "ESA"...
@@ -1721,7 +1434,7 @@ Id VMHostName     CanonicalName                        CapacityGB Model
 ## Example of multi-site cleanup - 2026-03-04
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -cleanup all -force
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -cleanup all -force
 
 [INFO] Processing all 3 edge site(s)...
 [INFO] Beginning workflow for 3 edge site(s), starting with edgeSite: "ESA".
@@ -1773,7 +1486,7 @@ PS C:\Users\Administrator> start-ModernEdgeAtScale -cleanup all -force
 ## Example of Harbor Cleanup - 2026-04-01
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite VMFS -cleanup harbor -force
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS -cleanup harbor -force
 
 [INFO] Processing 1 edge site(s): VMFS...
 [INFO] Beginning workflow for edgeSite: "VMFS".
@@ -1801,7 +1514,7 @@ PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite VMFS -cleanup harbo
 ## Example of Harbor Deployment (only cert and hostname specified in YAML) - 2026-04-01
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite VMFS
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS
 
 [INFO] Checking for required JSON properties for edgeSite(s) "VMFS"...
 [INFO] Validating property formats and values for edgeSite(s) "VMFS"...
@@ -1884,7 +1597,7 @@ PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite VMFS
 ## Example of Harbor Deployment (save yaml) - 2026-04-01
 
 ```powershell
-PS C:\Users\Administrator> start-ModernEdgeAtScale -EdgeSite VMFS -SaveHarborYaml
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS -SaveHarborYaml
 
 [INFO] Checking for required JSON properties for edgeSite(s) "VMFS"...
 [INFO] Validating property formats and values for edgeSite(s) "VMFS"...
