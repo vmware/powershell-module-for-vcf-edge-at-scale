@@ -100,14 +100,19 @@
     "Notes": "Optional. Legacy. MTU (1500-9190) for VDS and vMotion/vSAN VMkernels when common.vSanvMotionVmKernelMtuValue is not set. Mgmt and vSAN Witness are always 1500."
   },
   {
-    "Key": "common.supervisorServices.argoCdOperatorYamlPath",
+    "Key": "common.supervisorServices.parentDirectory",
     "Required": "Conditional",
-    "Notes": "Default ArgoCD operator YAML path for all clusters (escape backslashes on Windows). Required here if any cluster omits this path at the cluster level. Ignored when disableArgoCD is true."
+    "Notes": "Directory containing Argo CD and Harbor YAML files when using *YamlFileName keys (escape backslashes on Windows). Not required if every Argo- or Harbor-enabled cluster resolves YAML via legacy *YamlPath properties at common or cluster level. When set with a file name, paths are Join-Path(parentDirectory, *YamlFileName)."
   },
   {
-    "Key": "common.supervisorServices.argoCdDeploymentYamlPath",
+    "Key": "common.supervisorServices.argoCdOperatorYamlFileName",
     "Required": "Conditional",
-    "Notes": "Default ArgoCD instance YAML path for all clusters; namespace in file must match nameSpacePrefix. Required here if any cluster omits this path at the cluster level. Ignored when disableArgoCD is true."
+    "Notes": "File name only (e.g. 1.1.0-25100889.yml) under parentDirectory for the Argo CD operator package. Use with parentDirectory, or use common.supervisorServices.argoCdOperatorYamlPath instead. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "common.supervisorServices.argoCdDeploymentYamlFileName",
+    "Required": "Conditional",
+    "Notes": "File name only under parentDirectory for the Argo CD instance YAML; namespace in file must match nameSpacePrefix. Use with parentDirectory, or use common.supervisorServices.argoCdDeploymentYamlPath instead. Ignored when disableArgoCD is true."
   },
   {
     "Key": "common.supervisorServices.disableArgoCD",
@@ -120,14 +125,34 @@
     "Notes": "Boolean. When true, skips Harbor deployment (service registration, data values generation, installation) for all clusters. Cluster-level override wins. Default: false."
   },
   {
+    "Key": "common.supervisorServices.harborDataTemplateYamlFileName",
+    "Required": "Conditional",
+    "Notes": "File name only (e.g. harbor-data-values-v2.14.2.yml) under parentDirectory for the Harbor data values template. The script creates a per-site copy at runtime; the original is never modified. Use with parentDirectory, or use common.supervisorServices.harborDataTemplateYamlPath instead. Not required when disableHarbor is true for all clusters."
+  },
+  {
+    "Key": "common.supervisorServices.harborServiceYamlFileName",
+    "Required": "Conditional",
+    "Notes": "File name only for the Harbor Supervisor Service Carvel package YAML (e.g. legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml) under parentDirectory. Use with parentDirectory, or use common.supervisorServices.harborServiceYamlPath instead. Not required when disableHarbor is true for all clusters."
+  },
+  {
+    "Key": "common.supervisorServices.argoCdOperatorYamlPath",
+    "Required": "Conditional",
+    "Notes": "Legacy full or infrastructure-relative path to the Argo CD operator package YAML. Used when parentDirectory and argoCdOperatorYamlFileName do not both resolve (cluster overrides common). Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "common.supervisorServices.argoCdDeploymentYamlPath",
+    "Required": "Conditional",
+    "Notes": "Legacy full or infrastructure-relative path to the Argo CD instance YAML. Used when parentDirectory and argoCdDeploymentYamlFileName do not both resolve (cluster overrides common). Ignored when disableArgoCD is true."
+  },
+  {
     "Key": "common.supervisorServices.harborDataTemplateYamlPath",
     "Required": "Conditional",
-    "Notes": "Path to the Harbor data values YAML template (e.g. harbor-data-values-v2.14.2.yml). The script creates a per-site copy of this file at runtime; the original is never modified. Required unless disableHarbor is true for all clusters."
+    "Notes": "Legacy full or infrastructure-relative path to the Harbor data values template YAML. Used when parentDirectory and harborDataTemplateYamlFileName do not both resolve (cluster overrides common). Not required when disableHarbor is true for all clusters."
   },
   {
     "Key": "common.supervisorServices.harborServiceYamlPath",
     "Required": "Conditional",
-    "Notes": "Path to the Harbor Supervisor Service Carvel package YAML (e.g. legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml). Copied to your working directory by Copy-ModernEdgeAtScaleTemplates. Required unless disableHarbor is true for all clusters."
+    "Notes": "Legacy full or infrastructure-relative path to the Harbor Supervisor Service Carvel package YAML. Used when parentDirectory and harborServiceYamlFileName do not both resolve (cluster overrides common). Not required when disableHarbor is true for all clusters."
   },
   {
     "Key": "clusters",
@@ -160,14 +185,49 @@
     "Notes": "Overrides common.haPolicy for this cluster. Same allowed values and vSAN-only scope as common.haPolicy. When the key exists, value must be reservationBased, slotBased, or disabled."
   },
   {
+    "Key": "clusters[].supervisorServices.parentDirectory",
+    "Required": "No",
+    "Notes": "Override directory for this cluster’s supervisorServices YAML files. When set, used instead of common.supervisorServices.parentDirectory for Join-Path with *YamlFileName keys. Omit to use common parentDirectory or legacy *YamlPath resolution."
+  },
+  {
+    "Key": "clusters[].supervisorServices.argoCdOperatorYamlFileName",
+    "Required": "Conditional",
+    "Notes": "Overrides common.supervisorServices.argoCdOperatorYamlFileName for this cluster when defined. Use with parentDirectory, or use clusters[].supervisorServices.argoCdOperatorYamlPath instead. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.argoCdDeploymentYamlFileName",
+    "Required": "Conditional",
+    "Notes": "Overrides common.supervisorServices.argoCdDeploymentYamlFileName for this cluster when defined. Use with parentDirectory, or use clusters[].supervisorServices.argoCdDeploymentYamlPath instead. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.harborDataTemplateYamlFileName",
+    "Required": "Conditional",
+    "Notes": "Overrides common.supervisorServices.harborDataTemplateYamlFileName for this cluster when defined. Use with parentDirectory, or use clusters[].supervisorServices.harborDataTemplateYamlPath instead. Ignored when disableHarbor is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.harborServiceYamlFileName",
+    "Required": "Conditional",
+    "Notes": "Overrides common.supervisorServices.harborServiceYamlFileName for this cluster when defined. Use with parentDirectory, or use clusters[].supervisorServices.harborServiceYamlPath instead. Ignored when disableHarbor is true."
+  },
+  {
     "Key": "clusters[].supervisorServices.argoCdOperatorYamlPath",
     "Required": "Conditional",
-    "Notes": "ArgoCD operator YAML path for this cluster. Overrides common.supervisorServices.argoCdOperatorYamlPath when defined. Ignored when disableArgoCD is true."
+    "Notes": "Per-cluster legacy path to the Argo CD operator YAML; overrides common when set. Used when parentDirectory and argoCdOperatorYamlFileName do not both resolve. Ignored when disableArgoCD is true."
   },
   {
     "Key": "clusters[].supervisorServices.argoCdDeploymentYamlPath",
     "Required": "Conditional",
-    "Notes": "ArgoCD instance YAML path for this cluster; namespace in file must match nameSpacePrefix. Overrides common.supervisorServices.argoCdDeploymentYamlPath when defined. Ignored when disableArgoCD is true."
+    "Notes": "Per-cluster legacy path to the Argo CD instance YAML; overrides common when set. Ignored when disableArgoCD is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.harborDataTemplateYamlPath",
+    "Required": "Conditional",
+    "Notes": "Per-cluster legacy path to the Harbor data values template YAML; overrides common when set. Ignored when disableHarbor is true."
+  },
+  {
+    "Key": "clusters[].supervisorServices.harborServiceYamlPath",
+    "Required": "Conditional",
+    "Notes": "Per-cluster legacy path to the Harbor Carvel package YAML; overrides common when set. Ignored when disableHarbor is true."
   },
   {
     "Key": "clusters[].supervisorServices.disableArgoCD",
@@ -225,19 +285,24 @@
     "Notes": "Override for the registry upload-state secret. Supports $env: resolution with interactive fallback prompt when unset."
   },
   {
+    "Key": "clusters[].harborConfiguration.parentDirectory",
+    "Required": "Conditional",
+    "Notes": "When tlsCrt, tlsKey, or caCrt are set: optional directory containing those PEM files as file names (or relative fragments under this directory). When omitted, tlsCrt, tlsKey, and caCrt are full or infrastructure-relative paths (legacy)."
+  },
+  {
     "Key": "clusters[].harborConfiguration.tlsCrt",
     "Required": "Conditional",
-    "Notes": "Path to a PEM-encoded TLS certificate file. Required when tlsKey is set; both must be defined together. Contents injected as tls.crt under tlsCertificate in the YAML. File existence is validated before deployment."
+    "Notes": "With parentDirectory: TLS certificate file name (e.g. tls.crt.pem). Without parentDirectory: full or infrastructure-relative path to the PEM file. Required when tlsKey is set; both must be defined together. Contents injected as tls.crt under tlsCertificate in the YAML."
   },
   {
     "Key": "clusters[].harborConfiguration.tlsKey",
     "Required": "Conditional",
-    "Notes": "Path to a PEM-encoded TLS private key file. Required when tlsCrt is set; both must be defined together. Contents injected as tls.key under tlsCertificate in the YAML. File existence is validated before deployment."
+    "Notes": "With parentDirectory: TLS private key file name (e.g. tls.key.pem). Without parentDirectory: full or infrastructure-relative path. Required when tlsCrt is set; both must be defined together. Contents injected as tls.key under tlsCertificate in the YAML."
   },
   {
     "Key": "clusters[].harborConfiguration.caCrt",
     "Required": "No",
-    "Notes": "Path to a PEM-encoded CA certificate file. Only valid when both tlsCrt and tlsKey are defined. Contents injected as ca.crt under tlsCertificate in the YAML. Also used as the certificate chain when registering Harbor as a Supervisor container image registry."
+    "Notes": "With parentDirectory: CA certificate file name. Without parentDirectory: full or infrastructure-relative path. Only valid when both tlsCrt and tlsKey are defined. Contents injected as ca.crt under tlsCertificate in the YAML. Also used when registering Harbor as a Supervisor container image registry."
   },
   {
     "Key": "clusters[].harborConfiguration.registryVolumeSize",

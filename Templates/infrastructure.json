@@ -9,10 +9,11 @@
       { "name": "vmnic1" }
     ],
     "supervisorServices": {
-      "argoCdDeploymentYamlPath": "C:\\Users\\Administrator\\Documents\\argocd-deployment.yml",
-      "argoCdOperatorYamlPath": "C:\\Users\\Administrator\\Documents\\1.1.0-25100889.yml",
-      "harborDataTemplateYamlPath": "C:\\Users\\Administrator\\Documents\\harbor-data-values-v2.14.2.yml",
-      "harborServiceYamlPath": "C:\\Users\\Administrator\\Documents\\legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
+      "parentDirectory": "C:\\Users\\Administrator\\Documents\\",
+      "argoCdDeploymentYamlFileName": "argocd-deployment.yml",
+      "argoCdOperatorYamlFileName": "1.1.0-25100889.yml",
+      "harborDataTemplateYamlFileName": "harbor-data-values-v2.14.2.yml",
+      "harborServiceYamlFileName": "legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
     },
     "vLcmImageName": "autogen-software-spec-1",
     "vSanWitnessVmName": "vsanwitness.example.com",
@@ -26,10 +27,11 @@
         "esx02.example.com"
       ],
       "harborConfiguration": {
+        "parentDirectory": "C:\\Users\\Administrator\\Documents\\",
         "hostname": "harbor-site1.example.com",
-        "tlsCrt": "C:\\Users\\Administrator\\Documents\\tls.crt.pem",
-        "tlsKey": "C:\\Users\\Administrator\\Documents\\tls.key.pem",
-        "caCrt": "C:\\Users\\Administrator\\Documents\\ca.crt.pem",
+        "tlsCrt": "tls.crt.pem",
+        "tlsKey": "tls.key.pem",
+        "caCrt": "ca.crt.pem",
         "registryVolumeSize": "10Gi",
         "jobserviceVolumeSize": "5Gi",
         "databaseVolumeSize": "10Gi",
