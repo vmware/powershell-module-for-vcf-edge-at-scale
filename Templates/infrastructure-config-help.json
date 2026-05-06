@@ -1,4 +1,6 @@
-[
+{
+  "moduleVersion": "1.0.3",
+  "entries": [
   {
     "Key": "common.vCenterName",
     "Required": "Yes",
@@ -50,9 +52,9 @@
     "Notes": "Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars."
   },
   {
-    "Key": "common.labEnvironment",
+    "Key": "common.labenvironment",
     "Required": "No",
-    "Notes": "Boolean. When true, some vSAN health checks are relaxed. With -Force, bypasses cleanup confirmation."
+    "Notes": "Boolean lab mode (property name is case-insensitive in JSON; templates use labenvironment). Relaxes some gates; Harbor TLS may be omitted when true."
   },
   {
     "Key": "common.clusterNamePrefix",
@@ -162,12 +164,22 @@
   {
     "Key": "clusters[].edgeSite",
     "Required": "Yes",
-    "Notes": "Unique site ID; must match one tkgsSiteSpec[].edgeSite in supervisor.json."
+    "Notes": "Unique site ID; must match one siteSpec[].edgeSite in supervisor.json."
   },
   {
     "Key": "clusters[].esxHosts",
     "Required": "Yes",
     "Notes": "Array of ESX FQDNs or IPs; script needs HTTPS access to each host."
+  },
+  {
+    "Key": "clusters[].networking",
+    "Required": "Yes",
+    "Notes": "Container for networkSegments and (for vSAN) networkingVmKernelInterfaces. Required by shallow validation."
+  },
+  {
+    "Key": "clusters[].storagePolicy",
+    "Required": "Yes",
+    "Notes": "Container for storage type and tag catalog. Required by shallow validation."
   },
   {
     "Key": "clusters[].nicList",
@@ -187,7 +199,7 @@
   {
     "Key": "clusters[].supervisorServices.parentDirectory",
     "Required": "No",
-    "Notes": "Override directory for this cluster’s supervisorServices YAML files. When set, used instead of common.supervisorServices.parentDirectory for Join-Path with *YamlFileName keys. Omit to use common parentDirectory or legacy *YamlPath resolution."
+    "Notes": "Override directory for this cluster's supervisorServices YAML files. When set, used instead of common.supervisorServices.parentDirectory for Join-Path with *YamlFileName keys. Omit to use common parentDirectory or legacy *YamlPath resolution."
   },
   {
     "Key": "clusters[].supervisorServices.argoCdOperatorYamlFileName",
@@ -367,6 +379,32 @@
   {
     "Key": "clusters[].networking.networkingVmKernelInterfaces",
     "Required": "Conditional",
-    "Notes": "Required for vSAN-ESA and vSAN-OSA only (not VMFS). At least two entries: vMotion, vSAN (required). Optional third: vSAN Witness. Each entry: service, vlanId (0-4095), netmask (valid IPv4 netmask), ipList (exactly two unique IPv4s, one per host). Only the vSAN Witness entry requires gateway."
+    "Notes": "Required for vSAN-ESA and vSAN-OSA only (not VMFS). At least two entries: vMotion, vSAN (required). Optional third: vSAN Witness. Shallow / deeper checks validate the child keys below."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces[].service",
+    "Required": "Conditional",
+    "Notes": "One of: vMotion, vSAN, vSAN Witness (exact strings). vMotion and vSAN are required across the array; vSAN Witness is optional."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces[].vlanId",
+    "Required": "Conditional",
+    "Notes": "VLAN ID 0-4095; must match a segment used for that traffic class."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces[].netmask",
+    "Required": "Conditional",
+    "Notes": "IPv4 netmask for the VMkernel (e.g. 255.255.255.0)."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces[].ipList",
+    "Required": "Conditional",
+    "Notes": "Array of exactly two unique IPv4 addresses (order aligns with esxHosts order)."
+  },
+  {
+    "Key": "clusters[].networking.networkingVmKernelInterfaces[].gateway",
+    "Required": "Conditional",
+    "Notes": "Optional. Used on the vSAN Witness entry only: IPv4 gateway applied via esxcli after the VMkernel exists."
   }
-]
+  ]
+}

@@ -15,7 +15,7 @@
         "10.191.174.20"
       ]
     },
-    "tkgsSiteSpec": [
+    "siteSpec": [
       {
         "edgeSite": "site1",
         "foundationLoadBalancerComponents": {
@@ -33,17 +33,17 @@
             "flbNetworkIpAddressCount": 60
           }
         },
-        "tkgsMgmtNetworkSpec": {
-          "tkgsMgmtNetworkName": "tkgsmgmtnetwork",
-          "tkgsMgmtNetworkStartingIp": "10.30.13.100",
-          "tkgsMgmtNetworkIPCount": 7
+        "mgmtNetworkSpec": {
+          "mgmtNetworkName": "mgmtnetwork",
+          "mgmtNetworkStartingIp": "10.30.13.100",
+          "mgmtNetworkIPCount": 7
         },
-        "tkgsPrimaryWorkloadNetwork": {
-          "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork",
-          "tkgsPrimaryWorkloadNetworkStartingIp": "10.30.10.101",
-          "tkgsPrimaryWorkloadNetworkIPCount": 100,
-          "tkgsWorkloadServiceStartIp": "10.97.0.0",
-          "tkgsWorkloadServiceCount": 512
+        "primaryWorkloadNetwork": {
+          "primaryWorkloadNetworkName": "primaryworkloadnetwork",
+          "primaryWorkloadNetworkStartingIp": "10.30.10.101",
+          "primaryWorkloadNetworkIPCount": 100,
+          "workloadServiceStartIp": "10.97.0.0",
+          "workloadServiceCount": 512
         }
       },
       {
@@ -65,17 +65,17 @@
             "flbNetworkGateway": "10.40.12.1/24"
           }
         },
-        "tkgsMgmtNetworkSpec": {
-          "tkgsMgmtNetworkName": "tkgsmgmtnetwork-2",
-          "tkgsMgmtNetworkStartingIp": "10.40.13.100",
-          "tkgsMgmtNetworkIPCount": 7
+        "mgmtNetworkSpec": {
+          "mgmtNetworkName": "mgmtnetwork-2",
+          "mgmtNetworkStartingIp": "10.40.13.100",
+          "mgmtNetworkIPCount": 7
         },
-        "tkgsPrimaryWorkloadNetwork": {
-          "tkgsPrimaryWorkloadNetworkName": "primaryworkloadnetwork-2",
-          "tkgsPrimaryWorkloadNetworkStartingIp": "10.40.10.101",
-          "tkgsPrimaryWorkloadNetworkIPCount": 100,
-          "tkgsWorkloadServiceStartIp": "10.97.0.0",
-          "tkgsWorkloadServiceCount": 512
+        "primaryWorkloadNetwork": {
+          "primaryWorkloadNetworkName": "primaryworkloadnetwork-2",
+          "primaryWorkloadNetworkStartingIp": "10.40.10.101",
+          "primaryWorkloadNetworkIPCount": 100,
+          "workloadServiceStartIp": "10.97.0.0",
+          "workloadServiceCount": 512
         }
       }
     ]

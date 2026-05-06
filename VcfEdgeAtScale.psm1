@@ -27,8 +27,8 @@
 # =============================================================================
 #
 # PowerShell Module: VcfEdgeAtScale
-# Module Version: 1.0.0.3
-# Last modified: 2026-04-13
+# Module Version: 1.0.3.1000
+# Last modified: 2026-05-06
 #
 # Section map (see #region in this file):
 #   Script scope variables — module state and CLI command names
@@ -37,10 +37,10 @@
 #   Private — VDS, VMkernel cleanup, management restore
 #   Private — supervisor, Harbor, Argo CD, workload networking
 #   Private — cleanup, deployment bootstrap, validation, vLCM helpers
-#   Exported — Start-VcfEdgeAtScale, templates, configuration help
+#   Exported — Start-VcfEdgeAtScale, configuration help
 #
 #region Script scope variables
-$Script:ModuleVersion = '1.0.0.3'
+$Script:ModuleVersion = '1.0.3.1000'
 
 # Set platform-specific command names for cross-platform compatibility.
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
@@ -91,6 +91,14 @@ $Script:HarborPhaseStarted = $false
 $Script:VcfPowerCliModuleVersion = $null
 # Parent directory of the infrastructure JSON file; set by Update-InfrastructureJsonReferencedFilePaths for Resolve-InfrastructureReferencedFilePath when combining supervisorServices parentDirectory with file names.
 $Script:InfrastructureJsonParentForPathResolution = $null
+
+# Service YAML basenames shipped under Templates; update this list when template versions change (used by Start-VcfEdgeAtScale -Initialize).
+$Script:VcfEdgeAtScaleServiceYamlTemplateFileNames = @(
+    "1.1.0-25100889.yml",
+    "argocd-deployment.yml",
+    "harbor-data-values-v2.14.2.yml",
+    "legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
+)
 
 # Enforce minimum engine version (must match VcfEdgeAtScale.psd1 PowerShellVersion).
 $Script:MinimumPowerShellEngineVersion = [Version]"7.4"
@@ -147,7 +155,6 @@ Function Initialize-ScriptVcfPowerCliModuleVersion {
 
     $Script:VcfPowerCliModuleVersion = [Version]$vcfPowerCliRelease
 }
-
 Function Get-VcfSdkInitializeCommand {
 
     <#
@@ -186,7 +193,6 @@ Function Get-VcfSdkInitializeCommand {
 
     return $null
 }
-
 Function Test-VcfPowerCliVersionAtLeast {
 
     <#
@@ -217,7 +223,6 @@ Function Test-VcfPowerCliVersionAtLeast {
 
     return ($Script:VcfPowerCliModuleVersion -ge $MinimumVersion)
 }
-
 Function Get-VcenterRestApiPlainPassword {
 
     <#
@@ -264,7 +269,6 @@ Function Get-VcenterRestApiPlainPassword {
 
     return $null
 }
-
 Function ConvertTo-SecureStringForCredential {
 
     <#
@@ -278,7 +282,6 @@ Function ConvertTo-SecureStringForCredential {
 
     return ConvertTo-SecureString -String $PlainText -AsPlainText -Force
 }
-
 Function Set-ScriptVcenterPasswordFromCredential {
 
     <#
@@ -305,7 +308,6 @@ Function Set-ScriptVcenterPasswordFromCredential {
         [System.Runtime.InteropServices.Marshal]::ZeroFreeCoTaskMemUnicode($decodedPasswordInterimStep)
     }
 }
-
 Function Test-LogLevel {
 
     <#
@@ -340,8 +342,8 @@ Function Test-LogLevel {
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ConfiguredLevel,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MessageType
+        [Parameter(Mandatory = $true)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$ConfiguredLevel,
+        [Parameter(Mandatory = $true)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$MessageType
     )
 
     $messageLevel = $Script:LogLevelHierarchy[$MessageType]
@@ -421,7 +423,7 @@ Function Write-ErrorAndReturn {
 
     Write-LogMessage -Type ERROR -Message $ErrorMessage
 
-    return @{
+    return [PSCustomObject]@{
         Success = $false
         ErrorMessage = $ErrorMessage
         ErrorCode = $ErrorCode
@@ -565,8 +567,10 @@ Function Get-CleanServiceErrorMessage {
     }
 
     # Remove duplicate phrases (2+ chars) if the same text appears multiple times.
+    # Word boundaries prevent mid-word collapsing (e.g. "processing" is not reduced because
+    # the repeat would not align to a word boundary on both ends).
     if ($actualMessage) {
-        $actualMessage = $actualMessage -replace '(.{2,}?)\1+', '$1'
+        $actualMessage = $actualMessage -replace '\b(.{2,}?)\1+\b', '$1'
     }
 
     # Build clean error message.
@@ -591,8 +595,8 @@ Function Get-CleanServiceErrorMessage {
     $cleaned = $cleaned -replace 'Severity:\s*[^,]+', ''
     $cleaned = $cleaned -replace 'Id:\s*[^,]+', ''
     $cleaned = $cleaned -replace 'DefaultMessage:\s*[^,]+', ''
-    # Remove duplicate phrases (2+ chars).
-    $cleaned = $cleaned -replace '(.{2,}?)\1+', '$1'
+    # Remove duplicate phrases (2+ chars). Word boundaries prevent mid-word collapsing.
+    $cleaned = $cleaned -replace '\b(.{2,}?)\1+\b', '$1'
     # Clean up extra whitespace and punctuation.
     $cleaned = $cleaned -replace '\s+', ' '
     $cleaned = $cleaned -replace '\.\.+', '.'
@@ -664,6 +668,9 @@ Function Get-EnvironmentSetup {
 
     # Start with basic OS information from PowerShell automatic variables.
     $operatingSystem = $($PSVersionTable.OS)
+    # Initialize platform-specific strings so the later if-tests are safe under StrictMode.
+    $macOsVersion = $null
+    $windowsVersion = $null
 
     # Enhanced macOS information - sw_vers provides more user-friendly OS details than Darwin kernel info.
     if ($IsMacOS) {
@@ -709,7 +716,7 @@ Function New-LogFile {
 
         .DESCRIPTION
         The New-LogFile function establishes the logging infrastructure for the VcfEdgeAtScale module by creating
-        a daily log file under the module root. The function creates
+        a daily log file under the module root or an optional deployment root. The function creates
         one log file using the format yyyy-MM-dd, ensuring logs are organized chronologically.
         If the log directory doesn't exist, it will be created automatically. When a new log file
         is created, the function automatically calls Get-EnvironmentSetup to record system
@@ -719,12 +726,15 @@ Function New-LogFile {
         - $Script:LogFolder: Path to the log directory
         - $Script:LogFile: Full path to the current log file
 
+        .PARAMETER BaseDirectory
+        Optional root directory under which the log folder is created (joined with Directory). When omitted, PSScriptRoot is used so logs remain under the module path.
+
         .PARAMETER Prefix
         Specifies the prefix for the log file name. The final log file will be named
         "{Prefix}-{yyyy-MM-dd}.log". Default value is "VcfEdgeAtScale".
 
         .PARAMETER Directory
-        Specifies the directory name where log files will be stored, relative to the script root.
+        Specifies the directory name segment where log files are stored, relative to BaseDirectory when set, otherwise relative to the module script root.
         The directory will be created if it doesn't exist. Default value is "logs".
 
         .EXAMPLE
@@ -733,15 +743,20 @@ Function New-LogFile {
 
         .EXAMPLE
         New-LogFile -Directory "audit" -Prefix "SecurityAudit"
-        Creates a log file: "audit/SecurityAudit-01-15-2024.log"
+        Creates a log file: "audit/SecurityAudit-2024-01-15.log"
+
+        .EXAMPLE
+        New-LogFile -BaseDirectory "$HOME/VcfEdgeAtScale" -Directory "Logs"
+        Creates a log file under the deployment root when $env:VcfEdgeatScaleRootDirectory is used by Start-VcfEdgeAtScale.
 
         .NOTES
         This function should be called before any Write-LogMessage calls to ensure the log
-        infrastructure is properly initialized. The function will exit the script if it
-        cannot create the required log directory.
+        infrastructure is properly initialized. The function throws a terminating error if it
+        cannot create the required log directory or log file.
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$BaseDirectory,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Directory = "logs",
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Prefix = "VcfEdgeAtScale"
     )
@@ -750,16 +765,21 @@ Function New-LogFile {
     $fileTimeStamp = Get-Date -Format "yyyy-MM-dd"
 
     # Set script-scoped variables for log directory and file paths.
-    $Script:LogFolder = Join-Path -Path $PSScriptRoot -ChildPath $Directory
+    $logParentPath = $PSScriptRoot
+    if (-not [String]::IsNullOrWhiteSpace($BaseDirectory)) {
+        $logParentPath = $BaseDirectory
+    }
+    $Script:LogFolder = Join-Path -Path $logParentPath -ChildPath $Directory
     $Script:LogFile = Join-Path -Path $Script:LogFolder -ChildPath "$Prefix-$fileTimeStamp.log"
 
     # Create log directory if it doesn't exist.
     if (-not (Test-Path -Path $Script:LogFolder -PathType Container) ) {
         if ($PSCmdlet.ShouldProcess($Script:LogFolder, "Create directory")) {
             Write-Information "LogFolder not found, creating $Script:LogFolder" -InformationAction Continue
-            New-Item -ItemType Directory -Path $Script:LogFolder | Out-Null
-            if (-not $?) {
-                Write-Information "Failed to create directory $Script:LogFile. Exiting." -InformationAction Continue
+            try {
+                New-Item -ItemType Directory -Path $Script:LogFolder -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Information "Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)" -InformationAction Continue
                 throw "Deployment failed. Check logs for details."
             }
         }
@@ -769,7 +789,12 @@ Function New-LogFile {
     # When creating a new log file, automatically capture environment details for troubleshooting.
     if (-not (Test-Path $Script:LogFile)) {
         if ($PSCmdlet.ShouldProcess($Script:LogFile, "Create log file")) {
-            New-Item -Type File -Path $Script:LogFile | Out-Null
+            try {
+                New-Item -Type File -Path $Script:LogFile -ErrorAction Stop | Out-Null
+            } catch {
+                Write-Information "Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)" -InformationAction Continue
+                throw "Deployment failed. Check logs for details."
+            }
             Get-EnvironmentSetup
         }
     }
@@ -874,14 +899,14 @@ Function Write-LogMessage {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AppendNewLine,
+        [Parameter(Mandatory = $false)] [Switch]$AppendNewLine,
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Message,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$CompletePending,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$ForceToScreen,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$NoNewline,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$PrependNewLine,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$SuppressOutputToFile,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$SuppressOutputToScreen,
+        [Parameter(Mandatory = $false)] [Switch]$CompletePending,
+        [Parameter(Mandatory = $false)] [Switch]$ForceToScreen,
+        [Parameter(Mandatory = $false)] [Switch]$NoNewline,
+        [Parameter(Mandatory = $false)] [Switch]$PrependNewLine,
+        [Parameter(Mandatory = $false)] [Switch]$SuppressOutputToFile,
+        [Parameter(Mandatory = $false)] [Switch]$SuppressOutputToScreen,
         [Parameter(Mandatory = $false)] [ValidateSet("INFO", "ERROR", "WARNING", "EXCEPTION", "ADVISORY", "DEBUG")] [String]$Type = "INFO"
     )
 
@@ -928,7 +953,7 @@ Function Write-LogMessage {
                     Add-Content -Path $Script:LogFile -Value $logContent -ErrorAction Stop
                 }
                 catch {
-                    Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen
+                    Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen -SuppressOutputToFile
                 }
             }
         } else {
@@ -947,7 +972,7 @@ Function Write-LogMessage {
                     Add-Content -Path $Script:LogFile -Value $logContent -ErrorAction Stop
                 }
                 catch {
-                    Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen
+                    Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen -SuppressOutputToFile
                 }
             }
         }
@@ -1005,7 +1030,7 @@ Function Write-LogMessage {
                 Add-Content -Path $Script:LogFile -Value $logContent -ErrorAction Stop
             }
             catch {
-                Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen
+                Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen -SuppressOutputToFile
             }
         }
         # If log file is not initialized, silently skip file logging (function may be called standalone).
@@ -1031,7 +1056,7 @@ Function Show-Version {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence
+        [Parameter(Mandatory = $false)] [Switch]$Silence
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Show-Version function..."
@@ -1107,7 +1132,7 @@ Function Connect-Vcenter {
         - Requires VMware PowerCLI to be installed and imported before execution
         - The function gracefully handles existing connections and provides detailed information about current sessions
         - Existing connections are detected using $Global:DefaultViServers and the function returns without attempting duplicate connections
-        - Connection failures are logged with detailed error information and terminate script execution with exit code 1
+        - Connection failures are logged with detailed error information and throw a terminating error
         - The function integrates with the VCF PowerShell Toolbox logging infrastructure for consistent reporting
         - Both server types use the same underlying VMware PowerCLI Connect-VIServer cmdlet
         - Username information is displayed for existing connections when available from the connection context
@@ -1126,10 +1151,10 @@ Function Connect-Vcenter {
     Write-LogMessage -Type DEBUG -Message "Entered Connect-Vcenter function..."
 
     # Check if we're already connected to this vCenter to avoid duplicate connections.
-    $connectedVcenter = $Global:DefaultViServers | Where-Object {$_.name -eq $ServerName -and $_.IsConnected -eq "true"}
+    $connectedVcenter = $Global:DefaultViServers | Where-Object { $_.Name -eq $ServerName -and $_.IsConnected }
 
     if (-not $connectedVcenter) {
-        # Attempt to establish a new connection to the vCenter.  If it fails, exit the script.
+        # Attempt to establish a new connection to the vCenter. If it fails, throw a terminating error.
         $connectionSuccessful = $false
         $currentCredential = $ServerCredential
 
@@ -1228,7 +1253,7 @@ Function Connect-Vcenter {
             }
         }
     } else {
-        # Connection already exists.  Surface the data on what user the connection is using.
+        # Connection already exists. Surface the data on what user the connection is using.
         $existingUsername = ($Global:DefaultVIServers | Where-Object {$_.Name -eq $ServerName }).User
         if ($existingUsername) {
             Write-LogMessage -Type WARNING -Message "Already connected to $ServerType `"$ServerName`" as `"$existingUsername`"."
@@ -1237,7 +1262,6 @@ Function Connect-Vcenter {
         }
     }
 }
-
 Function Test-VcenterConnection {
 
     <#
@@ -1271,7 +1295,7 @@ Function Test-VcenterConnection {
         Returns an object with the following properties:
         - IsConnected: Boolean indicating if connection exists and is valid
         - ServerName: The server name that was tested
-        - SessionAge: TimeSpan indicating how long the session has been active
+        - SessionAge: Reserved; always $null (session start time is not exposed by VCF PowerCLI 9)
         - ErrorMessage: Error message if connection is invalid (null if connected)
 
         .EXAMPLE
@@ -1342,16 +1366,7 @@ Function Test-VcenterConnection {
             return $result
         }
 
-        # Calculate session age.
-        if ($vcServer.ServiceUri.StartTime) {
-            $result.SessionAge = (Get-Date) - $vcServer.ServiceUri.StartTime
-        } elseif ($vcServer.ExtensionData.Content.About.ApiVersion) {
-            # Session exists but start time not available - estimate as "recent".
-
-            $result.SessionAge = [TimeSpan]::FromMinutes(0)
-        }
-
-        Write-LogMessage -Type DEBUG -SuppressOutputToFile -Message "PowerCLI session exists for `"$ServerName`" (age: $($result.SessionAge))"
+        Write-LogMessage -Type DEBUG -SuppressOutputToFile -Message "PowerCLI session exists for `"$ServerName`"."
 
         # If skip connectivity test, return now (session exists).
         if ($SkipConnectivityTest) {
@@ -1389,7 +1404,6 @@ Function Test-VcenterConnection {
         return $result
     }
 }
-
 Function Invoke-VcenterReconnectIfNeeded {
     <#
         .SYNOPSIS
@@ -1459,7 +1473,6 @@ Function Invoke-VcenterReconnectIfNeeded {
     Set-ScriptVcenterPasswordFromCredential -Credential $vCenterCredential
     Write-LogMessage -Type INFO -Message "Reconnected to vCenter `"$Script:vCenterName`" using prompted credentials."
 }
-
 Function Disconnect-Vcenter {
 
     <#
@@ -1541,7 +1554,7 @@ Function Disconnect-Vcenter {
         - The function uses Force parameter to ensure disconnection even with active operations or tasks
         - Confirmation prompts are suppressed (Confirm:$false) for automated execution in scripts
         - Post-disconnection verification checks $Global:DefaultVIServer to ensure clean state
-        - If any connections remain after disconnection attempt, the function exits with code 1
+        - If any connections remain after disconnection attempt, the function throws a terminating error
         - The allServers switch is recommended for cleanup scenarios to ensure all connections are terminated
         - Error handling provides detailed logging with ErrorAction:Stop to ensure disconnection failures are caught
         - The function integrates with VCF PowerShell Toolbox logging infrastructure for consistent reporting
@@ -1550,10 +1563,10 @@ Function Disconnect-Vcenter {
     #>
 
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AllServers,
+        [Parameter(Mandatory = $false)] [Switch]$AllServers,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServerName,
         [Parameter(Mandatory = $false)] [ValidateSet("vCenter", "ESX")] [String]$ServerType,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence
+        [Parameter(Mandatory = $false)] [Switch]$Silence
     )
     Write-LogMessage -Type DEBUG -Message "Entered Disconnect-Vcenter function..."
 
@@ -1682,7 +1695,7 @@ Function Test-VCenterVersion {
 
         Error Handling: Validation function. Returns structured error object via Write-ErrorAndReturn
         on any validation failure. Caller should check $result.Success and decide whether to exit
-        or continue. Typically, main workflow functions call 'exit 1' on version validation failure.
+        or continue. Typically, main workflow functions throw a terminating error on version validation failure.
 
         .LINK
         Connect-Vcenter
@@ -2449,8 +2462,10 @@ Function Test-ContentLibraryBySubscriptionUri {
         return $false
     }
     catch {
+        # Re-throw API errors so callers can distinguish a transient failure from a missing library.
+        # Returning $false on error would cause callers to create a duplicate content library.
         Write-LogMessage -Type ERROR -Message "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $_"
-        return $false
+        throw "Deployment failed. Check logs for details."
     }
 }
 Function Initialize-SupervisorContentLibrary {
@@ -2616,7 +2631,7 @@ Function Set-VclsRetreatModeForCluster {
         # Fallback: vCenter OptionManager advanced setting (for older vCenter where cluster API may not support systemVMsConfig).
         $domainId = $clusterObject.Id -replace "^[^-]+-", ""
         if ([String]::IsNullOrWhiteSpace($domainId)) {
-            Write-LogMessage -Type WARNING -Message "Set-valsRetreatModeForCluster: could not derive domain ID for fallback. Skipping vCLS retreat mode."
+            Write-LogMessage -Type WARNING -Message "Set-VclsRetreatModeForCluster: could not derive domain ID for fallback. Skipping vCLS retreat mode."
             return
         }
         $settingName = "config.vcls.clusters.$domainId.enabled"
@@ -2624,12 +2639,14 @@ Function Set-VclsRetreatModeForCluster {
             $si = Get-View -Server $Server -Id "ServiceInstance-ServiceInstance" -ErrorAction Stop
             # Content: use property (same as RetrieveServiceContent per API). Some PowerCLI builds expose Content, others use RetrieveServiceContent().
             $content = if ($si.PSObject.Properties['Content']) { $si.Content } else { $si.RetrieveServiceContent() }
-            $optionManager = $content.OptionManager
-            if ($optionManager) {
+            $optionManagerRef = $content.OptionManager
+            if ($optionManagerRef) {
+                # $content.OptionManager is a MoRef; resolve it to a live view before calling methods.
+                $optionManagerView = Get-View -Id $optionManagerRef -Server $Server -ErrorAction Stop
                 $optionValue = New-Object VMware.Vim.OptionValue
                 $optionValue.key = $settingName
                 $optionValue.value = "False"
-                $optionManager.UpdateOptions(@($optionValue))
+                $optionManagerView.UpdateOptions(@($optionValue))
                 Write-LogMessage -Type INFO -Message "Set vCLS to retreat mode for cluster `"$ClusterName`" (vCenter advanced setting $settingName = False) via OptionManager API."
                 return
             }
@@ -2712,6 +2729,7 @@ Function Add-Cluster {
         cluster creation.
     #>
 
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(0, [int]::MaxValue)] [Int]$ClusterCreationDelaySeconds = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
@@ -2819,7 +2837,9 @@ Function Add-Cluster {
             Write-LogMessage -Type DEBUG -Message "Add-Cluster: full cluster construct: Name=$($newClusterParams.Name), Location=$($newClusterParams.Location), DrsEnabled=$($newClusterParams.DrsEnabled), HAEnabled=$($newClusterParams.HAEnabled), Vsan=$vsanStatus, SoftwareSpecification Id=$specId. Invoking New-Cluster."
 
             Write-LogMessage -Type INFO -PrependNewLine -NoNewline -Message "Creating the cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`"... "
-            New-Cluster @newClusterParams | Out-Null
+            if ($PSCmdlet.ShouldProcess("cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`"", "New-Cluster")) {
+                New-Cluster @newClusterParams | Out-Null
+            }
             Write-LogMessage -Type DEBUG -Message "Add-Cluster: New-Cluster completed; verifying cluster exists."
             if ($ClusterCreationDelaySeconds -gt 0) {
                 Write-LogMessage -Type DEBUG -Message "Add-Cluster: waiting $ClusterCreationDelaySeconds second(s) for vCenter to stabilize before verification."
@@ -2875,7 +2895,7 @@ Function Remove-ClusterSafely {
         "VMware Photon CRX (64-bit)" are excluded from the check and do not block removal.
     #>
 
-    [CmdletBinding()]
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
@@ -2935,7 +2955,9 @@ Function Remove-ClusterSafely {
     }
 
     Write-LogMessage -Type INFO -NoNewline -Message "Removing cluster `"$ClusterName`" (no running VMs)... "
-    Remove-Cluster -Cluster $clusterObject -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+    if ($PSCmdlet.ShouldProcess("cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`"", "Remove-Cluster")) {
+        Remove-Cluster -Cluster $clusterObject -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+    }
     Write-LogMessage -Type INFO -CompletePending -Message "Removed"
 }
 Function Update-Cluster {
@@ -3034,9 +3056,8 @@ Function Update-Cluster {
 
     try {
         $cluster = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
-        $clusterView = Get-View $cluster.Id
         if (-not $cluster) {
-            Write-LogMessage -Type ERROR -Message "The cluster `"$ClusterName`" on datacenter `"$dataCenter`" in vCenter `"$Script:vCenterName`" was not found."
+            Write-LogMessage -Type ERROR -Message "The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found."
             throw "Deployment failed. Check logs for details."
         } else {
             # VCF PowerCLI 9: Get-VMHost uses -Location for cluster (no -Cluster parameter). Suppress VMHost.DatastoreIdList deprecation when reading host count.
@@ -3067,7 +3088,7 @@ Function Update-Cluster {
                             $configSpecSb.dasConfig.VmMonitoring = "vmMonitoringOnly"
                             $clusterView.ReconfigureComputeResource_Task($configSpecSb, $true) | Out-Null
                         }
-                        Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to slot-based (host failures tolerated: $haFailoverLevel)."
+                        Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to slot-based (host failures tolerated: $haFailoverLevel)."
                     }
                     "reservationBased" {
                         $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
@@ -3091,7 +3112,7 @@ Function Update-Cluster {
                         $resourcePctPolicy.MemoryFailoverResourcesPercent = $failoverResourcePercent
                         $configSpec.dasConfig.AdmissionControlPolicy = $resourcePctPolicy
                         $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
-                        Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to cluster resource percentage ($failoverResourcePercent% CPU and memory reserved for failover)."
+                        Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to cluster resource percentage ($failoverResourcePercent% CPU and memory reserved for failover)."
                     }
                     "disabled" {
                         $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
@@ -3542,7 +3563,7 @@ Function Add-VsanWitnessTrafficToVmkViaEsxcli {
                 }
                 $existing = if ($trafficByInterface[$VmkernelName]) { ($trafficByInterface[$VmkernelName] | ForEach-Object { $_ }) -join "," } else { "" }
                 if ($existing -match 'witness') {
-                    Write-LogMessage -Type INFO -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`". Skipping witness traffic add."
+                    Write-LogMessage -Type DEBUG -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`". Skipping witness traffic add."
                     return $true
                 }
             } catch {
@@ -3652,7 +3673,7 @@ Function Add-VsanWitnessTrafficToVmkViaEsxcli {
         }
         if (-not $invoked) {
             if ($lastError -match "already in use|Can't add again") {
-                Write-LogMessage -Type INFO -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`" (esxcli reported already in use). Skipping witness traffic add."
+                Write-LogMessage -Type DEBUG -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`" (esxcli reported already in use). Skipping witness traffic add."
                 return $true
             }
             $summary = if ($createArgsArgNamesLog) { " $createArgsArgNamesLog" } else { " CreateArgs returned null or no usable params." }
@@ -3718,6 +3739,230 @@ Function Add-VsanWitnessTrafficToVmkViaEsxcli {
         throw "vSAN witness traffic is required. Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). Enable witness traffic on a VMkernel (e.g. in vCenter UI) or retry. Deployment will roll back."
     }
 }
+Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
+
+    <#
+        .SYNOPSIS
+        Applies static IPv4, netmask, and default gateway on a VMkernel using esxcli.
+
+        .DESCRIPTION
+        VCF PowerCLI 9 **Set-VMHostNetworkAdapter** does not expose a default-gateway parameter for VMkernel adapters.
+        **New-VMHostNetworkAdapter** sets IP and mask only. For **vSAN Witness** VMkernels that need a default route (e.g. to reach the witness appliance), this function calls **esxcli network ip interface ipv4 set** so the gateway from **networkingVmKernelInterfaces** is actually configured on the host.
+
+        .PARAMETER GatewayAddress
+        IPv4 address of the default gateway (e.g. **10.30.12.1**). A **/prefix** suffix, if present, is stripped.
+
+        .PARAMETER Ipv4Address
+        Static IPv4 address already assigned to the VMkernel (same subnet as the gateway).
+
+        .PARAMETER Server
+        vCenter server name for **Get-EsxCli**.
+
+        .PARAMETER SubnetMask
+        IPv4 netmask for the VMkernel (e.g. **255.255.255.0**).
+
+        .PARAMETER VMHost
+        Target ESXi host.
+
+        .PARAMETER VmkernelName
+        VMkernel device name (e.g. **vmk3**).
+
+        .NOTES
+        Uses **Get-EsxCli** V2. Non-fatal mismatches are not expected; failure throws so deployment can roll back or be retried after fixing networking.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$GatewayAddress,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Ipv4Address,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SubnetMask,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
+    )
+
+    $hostName = if ($VMHost.Name) { $VMHost.Name } else { [string]$VMHost }
+    $gw = $GatewayAddress.Trim()
+    if ($gw -match "/") {
+        $gw = ($gw -split "/")[0].Trim()
+    }
+    if (-not (Test-ValidIPv4Address -IpAddress $gw)) {
+        Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: gateway `"$gw`" is not a valid IPv4 address for host `"$hostName`"."
+        throw "Invalid gateway address for witness VMkernel gateway: `"$gw`"."
+    }
+
+    try {
+        $esxcli = Get-EsxCli -VMHost $VMHost -V2 -Server $Server -ErrorAction Stop
+    }
+    catch {
+        Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: Get-EsxCli failed on `"$hostName`": $($_.Exception.Message)"
+        throw
+    }
+
+    $setCmd = $null
+    if ($esxcli.network -and $esxcli.network.ip -and $esxcli.network.ip.interface -and $esxcli.network.ip.interface.ipv4) {
+        $setCmd = $esxcli.network.ip.interface.ipv4.set
+    }
+    if (-not $setCmd) {
+        Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: esxcli network ip interface ipv4 set is not available on host `"$hostName`"."
+        throw "Could not set VMkernel gateway: esxcli network ip interface ipv4 set is not available on host `"$hostName`"."
+    }
+
+    $lastError = $null
+    try {
+        $argsObj = $setCmd.CreateArgs()
+        if ($null -ne $argsObj) {
+            $argNames = @()
+            $isHashtable = $argsObj -is [System.Collections.Hashtable] -or $argsObj -is [System.Collections.IDictionary]
+            $isCollection = -not $isHashtable -and $argsObj -is [System.Collections.IEnumerable] -and $argsObj -isnot [string]
+            if ($isHashtable) {
+                $argNames = @($argsObj.Keys | ForEach-Object { $_ })
+            }
+            elseif ($isCollection) {
+                $argNames = @($argsObj | ForEach-Object { if ($_.PSObject.Properties["Name"]) { $_.Name } elseif ($_.Key) { $_.Key } else { $_ } })
+            }
+            else {
+                $argNames = @($argsObj.PSObject.Properties | ForEach-Object { $_.Name })
+            }
+            $ifaceParam = $argNames | Where-Object { $_ -and ($_ -match "^i$|^interfacename$|interface-name|interface_name") } | Select-Object -First 1
+            $ipParam = $argNames | Where-Object { $_ -and ($_ -match "^ipv4$|^I$|^-I$") } | Select-Object -First 1
+            $maskParam = $argNames | Where-Object { $_ -and ($_ -match "netmask|^N$") } | Select-Object -First 1
+            $gwParam = $argNames | Where-Object { $_ -and ($_ -match "gateway|^g$") } | Select-Object -First 1
+            $typeParam = $argNames | Where-Object { $_ -and ($_ -match "^type$|^t$") } | Select-Object -First 1
+            if ($ifaceParam -and $ipParam -and $maskParam -and $typeParam) {
+                if ($isHashtable -or $isCollection) {
+                    $invokeTable = @{
+                        $ifaceParam = $VmkernelName
+                        $ipParam    = $Ipv4Address
+                        $maskParam  = $SubnetMask
+                        $typeParam  = "static"
+                    }
+                    if ($gwParam) {
+                        $invokeTable[$gwParam] = $gw
+                    }
+                    $setCmd.Invoke($invokeTable) | Out-Null
+                }
+                else {
+                    $argsObj.$ifaceParam = $VmkernelName
+                    $argsObj.$ipParam = $Ipv4Address
+                    $argsObj.$maskParam = $SubnetMask
+                    if ($gwParam) {
+                        $argsObj.$gwParam = $gw
+                    }
+                    $argsObj.$typeParam = "static"
+                    $setCmd.Invoke($argsObj) | Out-Null
+                }
+                Write-LogMessage -Type INFO -Message "Set default gateway $gw on $VmkernelName on host `"$hostName`" (esxcli network ip interface ipv4 set)."
+                return
+            }
+        }
+    }
+    catch {
+        $lastError = $_.Exception.Message
+        Write-LogMessage -Type DEBUG -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: CreateArgs path failed: $lastError"
+    }
+
+    $paramSets = @(
+        @{ interfacename = $VmkernelName; ipv4 = $Ipv4Address; netmask = $SubnetMask; gateway = $gw; type = "static" },
+        @{ "interface-name" = $VmkernelName; ipv4 = $Ipv4Address; netmask = $SubnetMask; gateway = $gw; type = "static" },
+        @{ interface_name = $VmkernelName; ipv4 = $Ipv4Address; netmask = $SubnetMask; gateway = $gw; type = "static" }
+    )
+    foreach ($ps in $paramSets) {
+        try {
+            $setCmd.Invoke($ps) | Out-Null
+            Write-LogMessage -Type INFO -Message "Set default gateway $gw on $VmkernelName on host `"$hostName`" (esxcli fallback parameter set)."
+            return
+        }
+        catch {
+            $lastError = $_.Exception.Message
+            continue
+        }
+    }
+    Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: all attempts failed on `"$hostName`" for $VmkernelName. Last error: $lastError"
+    throw "Could not set default gateway on VMkernel `"$VmkernelName`" on host `"$hostName`" via esxcli. Last error: $lastError"
+}
+Function Invoke-AddHostToClusterRunningVmSafetyCheck {
+    <#
+        .SYNOPSIS
+        Stops Add-HostToCluster when the host has powered-on VMs unless the operator confirms.
+
+        .DESCRIPTION
+        When the ESX host is already in vCenter inventory, lists powered-on VMs, logs which vCenter manages the host, and prompts Y/N (default N). Non-interactive sessions or any response other than Y aborts with a clear throw.
+
+        .PARAMETER ClusterName
+        Target cluster name (for prompt text).
+
+        .PARAMETER EsxHostName
+        Host name or IP (for prompt text).
+
+        .PARAMETER Server
+        vCenter server name (shown to the operator and used for Get-VM).
+
+        .PARAMETER VMHost
+        The VMHost object to query for VMs.
+    #>
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost
+    )
+
+    $inventoryLocation = "n/a"
+    try {
+        if ($VMHost.Parent -and $VMHost.Parent.Name) {
+            $inventoryLocation = [string]$VMHost.Parent.Name
+        }
+    } catch {
+        $inventoryLocation = "(unknown)"
+    }
+
+    $runningVms = @(
+        Get-VM -VMHost $VMHost -Server $Server -ErrorAction SilentlyContinue |
+            Where-Object { "$($_.PowerState)" -eq "PoweredOn" }
+    )
+
+    if ($runningVms.Count -eq 0) {
+        Write-LogMessage -Type DEBUG -Message "Add-HostToCluster running-VM safety: host `"$EsxHostName`" has no powered-on VMs on vCenter `"$Server`"."
+        return
+    }
+
+    Write-LogMessage -Type WARNING -Message "Host `"$EsxHostName`" is managed by vCenter `"$Server`" (inventory parent: `"$inventoryLocation`"). Powered-on VM count: $($runningVms.Count)."
+    foreach ($vm in ($runningVms | Sort-Object -Property Name)) {
+        $guestOs = "n/a"
+        try {
+            if ($vm.Guest -and $vm.Guest.OSFullName) { $guestOs = [string]$vm.Guest.OSFullName }
+        } catch {
+            $guestOs = "n/a"
+        }
+        Write-LogMessage -Type WARNING -Message "  Running VM: Name=`"$($vm.Name)`", PowerState=$($vm.PowerState), GuestOS=$guestOs."
+    }
+
+    $continuePrompt = "Add host `"$EsxHostName`" to cluster `"$ClusterName`" anyway despite $($runningVms.Count) powered-on VM(s)? (Y/N; press Enter for N)"
+    $continueAnyway = $false
+    try {
+        do {
+            $response = Read-Host $continuePrompt
+            $response = if ($response) { $response.Trim() } else { "" }
+            if ($response -match '^[yY](es)?$') {
+                $continueAnyway = $true
+                Write-LogMessage -Type WARNING -Message "User chose to add host `"$EsxHostName`" to cluster `"$ClusterName`" despite $($runningVms.Count) powered-on VM(s). Proceeding."
+                break
+            }
+            if ([String]::IsNullOrWhiteSpace($response) -or $response -match '^[nN](o)?$') {
+                break
+            }
+            Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)."
+        } while ($true)
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Treating as N."
+    }
+
+    if (-not $continueAnyway) {
+        throw "Deployment aborted. Host `"$EsxHostName`" has $($runningVms.Count) powered-on VM(s) on vCenter `"$Server`". Power off or migrate the VMs, then re-run."
+    }
+}
 Function Add-HostToCluster {
 
     <#
@@ -3728,9 +3973,10 @@ Function Add-HostToCluster {
         This function adds an ESX host to a specified vSphere cluster within a vCenter environment.
         It performs the following operations:
         1. Retrieves the target cluster object from vCenter
-        2. Adds the ESX host to the cluster using the provided credentials
-        3. Verifies that the host was successfully added by checking cluster membership
-        4. Provides appropriate logging for success or failure scenarios
+        2. If the host is already in vCenter inventory, checks for powered-on VMs; if any exist, logs them and the managing vCenter, then prompts Y/N (default N) before continuing
+        3. Adds the ESX host to the cluster using the provided credentials
+        4. Verifies that the host was successfully added by checking cluster membership
+        5. Provides appropriate logging for success or failure scenarios
 
         The function uses the Force parameter to bypass confirmation prompts during host addition.
 
@@ -3839,6 +4085,13 @@ Function Add-HostToCluster {
     if ($existingHost) {
         Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is already in cluster `"$ClusterName`". Skipping host add."
         return
+    }
+
+    $hostForRunningVmCheck = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    if ($hostForRunningVmCheck) {
+        Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+    } else {
+        Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" not in vCenter inventory before add; skipping powered-on VM check (VMs are not enumerable until the host is managed by this vCenter)."
     }
 
     # Attempt to add the ESX host to the specified cluster. When WaitForAddHostTaskTimeoutSeconds > 0, use RunAsync and poll for task completion so the next host can be added without a fixed delay.
@@ -4088,7 +4341,7 @@ Function Get-ClusterId {
         .NOTES
         - Requires an active connection to vCenter (uses $Script:vCenterName)
         - Uses Get-Cluster cmdlet from VMware PowerCLI
-        - Will exit the script with code 1 if the cluster is not found or any error occurs
+        - Throws a terminating error if the cluster is not found or any error occurs
         - Returns the ExtensionData.MoRef.Value property which is the identifier expected by VCF PowerCLI 9 APIs
         - The returned ID format is "domain-cXXXX" without the "ClusterComputeResource-" prefix
     #>
@@ -4235,7 +4488,6 @@ Function Get-ClusterNameFromPrefix {
 
     return "$ClusterNamePrefix-$EdgeSite"
 }
-
 Function Get-DatastoreNameFromPrefix {
 
     <#
@@ -4267,7 +4519,6 @@ Function Get-DatastoreNameFromPrefix {
 
     return "$DatastoreNamePrefix-$EdgeSite"
 }
-
 Function Get-VdsNameFromPrefix {
 
     <#
@@ -4299,7 +4550,6 @@ Function Get-VdsNameFromPrefix {
 
     return "$VdsNamePrefix-$EdgeSite"
 }
-
 Function Get-SupervisorNameFromPrefix {
 
     <#
@@ -4349,7 +4599,7 @@ Function Get-PortGroupId {
         Returns the unique identifier for the "management" port group.
 
         .EXAMPLE
-        $mgmtPortGroupId = Get-PortGroupId -PortGroupName "tkgs-management"
+        $mgmtPortGroupId = Get-PortGroupId -PortGroupName "mgmt-network"
         Stores the port group ID in a variable for later use in supervisor cluster configuration.
 
         .PARAMETER PortGroupName
@@ -4358,7 +4608,7 @@ Function Get-PortGroupId {
         .NOTES
         - Requires an active connection to vCenter (uses $Script:vCenterName)
         - Uses Get-VDPortgroup cmdlet from VMware PowerCLI
-        - Will exit the script with code 1 if the port group is not found or any error occurs
+        - Throws a terminating error if the port group is not found or any error occurs
         - Returns the ExtensionData.Key property which is the unique identifier used by vSphere APIs
     #>
 
@@ -4450,7 +4700,7 @@ Function Set-NewDatastore {
         .NOTES
         - Requires an active connection to vCenter (uses $Script:vCenterName)
         - Uses New-Datastore and New-TagAssignment cmdlets from VMware PowerCLI
-        - Will exit the script with code 1 if any errors occur during datastore creation or tagging
+        - Throws a terminating error if any errors occur during datastore creation or tagging
         - Displays progress indicator while waiting for datastore to become available
         - The specified tag must already exist in vCenter before calling this function
         - Handles authorization and timeout exceptions with appropriate error messages
@@ -5704,6 +5954,12 @@ Function Add-VsanEsaDiskToStoragePool {
         Takes a hashtable of disks grouped by host and adds them to vSAN ESA storage pools
         using Add-VsanStoragePoolDisk. Each host is processed sequentially with progress monitoring.
 
+        .PARAMETER ClaimRetryDelaySeconds
+        Delay between retries when Add-VsanStoragePoolDisk fails with a transient host or object state error. Default is 15.
+
+        .PARAMETER ClaimRetryMaxAttempts
+        Maximum attempts per host for Add-VsanStoragePoolDisk when the server returns a retryable invalid-state error. Default is 4.
+
         .PARAMETER DisksByHost
         Hashtable where keys are host names and values are arrays of disk display objects.
 
@@ -5717,6 +5973,8 @@ Function Add-VsanEsaDiskToStoragePool {
 
     [CmdletBinding()]
     Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$ClaimRetryDelaySeconds = 15,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 12)] [Int]$ClaimRetryMaxAttempts = 4,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Hashtable]$DisksByHost,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$TimeoutSeconds = 1800
     )
@@ -5737,10 +5995,39 @@ Function Add-VsanEsaDiskToStoragePool {
             $vmHostObject = Get-VMHost -Name $hostName -Server $Script:vCenterName -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "Retrieved VMHost object for `"$hostName`". Starting disk addition operation at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')..."
 
-            # Execute Add-VsanStoragePoolDisk synchronously.
+            $rescanStorageCmd = Get-Command -Name "Get-VMHostStorage" -ErrorAction SilentlyContinue
+            if ($null -ne $rescanStorageCmd -and $rescanStorageCmd.Parameters.ContainsKey("RescanAllHba")) {
+                try {
+                    $null = Get-VMHostStorage -VMHost $vmHostObject -RescanAllHba -Server $Script:vCenterName -ErrorAction Stop
+                    Write-LogMessage -Type DEBUG -Message "Rescanned storage (all HBAs) on host `"$hostName`" before vSAN ESA storage pool disk claim."
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Storage rescan before ESA disk claim failed on `"$hostName`" (non-fatal): $($_.Exception.Message)."
+                }
+            }
+
+            # Execute Add-VsanStoragePoolDisk with retries for transient invalid object state while vSAN/VMOM catches up with vCenter.
             $operationStartTime = Get-Date
             try {
-                Add-VsanStoragePoolDisk -VMHost $vmHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalName $canonicalNames -ErrorAction Stop | Out-Null
+                $claimAttempt = 0
+                while ($claimAttempt -lt $ClaimRetryMaxAttempts) {
+                    $claimAttempt++
+                    try {
+                        Add-VsanStoragePoolDisk -VMHost $vmHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalName $canonicalNames -ErrorAction Stop | Out-Null
+                        break
+                    } catch {
+                        $rawMsg = $_.Exception.Message
+                        if ($_.Exception.InnerException) {
+                            $rawMsg = "$rawMsg $($_.Exception.InnerException.Message)"
+                        }
+                        $isTransientState = $rawMsg -match "Operation is not valid due to the current state of the object|invalid state|InvalidState|not allowed in the current state"
+                        if ($isTransientState -and $claimAttempt -lt $ClaimRetryMaxAttempts) {
+                            Write-LogMessage -Type WARNING -Message "Add-VsanStoragePoolDisk attempt $claimAttempt of $ClaimRetryMaxAttempts on host `"$hostName`" failed (transient object state). Waiting $ClaimRetryDelaySeconds seconds before retry."
+                            Start-Sleep -Seconds $ClaimRetryDelaySeconds
+                            continue
+                        }
+                        throw
+                    }
+                }
 
                 $operationEndTime = Get-Date
                 $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
@@ -5910,7 +6197,6 @@ Function Wait-ForVsanDatastoreAndRename {
     Write-Progress -Activity "Waiting for vSAN datastore" -Status "Complete" -Completed
     [Console]::Out.Flush()
 }
-
 Function Get-CleanVsanErrorMessage {
     <#
         .SYNOPSIS
@@ -7071,7 +7357,7 @@ Function Enable-VsanAutomaticRebalance {
             $params["ProactiveRebalanceThreshold"] = $AutomaticRebalanceThreshold
         }
         Set-VsanClusterConfiguration @params -ErrorAction Stop | Out-Null
-        Write-LogMessage -Type INFO -Message "Enabled vSAN automatic rebalancing at $AutomaticRebalanceThreshold% for cluster `"$ClusterName`"."
+        Write-LogMessage -Type DEBUG -Message "Enabled vSAN automatic rebalancing at $AutomaticRebalanceThreshold% for cluster `"$ClusterName`"."
         return $true
     }
     catch {
@@ -7248,7 +7534,7 @@ Function Invoke-VsanClusterConfigReapply {
             return $false
         }
         Set-VsanClusterConfiguration -Configuration $vsanClusterConfig -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-        Write-LogMessage -Type INFO -Message "Re-applied vSAN cluster configuration for cluster `"$ClusterName`" (config pushed from vCenter to hosts)."
+        Write-LogMessage -Type DEBUG -Message "Re-applied vSAN cluster configuration for cluster `"$ClusterName`" (config pushed from vCenter to hosts)."
         return $true
     }
     catch {
@@ -7321,6 +7607,76 @@ Function Get-VsanClusterTriggeredAlarms {
         [void]$result.Add([PSCustomObject]@{ AlarmName = $alarmName; Status = $status })
     }
     return $result
+}
+Function Test-VsanTriggeredAlarmIsStatsPrimaryElection {
+
+    <#
+        .SYNOPSIS
+        Returns whether a triggered cluster alarm is the vSAN performance-service Stats primary election/selection alarm.
+
+        .DESCRIPTION
+        Matches the same name patterns used in Invoke-VsanClusterAlarmCheckAndRemediate and
+        Invoke-VsanClusterHealthCheckAfterWitness so red alarm gating can align with the
+        post-witness vSAN health path (transient perfsvc election; see Broadcom KB 401679).
+
+        .PARAMETER TriggeredAlarm
+        Object with AlarmName (e.g. from Get-VsanClusterTriggeredAlarms).
+
+        .OUTPUTS
+        [bool] True when the alarm name matches Stats primary election/selection.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $TriggeredAlarm
+    )
+
+    if (-not (Get-Member -InputObject $TriggeredAlarm -Name "AlarmName" -MemberType Properties -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $name = $TriggeredAlarm.AlarmName
+    if ([String]::IsNullOrWhiteSpace([string]$name)) {
+        return $false
+    }
+    return [string]$name -match "Stats primary election|Stats primary selection|performance service alarm 'Stats primary|stats primary election|stats primary selection"
+}
+Function Test-VsanTriggeredAlarmIsHclRelated {
+
+    <#
+        .SYNOPSIS
+        Returns whether a triggered cluster alarm reflects a vSAN HCL or hardware-compatibility finding.
+
+        .DESCRIPTION
+        Matches alarm names that correspond to the vSAN Health checks Set-VsanLabSilentChecksIfRequested
+        silences in lab mode (controlleronhcl, controllerdiskmode, controllerfirmware, controllerdriver,
+        hclhostbadstate) plus the umbrella "vSAN hardware compatibility issues" and "Host Hardware vSAN
+        Support Compliance" alarms. Used by Invoke-VsanClusterAlarmCheckAndRemediate to explain that
+        accepting these red alarms does not fix the underlying HCL state and that WCP supervisor
+        enablement will still enforce cluster/host HCL conformance downstream.
+
+        .PARAMETER TriggeredAlarm
+        Object with AlarmName (e.g. from Get-VsanClusterTriggeredAlarms).
+
+        .OUTPUTS
+        [bool] True when the alarm name matches an HCL or hardware-compatibility check.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $TriggeredAlarm
+    )
+
+    if (-not (Get-Member -InputObject $TriggeredAlarm -Name "AlarmName" -MemberType Properties -ErrorAction SilentlyContinue)) {
+        return $false
+    }
+    $name = [string]$TriggeredAlarm.AlarmName
+    if ([String]::IsNullOrWhiteSpace($name)) {
+        return $false
+    }
+    # HCL acronym is distinctive in vSAN alarm naming; hardware compatibility / vSAN support strings cover the umbrella alarms. Controller firmware/driver/disk-mode/on-HCL map 1:1 to the silenced health check IDs.
+    return $name -match "(?i)\bHCL\b|hardware\s+compatibility|hardware\s+vSAN\s+support|controller\s+(firmware|driver|disk\s*mode|on\s+HCL)"
 }
 Function Set-VsanDomNetworkSchedulerThrottleOnHost {
 
@@ -7449,7 +7805,7 @@ Function Set-VsanDomNetworkSchedulerThrottleOnCluster {
         elseif ($result.AlreadySet) { $alreadySetCount++ }
     }
     if ($appliedCount -gt 0) {
-        Write-LogMessage -Type INFO -Message "Suppress 10 GB networking alarm if present (Broadcom KB 394932) on $appliedCount/$($clusterHosts.Count) host(s) in cluster `"$ClusterName`"."
+        Write-LogMessage -Type DEBUG -Message "Suppress 10 GB networking alarm if present (Broadcom KB 394932) on $appliedCount/$($clusterHosts.Count) host(s) in cluster `"$ClusterName`"."
         return $true
     }
     if ($alreadySetCount -eq $clusterHosts.Count) {
@@ -7464,7 +7820,10 @@ Function Invoke-VsanClusterAlarmCheckAndRemediate {
         Queries vCenter alarms on a vSAN cluster; fixes fixable alarms via API or reports others as warnings.
 
         .DESCRIPTION
-        After vSAN cluster creation, always sets /VSAN/DOMNetworkSchedulerThrottleComponent=1 on all cluster hosts (vSAN ESA on 10G; Broadcom KB 394932, 388455), then queries triggered alarms on the cluster. If an alarm is one we can fix via API (e.g. "Advanced vSAN configuration in sync"), we attempt remediation (re-apply vSAN cluster config). All other alarms are reported as warnings only.
+        After vSAN cluster creation, always sets /VSAN/DOMNetworkSchedulerThrottleComponent=1 on all cluster hosts (vSAN ESA on 10G; Broadcom KB 394932, 388455), then queries triggered alarms on the cluster. If an alarm is one we can fix via API (e.g. "Advanced vSAN configuration in sync"), we attempt remediation (re-apply vSAN cluster config). All other alarms are reported as warnings only.         After remediation, triggered alarms are re-read: any **red** alarm (except lab-suppressed third-party IO filter when LabEnvironment is true, and except **Stats primary election/selection** red alarms, which are treated as the same transient perfsvc case as Invoke-VsanClusterHealthCheckAfterWitness) requires an explicit opt-in to continue, or deployment stops with the same failure path as other pre-supervisor errors (rollback prompt in the main catch). When any blocking red alarm matches an HCL/hardware-compatibility check (Test-VsanTriggeredAlarmIsHclRelated), the prompt and AcceptBadCheckResults message are extended to warn that accepting risk does not fix the underlying HCL state and WCP supervisor enablement will likely fail; the same check IDs are silenced in lab mode by Set-VsanLabSilentChecksIfRequested. **Yellow**-only alarms log a summary warning and do not block.
+
+        .PARAMETER AcceptBadCheckResults
+        When set (e.g. **Start-VcfEdgeAtScale -AcceptBadCheckResults**), proceeds without prompting when triggered alarms remain **red**.
 
         .PARAMETER ClusterName
         The name of the vSAN cluster. Must match a cluster visible to the current vCenter connection.
@@ -7473,7 +7832,7 @@ Function Invoke-VsanClusterAlarmCheckAndRemediate {
         Passed to Invoke-ReconfigureClusterHA when remediating "vSphere HA host status" so admission control matches deployment (slotBased, reservationBased, or disabled).
 
         .PARAMETER LabEnvironment
-        When $true (e.g. common.labenvironment in infrastructure JSON), the "Registration/unregistration of third-party IO filter storage providers fails on a host" alarm is treated as known lab noise and logged at DEBUG only instead of WARNING. The "Stats primary election" / performance-service stats-primary alarm is logged at DEBUG when matched; transient gating is handled in Invoke-VsanClusterHealthCheckAfterWitness via re-trigger, not silent checks. No other alarm handling changes.
+        When $true (e.g. common.labenvironment in infrastructure JSON), the "Registration/unregistration of third-party IO filter storage providers fails on a host" alarm is treated as known lab noise and logged at DEBUG only instead of WARNING, and is **not** counted toward the red-alarm gate. Red "Stats primary election" / performance-service election alarms are **not** counted toward the red-alarm gate (same transient handling as post-witness vSAN health); the first pass still logs them at DEBUG with KB 401679 guidance.
 
         .PARAMETER PostRemediationWaitSeconds
         Seconds to wait after re-applying vSAN cluster configuration (remediation) before re-querying alarms. Default is 10.
@@ -7484,6 +7843,7 @@ Function Invoke-VsanClusterAlarmCheckAndRemediate {
 
     [CmdletBinding()]
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateSet("disabled", "reservationBased", "slotBased")] [String]$HaPolicy = "reservationBased",
         [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false,
@@ -7556,6 +7916,83 @@ Function Invoke-VsanClusterAlarmCheckAndRemediate {
 
     foreach ($alarmItem in $remainingAlarms) {
         Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" alarm still present after remediation attempt: `"$($alarmItem.AlarmName)`" (status: $($alarmItem.Status)). Resolve manually if needed."
+    }
+
+    # Re-query alarms so red/yellow gating reflects state after auto-remediation (performance service, HA reconfig, etc.).
+    $refreshedAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
+    if (-not $refreshedAlarms -or $refreshedAlarms.Count -eq 0) {
+        return
+    }
+
+    $labThirdPartyPattern = "Registration/unregistration of third-party IO filter storage providers fails on a host"
+    $blockingRedAlarms = [System.Collections.ArrayList]::new()
+    $yellowAlarms = [System.Collections.ArrayList]::new()
+    foreach ($a in $refreshedAlarms) {
+        $statusText = ([string]$a.Status).ToLower()
+        $alarmLabel = $a.AlarmName
+        if ($LabEnvironment -and $alarmLabel -match [regex]::Escape($labThirdPartyPattern)) {
+            continue
+        }
+        switch -Regex ($statusText) {
+            '^red$' {
+                if (Test-VsanTriggeredAlarmIsStatsPrimaryElection -TriggeredAlarm $a) {
+                    Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has red triggered alarm (not blocking on this gate): `"$($a.AlarmName)`". Same transient Stats primary handling as post-witness health; if supervisor or host preflight still fails, align witness and data node ESX builds, then see Broadcom KB 401679."
+                    continue
+                }
+                [void]$blockingRedAlarms.Add($a)
+            }
+            '^yellow$' {
+                [void]$yellowAlarms.Add($a)
+            }
+        }
+    }
+
+    if ($blockingRedAlarms.Count -gt 0) {
+        Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" has one or more triggered alarms with red status. This indicates a serious vSAN fault; stretched-cluster configuration (including witness reachability and routing) may be incorrect. Verify vSAN Health in vCenter and confirm witness network connectivity and witness VM health before continuing."
+        foreach ($ra in $blockingRedAlarms) {
+            Write-LogMessage -Type WARNING -Message "  Red alarm: `"$($ra.AlarmName)`" (status: $($ra.Status))."
+        }
+        # When any blocking red alarm matches an HCL/hardware-compatibility check (the same set lab mode silences), warn that accepting the risk does not fix the underlying HCL state and that WCP supervisor enablement will still enforce cluster/host HCL conformance downstream.
+        $hclRedAlarms = @($blockingRedAlarms | Where-Object { Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm $_ })
+        if ($hclRedAlarms.Count -gt 0) {
+            $hclNames = ($hclRedAlarms | ForEach-Object { "`"$($_.AlarmName)`"" }) -join ", "
+            Write-LogMessage -Type WARNING -Message "Red alarm(s) on cluster `"$ClusterName`" include vSAN HCL/hardware-compatibility findings: $hclNames. These would be hidden by common.labenvironment=true but the underlying HCL state (storage controller on HCL, controller firmware/driver/disk mode, host HCL DB state) is unchanged. Accepting risk here will almost certainly not produce a working supervisor: WCP supervisor enablement enforces cluster/host HCL conformance downstream of this gate. Resolve by using HCL-listed storage controllers, firmware, and drivers, then retry; do not simply acknowledge the alarms in vCenter."
+        }
+        if ($AcceptBadCheckResults.IsPresent) {
+            if ($hclRedAlarms.Count -gt 0) {
+                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Supervisor enablement will likely fail until the cluster is HCL-conformant."
+            } else {
+                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite red vSAN triggered alarm(s) for cluster `"$ClusterName`"."
+            }
+        }
+        else {
+            $continuePrompt = if ($hclRedAlarms.Count -gt 0) {
+                "Continue deployment despite red vSAN HCL/hardware-compatibility alarm(s)? Supervisor enablement is expected to fail. Type Y to accept risk, or N to stop [default: N]"
+            } else {
+                "Continue deployment despite red vSAN alarm(s)? Type Y to accept risk, or N to stop [default: N]"
+            }
+            do {
+                $continueResponse = Read-Host $continuePrompt
+                $continueResponse = if ($null -ne $continueResponse) { $continueResponse.Trim() } else { "" }
+                if ($continueResponse -match '^[yY](es)?$') {
+                    if ($hclRedAlarms.Count -gt 0) {
+                        Write-LogMessage -Type WARNING -Message "User chose to continue despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Accepting risk; supervisor enablement may fail on non-HCL-conformant hardware."
+                    } else {
+                        Write-LogMessage -Type WARNING -Message "User chose to continue despite red vSAN triggered alarm(s) for cluster `"$ClusterName`". Accepting risk."
+                    }
+                    break
+                }
+                if ([String]::IsNullOrWhiteSpace($continueResponse) -or $continueResponse -match '^[nN](o)?$') {
+                    $redNames = ($blockingRedAlarms | ForEach-Object { $_.AlarmName }) -join "; "
+                    Write-LogMessage -Type INFO -Message "User declined to continue (or accepted default N) due to red vSAN triggered alarm(s) on cluster `"$ClusterName`". Deployment will stop; you will be prompted whether to roll back compute if applicable."
+                    throw "Deployment failed. vSAN cluster `"$ClusterName`" has triggered alarm(s) with red status: $redNames"
+                }
+                Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)."
+            } while ($true)
+        }
+    }
+    elseif ($yellowAlarms.Count -gt 0) {
+        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has $($yellowAlarms.Count) triggered alarm(s) with yellow status (no red); continuing without blocking. Resolve in vCenter when convenient."
     }
 }
 Function Wait-VsanClusterConfigSyncOrTimeout {
@@ -8011,7 +8448,7 @@ Function Add-VsanClusterSilentHealthChecks {
         $chunk = @($toAdd[$i..$endIdx])
         try {
             $healthSystemView.VsanHealthSetVsanClusterSilentChecks($clusterMoRef, $chunk, $null) | Out-Null
-            Write-LogMessage -Type INFO -Message "Silenced vSAN health check ID(s) on cluster `"$ClusterName`" ($LogContext): $($chunk -join ', ')."
+            Write-LogMessage -Type DEBUG -Message "Silenced vSAN health check ID(s) on cluster `"$ClusterName`" ($LogContext): $($chunk -join ', ')."
         }
         catch {
             Write-LogMessage -Type WARNING -Message "VsanHealthSetVsanClusterSilentChecks failed for cluster `"$ClusterName`" ($LogContext, batch: $($chunk -join ', ')): $($_.Exception.Message). Skipping this batch."
@@ -8068,6 +8505,15 @@ Function Set-VsanLabSilentChecksIfRequested {
     if ($checkIdsToApply.Count -eq 0) {
         Write-LogMessage -Type DEBUG -Message "No lab vSAN silent check IDs specified. Skipping."
         return
+    }
+    # Flag HCL/hardware-compatibility checks separately from transient-sync. Silencing HCL checks masks
+    # a real hardware non-conformance signal that WCP still enforces during supervisor enablement, so
+    # a cluster that deploys cleanly in lab mode may fail to enable supervisor on the same hardware
+    # outside lab mode. See Invoke-VsanClusterAlarmCheckAndRemediate for the matching alarm-gate warning.
+    $hclMaskingIds = @("controllerdiskmode", "controlleronhcl", "controllerfirmware", "controllerdriver", "hclhostbadstate")
+    $hclIdsBeingSilenced = @($checkIdsToApply | Where-Object { $hclMaskingIds -contains $_ })
+    if ($hclIdsBeingSilenced.Count -gt 0) {
+        Write-LogMessage -Type WARNING -Message "Lab mode (common.labenvironment=true) will silence vSAN HCL/hardware-compatibility health checks on cluster `"$ClusterName`": $($hclIdsBeingSilenced -join ', '). These mask red vSAN alarms that would otherwise block the pre-supervisor alarm gate; the underlying hardware state is unchanged. WCP supervisor enablement enforces cluster/host HCL conformance downstream, so the same hardware may succeed in lab mode and fail to deploy supervisor outside lab mode. Use HCL-listed storage controllers, firmware, and drivers for production-equivalent deployments."
     }
     Add-VsanClusterSilentHealthChecks -ClusterName $ClusterName -LogContext "lab environment" -SilentCheckBatchSize $SilentCheckBatchSize -SilentCheckIds $checkIdsToApply
 }
@@ -8161,7 +8607,7 @@ Function Enable-VsanPerformanceService {
             return
         }
         Set-VsanClusterConfiguration -Configuration $config -PerformanceServiceEnabled $true -Server $Server -ErrorAction Stop | Out-Null
-        Write-LogMessage -Type INFO -Message "Enabled vSAN performance service on cluster `"$ClusterName`"."
+        Write-LogMessage -Type DEBUG -Message "Enabled vSAN performance service on cluster `"$ClusterName`"."
     }
     catch {
         Write-LogMessage -Type WARNING -Message "Failed to enable vSAN performance service on cluster `"$ClusterName`": $($_.Exception.Message). Continuing."
@@ -8409,7 +8855,7 @@ Function Invoke-VsanClusterHealthCheckAfterWitness {
         [Parameter(Mandatory = $false)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType
     )
 
-    Write-LogMessage -Type INFO -Message "Running vSAN cluster health check for cluster `"$ClusterName`" (after witness)."
+    Write-LogMessage -Type DEBUG -Message "Running vSAN cluster health check for cluster `"$ClusterName`" (after witness)."
 
     # Validate vCenter connection before proceeding.
     $connectionTest = Test-VcenterConnection
@@ -8425,7 +8871,7 @@ Function Invoke-VsanClusterHealthCheckAfterWitness {
     Invoke-AbandonHciWorkflowIfInProgress -ClusterName $ClusterName
 
     if ($HciWorkflowClearWaitSeconds -gt 0) {
-        Write-LogMessage -Type INFO -Message "Waiting $HciWorkflowClearWaitSeconds seconds for vSAN health service to reflect HCI workflow skip."
+        Write-LogMessage -Type DEBUG -Message "Waiting $HciWorkflowClearWaitSeconds seconds for vSAN health service to reflect HCI workflow skip."
         Start-Sleep -Seconds $HciWorkflowClearWaitSeconds
     }
 
@@ -8763,7 +9209,7 @@ Function Invoke-PauseBeforeRollbackIfRequested {
 
         .DESCRIPTION
         When -RollbackOnFailure was $true (always rollback), returns "ProceedWithRollback". When $false (never rollback), returns "DoNotRollback".
-        When -RollbackOnFailure was omitted (prompt mode), prompts "Do you want to rollback? (Y=yes / N=no, leave broken and continue to next site / A=always rollback for all remaining sites)". When -SingleSite is set, the A option is omitted (no next site). Y and A return "ProceedWithRollback" (A also sets RollbackAlwaysFromPrompt); N returns "DoNotRollback". When $Script:CleanUpOnly is $true, returns "ProceedWithRollback" without prompting. Call at the start of any rollback workflow; callers must throw when return is "DoNotRollback" so the main loop can continue to the next site.
+        When -RollbackOnFailure was omitted (prompt mode), prompts "Do you want to rollback? (Y=yes / N=no, leave broken and continue to next site / A=always rollback for all remaining sites)". When -SingleSite is set, the A option is omitted (no next site). Y and A return "ProceedWithRollback" (A also sets RollbackAlwaysFromPrompt); N or an empty response (Enter) returns "DoNotRollback". When $Script:CleanUpOnly is $true, returns "ProceedWithRollback" without prompting. Call at the start of any rollback workflow; callers must throw when return is "DoNotRollback" so the main loop can continue to the next site.
 
         .PARAMETER MaxPromptRetries
         Maximum number of Read-Host prompts before skipping rollback to prevent runaway. Default is 5.
@@ -8813,11 +9259,11 @@ Function Invoke-PauseBeforeRollbackIfRequested {
     }
     $singleSitePrompt = $SingleSite.IsPresent
     if ($singleSitePrompt) {
-        Write-LogMessage -Type INFO -Message "Rollback decision required. Do you want to rollback? (Y=yes / N=no, leave broken)"
-        $prompt = "Rollback? (Y/N)"
+        Write-LogMessage -Type INFO -Message "Rollback decision required. Do you want to rollback? (Y=yes / N=no, leave broken; press Enter for no)"
+        $prompt = "Rollback? (Y/N, Enter=no)"
     } else {
-        Write-LogMessage -Type INFO -Message "Rollback decision required. Do you want to rollback? (Y=yes / N=no, leave broken and continue to next site / A=always rollback for all remaining sites)"
-        $prompt = "Rollback? (Y/N/A)"
+        Write-LogMessage -Type INFO -Message "Rollback decision required. Do you want to rollback? (Y=yes / N=no, leave broken and continue to next site / A=always rollback for all remaining sites; press Enter for no)"
+        $prompt = "Rollback? (Y/N/A, Enter=no)"
     }
     $loopCount = 0
     try {
@@ -8829,6 +9275,10 @@ Function Invoke-PauseBeforeRollbackIfRequested {
             }
             $response = Read-Host $prompt
             $response = if ($response) { $response.Trim() } else { "" }
+            if ([string]::IsNullOrWhiteSpace($response)) {
+                Write-LogMessage -Type INFO -Message "No input (default no rollback); leaving site in broken state, continuing to next site if any ($RollbackContext)."
+                return "DoNotRollback"
+            }
             if ($response -match '^Y(es)?$') {
                 Write-LogMessage -Type INFO -Message "User chose to rollback ($RollbackContext)."
                 return "ProceedWithRollback"
@@ -9644,7 +10094,6 @@ Function Invoke-ManagementRestoreForCleanup {
     )
     return Restore-ManagementToVssBeforeVdsRemoval -ClusterName $ClusterName -VdsNameWithMgmt $VdsNameWithMgmt
 }
-
 Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
 
     <#
@@ -9736,7 +10185,6 @@ Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
 
     return $lastResult
 }
-
 Function Restore-ManagementToVssBeforeVdsRemoval {
 
     <#
@@ -10238,16 +10686,13 @@ Function Remove-EdgeClusterDistributedSwitch {
         removal is performed.
 
         .PARAMETER ClusterName
-        Optional. Name of the edge cluster (for logging and context). Not used for validation.
+        Name of the edge cluster. Used for logging context and for the port-group-in-use restore fallback.
 
         .PARAMETER Server
         Optional. vCenter server name. Defaults to $Script:vCenterName.
 
         .PARAMETER VdsName
         Name of the Virtual Distributed Switch to remove. Must be unique within the datacenter.
-
-        .EXAMPLE
-        Remove-EdgeClusterDistributedSwitch -VdsName "VDS-site1"
 
         .EXAMPLE
         Remove-EdgeClusterDistributedSwitch -ClusterName "cl0-site1" -VdsName "VDS-site1"
@@ -10265,7 +10710,7 @@ Function Remove-EdgeClusterDistributedSwitch {
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ClusterName = "",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$RemoveVdsRetryDelaySeconds = 10,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $false)] [Switch]$SkipPortGroupInUseRestoreFallback,
@@ -10293,7 +10738,7 @@ Function Remove-EdgeClusterDistributedSwitch {
     # Detach all hosts from the VDS (remove every pNIC from the VDS) so port groups can be removed. Without this, Remove-VDPortgroup can fail with "Operation is not valid due to the current state of the object" when hosts are still attached. -WarningAction SilentlyContinue suppresses VMHost.DatastoreIdList deprecation.
     $hostsOnVds = @(Get-VMHost -DistributedSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
     if ($hostsOnVds -and $hostsOnVds.Count -gt 0) {
-        Write-LogMessage -Type INFO -NoNewline -Message "Detaching $($hostsOnVds.Count) host(s) from VDS `"$VdsName`" (removing pNICs)... "
+        Write-LogMessage -Type DEBUG -Message "Detaching $($hostsOnVds.Count) host(s) from VDS `"$VdsName`" (removing pNICs)..."
         foreach ($vmhost in $hostsOnVds) {
             $hostName = $vmhost.Name
             $pnicsOnVds = @(Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
@@ -10306,7 +10751,6 @@ Function Remove-EdgeClusterDistributedSwitch {
                 }
             }
         }
-        Write-LogMessage -Type INFO -CompletePending -Message "Done."
     }
 
     $portGroups = Get-VDPortgroup -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
@@ -10330,7 +10774,7 @@ Function Remove-EdgeClusterDistributedSwitch {
         # If a port group is in use (VMkernel adapter or other client; VMs already checked above), skip it and continue with others so we remove what we can.
         $customPortGroups = @($portGroups) | Where-Object { $_.Name -notlike "*DVUplinks*" }
         $portGroupRemoveCount = 0
-        Write-LogMessage -Type INFO -NoNewline -Message "Removing distributed port groups from VDS `"$VdsName`"... "
+        Write-LogMessage -Type DEBUG -Message "Removing distributed port groups from VDS `"$VdsName`"..."
         foreach ($pg in $customPortGroups) {
             try {
                 Remove-VDPortgroup -VDPortgroup $pg -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
@@ -10343,13 +10787,13 @@ Function Remove-EdgeClusterDistributedSwitch {
             }
         }
         if ($failedPortGroupNames.Count -eq 0) {
-            Write-LogMessage -Type INFO -CompletePending -Message "Removed $portGroupRemoveCount port group(s)."
+            Write-LogMessage -Type DEBUG -Message "Removed $portGroupRemoveCount port group(s) from VDS `"$VdsName`"."
         } else {
-            Write-LogMessage -Type INFO -CompletePending -Message "Removed $portGroupRemoveCount; $($failedPortGroupNames.Count) skipped (in use: $($failedPortGroupNames -join ', '))."
+            Write-LogMessage -Type DEBUG -Message "Removed $portGroupRemoveCount port group(s) from VDS `"$VdsName`"; $($failedPortGroupNames.Count) skipped (in use: $($failedPortGroupNames -join ', '))."
         }
 
         if ($failedPortGroupNames.Count -gt 0) {
-            Write-LogMessage -Type INFO -Message "Port group(s) not removed (in use): $($failedPortGroupNames -join ', '). Move VMkernel adapters and VMs off these port groups, then remove the VDS manually or retry cleanup."
+            Write-LogMessage -Type INFO -Message "Port group(s) not removed from VDS `"$VdsName`" (in use): $($failedPortGroupNames -join ', '). Move VMkernel adapters and VMs off these port groups, then remove the VDS manually or retry cleanup."
         }
     }
 
@@ -10364,7 +10808,7 @@ Function Remove-EdgeClusterDistributedSwitch {
                     $customPortGroupsRetry = @($portGroupsRetry) | Where-Object { $_.Name -notlike "*DVUplinks*" }
                     $failedPortGroupNames.Clear()
                     $portGroupRemoveCountRetry = 0
-                    Write-LogMessage -Type INFO -NoNewline -Message "Retrying distributed port group removal on VDS `"$VdsName`" after management restore... "
+                    Write-LogMessage -Type DEBUG -Message "Retrying distributed port group removal on VDS `"$VdsName`" after management restore..."
                     foreach ($pgRetry in $customPortGroupsRetry) {
                         try {
                             Remove-VDPortgroup -VDPortgroup $pgRetry -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
@@ -10378,9 +10822,9 @@ Function Remove-EdgeClusterDistributedSwitch {
                     }
 
                     if ($failedPortGroupNames.Count -eq 0) {
-                        Write-LogMessage -Type INFO -CompletePending -Message "Removed $portGroupRemoveCountRetry port group(s)."
+                        Write-LogMessage -Type DEBUG -Message "Retry: removed $portGroupRemoveCountRetry port group(s) from VDS `"$VdsName`"."
                     } else {
-                        Write-LogMessage -Type INFO -CompletePending -Message "Removed $portGroupRemoveCountRetry; $($failedPortGroupNames.Count) still in use ($($failedPortGroupNames -join ', '))."
+                        Write-LogMessage -Type DEBUG -Message "Retry: removed $portGroupRemoveCountRetry; $($failedPortGroupNames.Count) still in use ($($failedPortGroupNames -join ', '))."
                     }
 
                     if ($failedPortGroupNames.Count -gt 0) {
@@ -10394,12 +10838,12 @@ Function Remove-EdgeClusterDistributedSwitch {
         }
     }
 
-    Write-LogMessage -Type INFO -NoNewline -Message "Removing Virtual Distributed Switch `"$VdsName`"... "
+    Write-LogMessage -Type DEBUG -Message "Removing Virtual Distributed Switch `"$VdsName`"..."
     $removeVdsAttempt = 1
     do {
         try {
             Remove-VDSwitch -VDSwitch $vdsObject -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
-            Write-LogMessage -Type INFO -CompletePending -Message "Removed"
+            Write-LogMessage -Type DEBUG -Message "Removed VDS `"$VdsName`"."
             break
         }
         catch {
@@ -10410,12 +10854,10 @@ Function Remove-EdgeClusterDistributedSwitch {
                 $removeVdsAttempt++
                 $vdsObject = Get-VDSwitch -Name $VdsName -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
                 if (-not $vdsObject) {
-                    Write-LogMessage -Type INFO -CompletePending -Message "Removed"
-                    Write-LogMessage -Type INFO -Message "VDS `"$VdsName`" no longer exists; removal may have completed. Skipping retry."
+                    Write-LogMessage -Type DEBUG -Message "VDS `"$VdsName`" no longer exists; removal may have completed. Skipping retry."
                     break
                 }
             } else {
-                Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
                 if ($failedPortGroupNames -and $failedPortGroupNames.Count -gt 0) {
                     Write-LogMessage -Type ERROR -Message "Failed to remove VDS `"$VdsName`". Port group(s) in use: $($failedPortGroupNames -join ', '). Move VMkernel adapters and VMs off these port groups, then remove the VDS manually or retry cleanup."
                     throw "Deployment failed. VDS could not be removed: one or more port groups are in use ($($failedPortGroupNames -join ', ')). Move VMkernel adapters to another switch and migrate VMs off the port groups, then retry or remove the VDS manually."
@@ -10848,7 +11290,7 @@ Function Add-VsanOsaDiskGroupToCluster {
         throw "Deployment failed. $cleanMessage"
     }
     catch {
-        if ($_.Exception.Message -match "Deployment cancelled by user") {
+        if ($_.Exception.Message -match "Deployment cancelled by user" -or $_.Exception.Message -match "^Deployment failed\.") {
             throw
         }
         $errorMessage = $_.Exception.Message
@@ -10900,11 +11342,14 @@ Function Add-VsanEsaStoragePoolDisk {
         .PARAMETER PreferredFaultDomainName
         Optional. The name of the preferred fault domain (typically the edgeSite name). Required if vSanWitnessVmName is provided.
 
-        .PARAMETER vSanWitnessVmName
-        Optional. The FQDN or IP address of the vSAN witness host. If provided, the witness will be configured after the datastore is ready.
-
         .PARAMETER LabEnvironment
         When $true (e.g. common.labenvironment is true), silences only controlleronhcl, advcfgsync, and controllerdiskmode vSAN health checks before the post-witness health check.
+
+        .PARAMETER VsAdvCfgSyncWaitTimeoutSeconds
+        Seconds to wait for vSAN advanced configuration (advCfgSync) to report in sync on all hosts after a config re-apply, immediately before Add-VsanStoragePoolDisk. Helps avoid "Operation is not valid due to the current state of the object" when vCenter has enabled ESA on the cluster but hosts have not finished applying it. Default 180; set 0 to skip (faster but riskier on slow hosts).
+
+        .PARAMETER vSanWitnessVmName
+        Optional. The FQDN or IP address of the vSAN witness host. If provided, the witness will be configured after the datastore is ready.
 
         .EXAMPLE
         Add-VsanEsaStoragePoolDisk -ClusterName "MyCluster" -DatastoreName "datastore-site1"
@@ -10927,10 +11372,11 @@ Function Add-VsanEsaStoragePoolDisk {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 1800)] [Int]$DatastoreWaitTimeoutSeconds = 300,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$DiskRetrievalTimeoutSeconds = 900,
+        [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false,
         [Parameter(Mandatory = $false)] [ValidateRange(0, 10000)] [Double]$MinCapacityGBForExistingDatastore = 1,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PreferredFaultDomainName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
-        [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 600)] [Int]$VsAdvCfgSyncWaitTimeoutSeconds = 180,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-VsanEsaStoragePoolDisk function for cluster: `"$ClusterName`"."
@@ -11112,6 +11558,13 @@ Function Add-VsanEsaStoragePoolDisk {
                 }
             }
 
+            # Push vSAN cluster config and wait for advCfgSync before claiming disks (hosts must have ESA state applied or Add-VsanStoragePoolDisk can fail with invalid object state).
+            if ($VsAdvCfgSyncWaitTimeoutSeconds -gt 0) {
+                Write-LogMessage -Type INFO -Message "Preparing hosts for vSAN ESA storage pool disk claim: re-applying vSAN cluster configuration and waiting up to $VsAdvCfgSyncWaitTimeoutSeconds second(s) for advanced config sync on cluster `"$ClusterName`"."
+                Invoke-VsanClusterConfigReapply -ClusterName $ClusterName | Out-Null
+                $null = Wait-VsanClusterConfigSyncOrTimeout -CheckIntervalSeconds 15 -ClusterName $ClusterName -TimeoutSeconds $VsAdvCfgSyncWaitTimeoutSeconds
+            }
+
             # Add selected disks to storage pools for each host.
             Add-VsanEsaDiskToStoragePool -DisksByHost $selectedDisksByHost
 
@@ -11181,7 +11634,7 @@ Function Add-VsanEsaStoragePoolDisk {
         throw "Deployment failed. $cleanMessage"
     }
     catch {
-        if ($_.Exception.Message -match "Deployment cancelled by user") {
+        if ($_.Exception.Message -match "Deployment cancelled by user" -or $_.Exception.Message -match "^Deployment failed\.") {
             throw
         }
         $errorMessage = $_.Exception.Message
@@ -11380,7 +11833,11 @@ Function Get-EsxDatastoreHealth {
         }
 
         # Check capacity.
-        $freeSpacePercent = [math]::Round(($targetDatastore.FreeSpaceGB / $targetDatastore.CapacityGB * 100), 2)
+        $freeSpacePercent = if ($targetDatastore.CapacityGB -gt 0) {
+            [math]::Round(($targetDatastore.FreeSpaceGB / $targetDatastore.CapacityGB * 100), 2)
+        } else {
+            0
+        }
         if ($freeSpacePercent -lt $FreeSpaceWarningThreshold) {
             $healthIssues += "Low free space: $freeSpacePercent%"
         }
@@ -11592,6 +12049,344 @@ Function Get-EsxDatastoreInfo {
 
 #region Private — supervisor, Harbor, Argo CD, workload networking
 
+Function Write-ClusterEsxiNodeHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs ESXi host connection and power state for a vSphere cluster after deployment checks.
+
+        .DESCRIPTION
+        Emits a single summary line when all hosts are healthy (ConnectionState=Connected and
+        PowerState=PoweredOn). When one or more hosts are unhealthy, logs a header and lists only
+        the unhealthy hosts at WARNING severity so operators can triage without scrolling past
+        noise for healthy hosts.
+
+        .PARAMETER ClusterName
+        The vCenter cluster display name.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+    )
+
+    try {
+        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        $vmHosts = @(Get-VMHost -Location $clusterObject -Server $Script:vCenterName -ErrorAction Stop | Sort-Object -Property Name)
+        $unhealthyHosts = @($vmHosts | Where-Object { $_.ConnectionState -ne "Connected" -or $_.PowerState -ne "PoweredOn" })
+        if ($unhealthyHosts.Count -eq 0) {
+            Write-LogMessage -Type INFO -Message "ESXi node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): all Connected/PoweredOn."
+            return
+        }
+        Write-LogMessage -Type WARNING -Message "ESXi node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): $($unhealthyHosts.Count) not Connected/PoweredOn."
+        foreach ($vmHost in $unhealthyHosts) {
+            Write-LogMessage -Type WARNING -Message "  $($vmHost.Name): ConnectionState=$($vmHost.ConnectionState), PowerState=$($vmHost.PowerState)."
+        }
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not list ESXi host health for cluster `"$ClusterName`": $($_.Exception.Message)"
+    }
+}
+
+Function Write-SupervisorHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs a concise supervisor health summary after deployment, surfacing only non-healthy findings.
+
+        .DESCRIPTION
+        Queries the supervisor summary via Invoke-GetSupervisorNamespaceManagementSummary (and
+        conditions via Invoke-GetSupervisorNamespaceManagementConditions when available) and logs a
+        single INFO line when the supervisor is healthy (ConfigStatus=RUNNING, KubernetesStatus=READY,
+        no ERROR/WARNING summary messages, all conditions Status=True). When any check is not
+        healthy, delegates to Write-SupervisorKubernetesDiagnosticReport for the full diagnostic
+        output. Non-fatal if the API is unavailable.
+
+        .PARAMETER ClusterName
+        The vCenter cluster display name (for log context).
+
+        .PARAMETER SupervisorId
+        Supervisor resource identifier.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId
+    )
+
+    $cmdSummary = Get-Command Invoke-GetSupervisorNamespaceManagementSummary -ErrorAction SilentlyContinue
+    if (-not $cmdSummary) {
+        Write-LogMessage -Type DEBUG -Message "Write-SupervisorHealthReport: Invoke-GetSupervisorNamespaceManagementSummary is not available; skipping post-deployment supervisor health report."
+        return
+    }
+
+    try {
+        $summary = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $SupervisorId -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not read supervisor health for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): $($_.Exception.Message)"
+        return
+    }
+
+    $configStatus = $summary.ConfigStatus
+    $kubernetesStatus = $summary.KubernetesStatus
+    $summaryMessages = @($summary.Messages)
+    $nonInfoMessages = @($summaryMessages | Where-Object {
+        $severityText = if ($null -ne $_.Severity) { $_.Severity.ToString() } else { "" }
+        $severityText -match "^(ERROR|CRITICAL|WARNING|WARN)$"
+    })
+
+    $nonTrueConditions = @()
+    $cmdConditions = Get-Command Invoke-GetSupervisorNamespaceManagementConditions -ErrorAction SilentlyContinue
+    if ($cmdConditions) {
+        try {
+            $conditions = @(Invoke-GetSupervisorNamespaceManagementConditions -Supervisor $SupervisorId -ErrorAction Stop)
+            $nonTrueConditions = @($conditions | Where-Object { $_.Status -ne "True" -and -not [String]::IsNullOrWhiteSpace($_.Status) })
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor conditions API failed for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): $($_.Exception.Message)"
+        }
+    }
+
+    $isHealthy = ($configStatus -eq "RUNNING") -and ($kubernetesStatus -eq "READY") -and ($nonInfoMessages.Count -eq 0) -and ($nonTrueConditions.Count -eq 0)
+    if ($isHealthy) {
+        Write-LogMessage -Type INFO -Message "Supervisor health for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions."
+        return
+    }
+
+    # Delegate to the full diagnostic report so operators can see summary messages and condition details.
+    Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "post-deployment health (ConfigStatus=$configStatus, KubernetesStatus=$kubernetesStatus)" -SupervisorId $SupervisorId
+}
+
+Function Write-VsanClusterHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs a concise vSAN cluster health summary after deployment, surfacing only non-green findings.
+
+        .DESCRIPTION
+        Calls Get-VsanClusterHealthSummaryViaView with FetchFromCache=$true so the latest cached
+        result (refreshed by Invoke-VsanClusterHealthRetestAfterDeployment) is reported. Logs a
+        single INFO line when overallHealth is green; otherwise logs a header plus the non-green
+        group/test entries at WARNING severity. Non-fatal when the vSAN Health API is unavailable.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+    )
+
+    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $true
+    if (-not $healthSummary) {
+        Write-LogMessage -Type WARNING -Message "vSAN health for cluster `"$ClusterName`": summary not available from vCenter. Check vSAN Health in the UI."
+        return
+    }
+
+    $overallHealth = $healthSummary.overallHealth
+    if ($overallHealth -eq "green") {
+        Write-LogMessage -Type INFO -Message "vSAN health for cluster `"$ClusterName`": overallHealth=green."
+        return
+    }
+
+    $overallDescription = $healthSummary.overallHealthDescription
+    $headerLine = "vSAN health for cluster `"$ClusterName`": overallHealth=$overallHealth"
+    if (-not [String]::IsNullOrWhiteSpace($overallDescription)) {
+        $headerLine += " ($overallDescription)"
+    }
+    $headerLine += "."
+    Write-LogMessage -Type WARNING -Message $headerLine
+
+    # List only non-green tests so Connected/healthy checks are not shown.
+    $healthGroups = $healthSummary.groups
+    if (-not $healthGroups) {
+        return
+    }
+    foreach ($healthGroup in @($healthGroups)) {
+        $groupName = $healthGroup.PSObject.Properties["groupName"].Value
+        $groupTests = $healthGroup.PSObject.Properties["tests"].Value
+        if (-not $groupTests) {
+            continue
+        }
+        foreach ($test in @($groupTests)) {
+            $testHealth = $test.PSObject.Properties["health"].Value
+            if (-not $testHealth -or $testHealth -eq "green") {
+                continue
+            }
+            $testName = $test.PSObject.Properties["testName"].Value
+            Write-LogMessage -Type WARNING -Message "  [$testHealth] $groupName / $testName"
+        }
+    }
+}
+
+Function Write-SupervisorKubernetesDiagnosticReport {
+
+    <#
+        .SYNOPSIS
+        Logs supervisor Kubernetes status messages and conditions from the vCenter namespace-management APIs.
+
+        .DESCRIPTION
+        Surfaces the same class of information shown under Kubernetes Status in the vCenter UI (summary
+        messages such as workload network IP pool utilization, plus supervisor conditions when the API is available).
+
+        .PARAMETER ClusterName
+        Cluster name for log context.
+
+        .PARAMETER Context
+        Short phrase describing why diagnostics are being shown (for example timeout or Harbor failure).
+
+        .PARAMETER SupervisorId
+        Supervisor resource identifier passed to Invoke-GetSupervisorNamespaceManagementSummary.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String]$Context,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId
+    )
+
+    $cmdSummary = Get-Command Invoke-GetSupervisorNamespaceManagementSummary -ErrorAction SilentlyContinue
+    if (-not $cmdSummary) {
+        Write-LogMessage -Type DEBUG -Message "Write-SupervisorKubernetesDiagnosticReport: Invoke-GetSupervisorNamespaceManagementSummary is not available."
+        return
+    }
+
+    $headerSuffix = "cluster `"$ClusterName`", supervisor `"$SupervisorId`""
+    $header = if ([String]::IsNullOrWhiteSpace($Context)) {
+        "Supervisor Kubernetes diagnostics ($headerSuffix)"
+    } else {
+        "Supervisor Kubernetes diagnostics — $Context ($headerSuffix)"
+    }
+    Write-LogMessage -Type INFO -Message "======== $header ========"
+    Write-LogMessage -Type INFO -Message "Kubernetes Status in the UI indicates whether the Supervisor is operable; messages below mirror the supervisor summary API."
+
+    try {
+        $summary = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $SupervisorId -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not read supervisor summary from vCenter: $($_.Exception.Message)"
+        Write-LogMessage -Type INFO -Message "======== End supervisor Kubernetes diagnostics ========"
+        return
+    }
+
+    Write-LogMessage -Type INFO -Message "ConfigStatus: $($summary.ConfigStatus); KubernetesStatus: $($summary.KubernetesStatus)."
+
+    if ($null -ne $summary.Stats) {
+        $st = $summary.Stats
+        # Render utilization as percentages at INFO (easy to parse); keep absolute values at DEBUG.
+        $cpuPercent = if ($st.CpuCapacity -gt 0) { [Math]::Round(($st.CpuUsed / $st.CpuCapacity) * 100, 1) } else { 0 }
+        $memoryPercent = if ($st.MemoryCapacity -gt 0) { [Math]::Round(($st.MemoryUsed / $st.MemoryCapacity) * 100, 1) } else { 0 }
+        $storagePercent = if ($st.StorageCapacity -gt 0) { [Math]::Round(($st.StorageUsed / $st.StorageCapacity) * 100, 1) } else { 0 }
+        Write-LogMessage -Type INFO -Message "Summary utilization: CPU=$cpuPercent% Memory=$memoryPercent% Storage=$storagePercent%."
+        Write-LogMessage -Type DEBUG -Message "Summary stats (absolute): CpuUsed=$($st.CpuUsed) CpuCapacity=$($st.CpuCapacity) MemoryUsed=$($st.MemoryUsed) MemoryCapacity=$($st.MemoryCapacity) StorageUsed=$($st.StorageUsed) StorageCapacity=$($st.StorageCapacity)."
+    }
+
+    $summaryMessages = @($summary.Messages)
+    if ($summaryMessages.Count -gt 0) {
+        Write-LogMessage -Type INFO -Message "Supervisor summary messages ($($summaryMessages.Count)):"
+        foreach ($msg in $summaryMessages) {
+            $severityText = if (-not [String]::IsNullOrWhiteSpace($msg.Severity)) { $msg.Severity.ToString() } else { "" }
+
+            # Details is a VapiStdLocalizableMessage object; prefer the localized string, fall back to the default message.
+            $detailsText = ""
+            if ($null -ne $msg.Details) {
+                $detailsText = $msg.Details.Localized
+                if ([String]::IsNullOrWhiteSpace($detailsText)) {
+                    $detailsText = $msg.Details.DefaultMessage
+                }
+            }
+
+            # vCenter may return message text in AdditionalProperties when the typed Details object is null or empty.
+            # Common field names observed: "message", "detail", "text", "description".
+            if ([String]::IsNullOrWhiteSpace($detailsText) -and $null -ne $msg.AdditionalProperties) {
+                $apDict = [System.Collections.Generic.IDictionary[string, object]]$msg.AdditionalProperties
+                foreach ($apKey in @("message", "detail", "text", "description")) {
+                    $apVal = $null
+                    if ($apDict.TryGetValue($apKey, [ref]$apVal) -and -not [String]::IsNullOrWhiteSpace($apVal)) {
+                        if ([String]::IsNullOrWhiteSpace($detailsText)) {
+                            $detailsText = $apVal.ToString()
+                        } elseif ($apKey -ne "message") {
+                            # Append secondary detail field (e.g. "detail") as a suffix.
+                            $detailsText += " Details: '$($apVal.ToString())'."
+                        }
+                    }
+                }
+                # Also pull severity from AdditionalProperties if the typed field was empty.
+                if ([String]::IsNullOrWhiteSpace($severityText)) {
+                    $apSev = $null
+                    if ($apDict.TryGetValue("severity", [ref]$apSev) -and -not [String]::IsNullOrWhiteSpace($apSev)) {
+                        $severityText = $apSev.ToString()
+                    }
+                }
+            }
+
+            if ([String]::IsNullOrWhiteSpace($detailsText)) {
+                $detailsText = "(no details)"
+            }
+            $messageId = $msg.Id
+            $detailsId = if ($null -ne $msg.Details) { $msg.Details.Id } else { $null }
+            $kbLink = $msg.KbArticleLink
+            $logType = switch -Regex ($severityText) {
+                "^(ERROR|CRITICAL)$" {
+                    "ERROR"
+                    break
+                }
+                "^(WARNING|WARN)$" {
+                    "WARNING"
+                    break
+                }
+                default {
+                    "INFO"
+                }
+            }
+            $line = "  [$severityText] $detailsText"
+            $idText = if (-not [String]::IsNullOrWhiteSpace($messageId)) { $messageId } else { $detailsId }
+            if (-not [String]::IsNullOrWhiteSpace($idText)) {
+                $line += " (id: $idText)"
+            }
+            if (-not [String]::IsNullOrWhiteSpace($kbLink)) {
+                $line += " KB: $kbLink"
+            }
+            Write-LogMessage -Type $logType -Message $line
+            # Surface actionable guidance for known message patterns.
+            switch -Regex ($detailsText) {
+                "IPPool.*utilization|utilization.*IPPool|low on free IP" {
+                    Write-LogMessage -Type WARNING -Message "  ^ IP pool utilization is high. If a supervisor service (Harbor or Argo CD) subsequently fails with 'exhausted all IP addresses in requested IPPools', increase `"siteSpec[N].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount`" in supervisor.json and redeploy."
+                    break
+                }
+            }
+        }
+    } else {
+        Write-LogMessage -Type INFO -Message "No summary messages from the API (check Workload Management in the UI if status is not READY)."
+    }
+
+    $cmdConditions = Get-Command Invoke-GetSupervisorNamespaceManagementConditions -ErrorAction SilentlyContinue
+    if ($cmdConditions) {
+        try {
+            $conditions = @(Invoke-GetSupervisorNamespaceManagementConditions -Supervisor $SupervisorId -ErrorAction Stop)
+            if ($conditions.Count -gt 0) {
+                Write-LogMessage -Type INFO -Message "Supervisor conditions ($($conditions.Count)):"
+                foreach ($c in $conditions) {
+                    $descriptionText = $c.Description
+                    if ($descriptionText -and $descriptionText.Length -gt 400) {
+                        $descriptionText = $descriptionText.Substring(0, 400) + "..."
+                    }
+                    $conditionMessages = $c.Messages
+                    $joinedMessages = if ($conditionMessages -and $conditionMessages.Count -gt 0) {
+                        ($conditionMessages | ForEach-Object { $_.ToString() }) -join "; "
+                    } else {
+                        ""
+                    }
+                    Write-LogMessage -Type INFO -Message "  Type=$($c.Type) Status=$($c.Status) Severity=$($c.Severity) Reason=$($c.Reason) Description=$descriptionText Messages=$joinedMessages"
+                    if ($c.Status -ne "True" -and -not [String]::IsNullOrWhiteSpace($c.Status)) {
+                        Write-LogMessage -Type WARNING -Message "  ^ Condition Status is not True; see Reason/Description/Messages above."
+                    }
+                }
+            }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor conditions API failed: $($_.Exception.Message)"
+        }
+    }
+
+    Write-LogMessage -Type INFO -Message "======== End supervisor Kubernetes diagnostics ========"
+}
+
 Function Invoke-SupervisorOnlyRollback {
 
     <#
@@ -11612,6 +12407,9 @@ Function Invoke-SupervisorOnlyRollback {
         .PARAMETER SingleSite
         When set, the rollback prompt shows only Y/N (no A=always), since there is no next site.
 
+        .PARAMETER SupervisorId
+        When set, Kubernetes status diagnostics are logged if supervisor deactivation times out.
+
         .EXAMPLE
         Invoke-SupervisorOnlyRollback -ClusterId "domain-c22" -ClusterName "cl0-site1"
 
@@ -11625,15 +12423,25 @@ Function Invoke-SupervisorOnlyRollback {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [Switch]$SingleSite
+        [Parameter(Mandatory = $false)] [Switch]$SingleSite,
+        [Parameter(Mandatory = $false)] [String]$SupervisorId
     )
 
     $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -RollbackContext "supervisor-only rollback (cluster `"$ClusterName`")" -SingleSite:$SingleSite.IsPresent
     if ($rollbackDecision -eq "DoNotRollback") {
         throw $Script:RollbackSkippedContinueToNextSiteMessage
     }
+    $Script:RollbackAttempted = $true
     Write-LogMessage -Type INFO -Message "Starting supervisor-only rollback for cluster `"$ClusterName`" (disabling supervisor; compute/vSAN/VDS unchanged)."
-    $disableResult = Disable-SupervisorOnCluster -ClusterId $ClusterId -ClusterName $ClusterName -SuppressConfirm
+    $disableSplat = @{
+        ClusterId = $ClusterId
+        ClusterName = $ClusterName
+        SuppressConfirm = $true
+    }
+    if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+        $disableSplat["SupervisorId"] = $SupervisorId
+    }
+    $disableResult = Disable-SupervisorOnCluster @disableSplat
     if ($disableResult.Success) {
         Write-LogMessage -Type INFO -Message "Supervisor-only rollback completed for cluster `"$ClusterName`"."
     } else {
@@ -11661,6 +12469,9 @@ Function Invoke-ArgoCDOnlyRollback {
         .PARAMETER ClusterName
         The cluster name for logging.
 
+        .PARAMETER SupervisorId
+        When set, Kubernetes status diagnostics are logged if namespace removal times out or fails.
+
         .EXAMPLE
         Invoke-ArgoCDOnlyRollback -ClusterName "cluster-OSA" -ArgoCDNamespace "argocd-c467"
 
@@ -11674,7 +12485,8 @@ Function Invoke-ArgoCDOnlyRollback {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCDNamespace,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$ArgoCDNamespaceDeletePollIntervalSeconds = 5,
         [Parameter(Mandatory = $false)] [ValidateRange(10, 600)] [Int]$ArgoCDNamespaceDeleteTimeoutSeconds = 120,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String]$SupervisorId
     )
 
     $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -RollbackContext "ArgoCD-only rollback (cluster `"$ClusterName`")" -ForcePrompt
@@ -11735,6 +12547,13 @@ Function Invoke-ArgoCDOnlyRollback {
             Write-Progress -Activity $progressActivity -Status "Timeout" -Completed
             [Console]::Out.Flush()
             Write-LogMessage -Type WARNING -Message "ArgoCD namespace `"$ArgoCDNamespace`" still exists after ${ArgoCDNamespaceDeleteTimeoutSeconds}s. Delete was initiated; verify in vCenter. Supervisor intact; you can re-run deployment."
+            if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+                try {
+                    Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Argo CD namespace removal did not complete within the wait window" -SupervisorId $SupervisorId
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Argo CD rollback timeout): $($_.Exception.Message)"
+                }
+            }
         } else {
             Write-Progress -Activity $progressActivity -Status "Complete" -PercentComplete 100 -Completed
             [Console]::Out.Flush()
@@ -11744,9 +12563,15 @@ Function Invoke-ArgoCDOnlyRollback {
         Write-Progress -Activity $progressActivity -Status "Error" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type WARNING -Message "ArgoCD-only rollback could not delete namespace `"$ArgoCDNamespace`" for cluster `"$ClusterName`": $($_.Exception.Message). Remove the namespace manually (e.g. -CleanUp ArgoCD) or disable the supervisor if needed. Supervisor is still enabled."
+        if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+            try {
+                Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Argo CD namespace removal failed with an exception" -SupervisorId $SupervisorId
+            } catch {
+                Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Argo CD rollback error): $($_.Exception.Message)"
+            }
+        }
     }
 }
-
 Function Wait-HarborServiceNamespaceTermination {
 
     <#
@@ -12102,10 +12927,20 @@ Function Remove-HarborSupervisorService {
         Write-Progress -Activity $progressActivity -Status "Timeout" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type WARNING -Message "Harbor service `"$Service`" still exists on supervisor `"$SupervisorId`" after ${DeleteTimeoutSeconds}s. Delete was initiated; verify in vCenter. Supervisor intact."
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Harbor supervisor service removal did not complete within the wait window" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor remove timeout): $($_.Exception.Message)"
+        }
     } catch {
         Write-Progress -Activity $progressActivity -Status "Error" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type WARNING -Message "Could not remove Harbor service `"$Service`" from supervisor `"$SupervisorId`" for cluster `"$ClusterName`": $($_.Exception.Message). Remove manually (e.g. -CleanUp Harbor) or verify in vCenter. Supervisor is still enabled."
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Harbor supervisor service removal failed with an exception" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor remove error): $($_.Exception.Message)"
+        }
     }
 }
 Function Invoke-HarborOnlyRollback {
@@ -12160,7 +12995,7 @@ Function Invoke-HarborOnlyRollback {
         throw $Script:RollbackSkippedContinueToNextSiteMessage
     }
     $Script:RollbackAttempted = $true
-    Write-LogMessage -Type INFO -Message "Starting Harbor-only rollback for cluster `"$ClusterName`" (removing service `"$Service`" from supervisor; supervisor and ArgoCD left intact)."
+    Write-LogMessage -Type INFO -Message "Starting Harbor-only rollback for cluster `"$ClusterName`" (removing service `"$Service`" from supervisor; supervisor and Argo CD left intact)."
     Remove-HarborSupervisorService -ClusterName $ClusterName -DeletePollIntervalSeconds $DeletePollIntervalSeconds -DeleteTimeoutSeconds $DeleteTimeoutSeconds -Service $Service -SupervisorId $SupervisorId
 }
 Function Test-SupervisorDeployedOnCluster {
@@ -12242,6 +13077,9 @@ Function Disable-SupervisorOnCluster {
         .PARAMETER SuppressConfirm
         When specified, suppresses the confirmation prompt (passes -Confirm:$false to Invoke-DisableCluster). Omit for interactive use.
 
+        .PARAMETER SupervisorId
+        When set, Kubernetes status diagnostics are logged if deactivation does not finish within the timeout.
+
         .PARAMETER TimeoutSeconds
         Maximum seconds to wait for full deactivation after initiating disable. Default is 3600 (1 hour).
 
@@ -12262,6 +13100,7 @@ Function Disable-SupervisorOnCluster {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [Switch]$SuppressConfirm,
+        [Parameter(Mandatory = $false)] [String]$SupervisorId,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TimeoutSeconds = 3600
     )
 
@@ -12279,18 +13118,17 @@ Function Disable-SupervisorOnCluster {
 
         $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         $confirmFlag = -not $SuppressConfirm.IsPresent
-        Write-LogMessage -Type INFO -Message "Deactivating supervisor on cluster `"$ClusterName`" (ID: $ClusterId)..."
+        Write-LogMessage -Type INFO -NoNewline -Message "Deactivating supervisor on cluster `"$ClusterName`" (ID: $ClusterId)... "
         try {
             Invoke-DisableCluster -Cluster $ClusterId -Confirm:$confirmFlag -ErrorAction Stop
         } catch {
             $disableErr = $_.Exception.Message
             if ($disableErr -match "does not have Workloads enabled|notfound|vcenter\.wcp\.cluster\.notfound") {
-                Write-LogMessage -Type INFO -Message "Supervisor on cluster `"$ClusterName`" is already disabled (no Workloads enabled). Skipping disable."
+                Write-LogMessage -Type INFO -CompletePending -Message "already disabled (no Workloads enabled). Skipping."
                 return [PSCustomObject]@{ Success = $true; ErrorMessage = $null }
             }
             throw
         }
-        Write-LogMessage -Type INFO -Message "Supervisor deactivation initiated. Polling until fully deactivated (timeout: $TimeoutSeconds seconds)..."
 
         $elapsedTime = 0
         do {
@@ -12304,7 +13142,7 @@ Function Disable-SupervisorOnCluster {
             if ($configDisabled -and $kubeNotInstalled) {
                 Write-Progress -Activity "Waiting for supervisor deactivation" -Status "Complete" -PercentComplete 100 -Completed
                 [Console]::Out.Flush()
-                Write-LogMessage -Type INFO -Message "Supervisor on cluster `"$ClusterName`" is fully deactivated after $elapsedTime seconds. You can retry deployment."
+                Write-LogMessage -Type INFO -CompletePending -Message "fully deactivated after $elapsedTime seconds. You can retry deployment."
                 return [PSCustomObject]@{
                     Success = $true
                     ErrorMessage = $null
@@ -12321,7 +13159,14 @@ Function Disable-SupervisorOnCluster {
 
         Write-Progress -Activity "Waiting for supervisor deactivation" -Status "Timeout" -Completed
         [Console]::Out.Flush()
-        Write-LogMessage -Type WARNING -Message "Supervisor teardown on cluster `"$ClusterName`" did not complete within $TimeoutSeconds seconds (ConfigStatus: $configStatus, KubernetesStatus: $kubeStatus). You may retry deployment once teardown finishes."
+        Write-LogMessage -Type WARNING -CompletePending -Message "teardown did not complete within $TimeoutSeconds seconds (ConfigStatus: $configStatus, KubernetesStatus: $kubeStatus). You may retry deployment once teardown finishes."
+        if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+            try {
+                Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "supervisor deactivation did not complete within the wait window" -SupervisorId $SupervisorId
+            } catch {
+                Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics after deactivation timeout: $($_.Exception.Message)"
+            }
+        }
         return [PSCustomObject]@{
             Success = $false
             ErrorMessage = "Teardown did not complete within $TimeoutSeconds seconds. Check vCenter; retry deployment after cluster is fully disabled."
@@ -12329,7 +13174,7 @@ Function Disable-SupervisorOnCluster {
     }
     catch {
         $errorMessage = $_.Exception.Message
-        Write-LogMessage -Type ERROR -Message "Failed to deactivate supervisor on cluster `"$ClusterName`": $errorMessage"
+        Write-LogMessage -Type ERROR -CompletePending -Message "failed to deactivate supervisor on cluster `"$ClusterName`": $errorMessage"
         return [PSCustomObject]@{
             Success = $false
             ErrorMessage = $errorMessage
@@ -12490,6 +13335,11 @@ Function Wait-SupervisorReady {
                             Write-LogMessage -Type ERROR -Message "The supervisor service appears to have crashed or vCenter is unreadable. Deployment cannot continue."
                             Write-Output ""
                             Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisor Clusters"
+                            try {
+                                Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "persistent supervisor API errors (503) exceeded early-exit threshold" -SupervisorId $SupervisorId
+                            } catch {
+                                Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (503 early exit): $($_.Exception.Message)"
+                            }
                             return [PSCustomObject]@{
                                 Success = $false
                                 ElapsedSeconds = $elapsedTime
@@ -12526,6 +13376,11 @@ Function Wait-SupervisorReady {
                         }
                         Write-Output ""
                         Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisor Clusters"
+                        try {
+                            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "supervisor summary API unavailable until the wait window expired" -SupervisorId $SupervisorId
+                        } catch {
+                            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (API timeout path): $($_.Exception.Message)"
+                        }
                         return [PSCustomObject]@{
                             Success = $false
                             ElapsedSeconds = $elapsedTime
@@ -12562,6 +13417,11 @@ Function Wait-SupervisorReady {
         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Timeout" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type ERROR -Message "Timeout waiting for supervisor services to become ready on cluster `"$ClusterName`" after $TotalWaitTime seconds ($elapsedTime seconds elapsed)."
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "supervisor did not reach RUNNING with Kubernetes READY within the wait window" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (readiness timeout): $($_.Exception.Message)"
+        }
         return [PSCustomObject]@{
             Success = $false
             ElapsedSeconds = $elapsedTime
@@ -12580,6 +13440,11 @@ Function Wait-SupervisorReady {
         Write-LogMessage -Type ERROR -Message "  3. Supervisor is in a failed state."
         Write-Output ""
         Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisors."
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "exception during supervisor readiness polling" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (readiness exception path): $($_.Exception.Message)"
+        }
         return [PSCustomObject]@{
             Success = $false
             ElapsedSeconds = $elapsedTime
@@ -13057,6 +13922,7 @@ Function Wait-SupervisorUpgradeComplete {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DesiredVersion,
+        [Parameter(Mandatory = $false)] [String]$SupervisorId,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime = 3600
     )
 
@@ -13129,6 +13995,13 @@ Function Wait-SupervisorUpgradeComplete {
         if ($finalStatus.Success) {
             Write-LogMessage -Type ERROR -Message "Final status - Current version: $($finalStatus.CurrentVersion), Desired version: $($finalStatus.DesiredVersion), State: $($finalStatus.State)"
         }
+        if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+            try {
+                Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "supervisor upgrade did not complete within the wait window" -SupervisorId $SupervisorId
+            } catch {
+                Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (upgrade timeout): $($_.Exception.Message)"
+            }
+        }
 
         return [PSCustomObject]@{
             Success = $false
@@ -13140,6 +14013,13 @@ Function Wait-SupervisorUpgradeComplete {
         Write-Progress -Activity "Waiting for supervisor upgrade to complete" -Status "Error" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type ERROR -Message "Error waiting for supervisor upgrade to complete on cluster `"$ClusterName`": $_"
+        if (-not [String]::IsNullOrWhiteSpace($SupervisorId)) {
+            try {
+                Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "exception during supervisor upgrade wait" -SupervisorId $SupervisorId
+            } catch {
+                Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (upgrade exception): $($_.Exception.Message)"
+            }
+        }
         return [PSCustomObject]@{
             Success = $false
             ElapsedSeconds = $elapsedTime
@@ -13147,7 +14027,45 @@ Function Wait-SupervisorUpgradeComplete {
         }
     }
 }
+Function Get-SupervisorNetworkVanityDisplayName {
 
+    <#
+        .SYNOPSIS
+        Combines a lowercase RFC1123 prefix with a distributed port group label for WCP supervisor API vanity names.
+
+        .DESCRIPTION
+        Port group names in supervisor JSON remain the vSphere DVPG labels used for MoRef resolution. WCP expects
+        distinct logical network names in some fields; this helper prefixes the port group label so FLB management,
+        FLB virtual-server, supervisor management, and primary workload vanity names cannot collide when they share the same DVPG name.
+
+        .PARAMETER MaxTotalLength
+        Maximum length for the combined string (default 80, aligned with supervisor port group name validation).
+
+        .PARAMETER PortGroupName
+        Distributed port group label from supervisor JSON (already lowercase RFC1123).
+
+        .PARAMETER VanityPrefix
+        Short lowercase prefix identifying the spec stanza (e.g. fmn for FLB management network).
+
+        .OUTPUTS
+        [String] Prefix plus port group label, still lowercase RFC1123 when inputs are valid.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 253)] [Int]$MaxTotalLength = 80,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PortGroupName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VanityPrefix
+    )
+
+    $normalizedPrefix = $VanityPrefix.Trim().ToLowerInvariant()
+    $combined = "${normalizedPrefix}${PortGroupName}"
+    if ($combined.Length -gt $MaxTotalLength) {
+        Write-LogMessage -Type ERROR -Message "Supervisor network vanity name exceeds max length $MaxTotalLength (prefix + port group name): $combined."
+        throw "Deployment failed. Check logs for details."
+    }
+
+    return $combined
+}
 Function Get-ManagementNetworkConfig {
 
     <#
@@ -13155,31 +14073,42 @@ Function Get-ManagementNetworkConfig {
         Extracts and validates management network configuration from supervisor specification.
 
         .DESCRIPTION
-        Parses management network configuration from the TKGS component specification and resolves port group IDs. IP assignment mode is supplied by the caller (expected STATIC).
+        Parses management network configuration from the supervisor component specification and resolves port group IDs. IP assignment mode is supplied by the caller (expected STATIC).
+
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, the API-facing Name matches the port group label (legacy behavior). When not set, Name is prefixed to avoid WCP vanity name collisions.
+
+        .PARAMETER Gateway
+        Gateway address for the management network from infrastructure JSON.
+
+        .PARAMETER MgmtNetworkVanityPrefix
+        Lowercase prefix for the supervisor management network vanity name (default tmn).
 
         .PARAMETER Spec
-        Management network specification object from supervisorDetails.tkgsComponentSpec.tkgsMgmtNetworkSpec
+        Management network specification object from supervisorDetails.supervisorComponentSpec.mgmtNetworkSpec
 
         .OUTPUTS
         PSCustomObject with validated management network configuration
 
         .EXAMPLE
-        $mgmtConfig = Get-ManagementNetworkConfig -Spec $supervisorDetails.tkgsComponentSpec.tkgsMgmtNetworkSpec
+        $mgmtConfig = Get-ManagementNetworkConfig -Spec $supervisorDetails.supervisorComponentSpec.mgmtNetworkSpec -Gateway $gw
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$MgmtNetworkVanityPrefix = "tmn",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-ManagementNetworkConfig function..."
 
     try {
-        $ipAssignmentMode = $Spec.tkgsMgmtIpAssignmentMode
+        $ipAssignmentMode = $Spec.mgmtIpAssignmentMode
         Write-LogMessage -Type DEBUG -Message "  IP assignment mode: $ipAssignmentMode"
 
         # Resolve port group ID.
-        $networkName = $Spec.tkgsMgmtNetworkName
+        $networkName = $Spec.mgmtNetworkName
         Write-LogMessage -Type DEBUG -Message "  Resolving port group ID for management network: $networkName"
         $portgroupID = Get-PortGroupId -PortGroupName $networkName
 
@@ -13188,22 +14117,29 @@ Function Get-ManagementNetworkConfig {
             throw "Deployment failed. Check logs for details."
         }
 
-        # Build configuration object (using gateway from infrastructure JSON).
-        $config = [PSCustomObject]@{
-            Name = $networkName
-            PortGroupID = $portgroupID
-            IPAssignmentMode = $ipAssignmentMode
-            DHCPEnabled = $false
-            StartingIP = $Spec.tkgsMgmtNetworkStartingIp
-            IPCount = $Spec.tkgsMgmtNetworkIPCount
-            Gateway = $Gateway
-            DNSServers = $Spec.tkgsMgmtNetworkDnsServers
-            NTPServers = $Spec.tkgsMgmtNetworkNtpServers
-            SearchDomains = $Spec.tkgsMgmtNetworkSearchDomains
+        $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
+            $networkName
+        } else {
+            Get-SupervisorNetworkVanityDisplayName -PortGroupName $networkName -VanityPrefix $MgmtNetworkVanityPrefix
         }
 
-        Write-LogMessage -Type INFO -Message "  Management network configuration extracted: $($config.Name) with $($config.IPCount) IPs"
-        Write-LogMessage -Type INFO -Message "    Starting IP: $($config.StartingIP), Gateway: $($config.Gateway)."
+        # Build configuration object (using gateway from infrastructure JSON).
+        $config = [PSCustomObject]@{
+            Name = $displayName
+            PortGroupID = $portgroupID
+            PortGroupName = $networkName
+            IPAssignmentMode = $ipAssignmentMode
+            DHCPEnabled = $false
+            StartingIP = $Spec.mgmtNetworkStartingIp
+            IPCount = $Spec.mgmtNetworkIPCount
+            Gateway = $Gateway
+            DNSServers = $Spec.mgmtNetworkDnsServers
+            NTPServers = $Spec.mgmtNetworkNtpServers
+            SearchDomains = $Spec.mgmtNetworkSearchDomains
+        }
+
+        Write-LogMessage -Type DEBUG -Message "  Management network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)) with $($config.IPCount) IPs"
+        Write-LogMessage -Type DEBUG -Message "    Starting IP: $($config.StartingIP), Gateway: $($config.Gateway)."
         return $config
     }
     catch {
@@ -13218,31 +14154,42 @@ Function Get-WorkloadNetworkConfig {
         Extracts and validates workload network configuration from supervisor specification.
 
         .DESCRIPTION
-        Parses workload network configuration from the TKGS component specification and resolves port group IDs. IP assignment mode is supplied by the caller (expected STATIC).
+        Parses workload network configuration from the supervisor component specification and resolves port group IDs. IP assignment mode is supplied by the caller (expected STATIC).
+
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, the API-facing Name matches the port group label (legacy behavior). When not set, Name is prefixed to avoid WCP vanity name collisions.
+
+        .PARAMETER Gateway
+        Gateway address for the workload network from infrastructure JSON.
+
+        .PARAMETER PrimaryWorkloadNetworkVanityPrefix
+        Lowercase prefix for the primary workload network vanity name (default pwn).
 
         .PARAMETER Spec
-        Workload network specification object from supervisorDetails.tkgsComponentSpec.tkgsPrimaryWorkloadNetwork
+        Workload network specification object from supervisorDetails.supervisorComponentSpec.primaryWorkloadNetwork
 
         .OUTPUTS
         PSCustomObject with validated workload network configuration
 
         .EXAMPLE
-        $workloadConfig = Get-WorkloadNetworkConfig -Spec $supervisorDetails.tkgsComponentSpec.tkgsPrimaryWorkloadNetwork
+        $workloadConfig = Get-WorkloadNetworkConfig -Spec $supervisorDetails.supervisorComponentSpec.primaryWorkloadNetwork -Gateway $gw
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$PrimaryWorkloadNetworkVanityPrefix = "pwn",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-WorkloadNetworkConfig function..."
 
     try {
-        $ipAssignmentMode = $Spec.tkgsPrimaryWorkloadIpAssignmentMode
+        $ipAssignmentMode = $Spec.primaryWorkloadIpAssignmentMode
         Write-LogMessage -Type DEBUG -Message "  IP assignment mode: $ipAssignmentMode."
 
         # Resolve port group ID.
-        $networkName = $Spec.tkgsPrimaryWorkloadNetworkName
+        $networkName = $Spec.primaryWorkloadNetworkName
         Write-LogMessage -Type DEBUG -Message "  Resolving port group ID for workload network: $networkName."
         $portgroupID = Get-PortGroupId -PortGroupName $networkName
 
@@ -13251,24 +14198,31 @@ Function Get-WorkloadNetworkConfig {
             throw "Deployment failed. Check logs for details."
         }
 
-        # Build configuration object (using gateway from infrastructure JSON).
-        $config = [PSCustomObject]@{
-            Name = $networkName
-            PortGroupID = $portgroupID
-            IPAssignmentMode = $ipAssignmentMode
-            DHCPEnabled = $false
-            StartingIP = $Spec.tkgsPrimaryWorkloadNetworkStartingIp
-            IPCount = $Spec.tkgsPrimaryWorkloadNetworkIPCount
-            Gateway = $Gateway
-            DNSServers = $Spec.tkgsWorkloadDnsServers
-            NTPServers = $Spec.tkgsWorkloadNtpServers
-            SearchDomains = $Spec.tkgsPrimaryWorkloadNetworkSearchDomains
-            ServiceStartIP = $Spec.tkgsWorkloadServiceStartIp
-            ServiceCount = $Spec.tkgsWorkloadServiceCount
+        $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
+            $networkName
+        } else {
+            Get-SupervisorNetworkVanityDisplayName -PortGroupName $networkName -VanityPrefix $PrimaryWorkloadNetworkVanityPrefix
         }
 
-        Write-LogMessage -Type INFO -Message "  Workload network configuration extracted: $($config.Name) with $($config.IPCount) node IPs and $($config.ServiceCount) service IPs."
-        Write-LogMessage -Type INFO -Message "    Node IP: $($config.StartingIP), Service IP: $($config.ServiceStartIP)."
+        # Build configuration object (using gateway from infrastructure JSON).
+        $config = [PSCustomObject]@{
+            Name = $displayName
+            PortGroupID = $portgroupID
+            PortGroupName = $networkName
+            IPAssignmentMode = $ipAssignmentMode
+            DHCPEnabled = $false
+            StartingIP = $Spec.primaryWorkloadNetworkStartingIp
+            IPCount = $Spec.primaryWorkloadNetworkIPCount
+            Gateway = $Gateway
+            DNSServers = $Spec.workloadDnsServers
+            NTPServers = $Spec.workloadNtpServers
+            SearchDomains = $Spec.primaryWorkloadNetworkSearchDomains
+            ServiceStartIP = $Spec.workloadServiceStartIp
+            ServiceCount = $Spec.workloadServiceCount
+        }
+
+        Write-LogMessage -Type DEBUG -Message "  Workload network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)) with $($config.IPCount) node IPs and $($config.ServiceCount) service IPs."
+        Write-LogMessage -Type DEBUG -Message "    Node IP: $($config.StartingIP), Service IP: $($config.ServiceStartIP)."
         return $config
     }
     catch {
@@ -13285,19 +14239,30 @@ Function Get-FLBNetworkConfig {
         .DESCRIPTION
         Parses FLB network configuration (management or virtual server network) and resolves port group IDs.
 
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, the API-facing Name matches the port group label (legacy behavior). When not set, Name is prefixed to avoid WCP vanity name collisions.
+
+        .PARAMETER Gateway
+        Gateway CIDR for this FLB network from infrastructure JSON.
+
         .PARAMETER NetworkSpec
         FLB network specification from foundationLoadBalancerComponents
+
+        .PARAMETER VanityPrefix
+        Lowercase prefix for this FLB stanza (fmn for management, fvsn for virtual server network).
 
         .OUTPUTS
         PSCustomObject with FLB network configuration
 
         .EXAMPLE
-        $flbMgmtNet = Get-FLBNetworkConfig -NetworkSpec $supervisorDetails.tkgsComponentSpec.foundationLoadBalancerComponents.flbManagementNetwork
+        $flbMgmtNet = Get-FLBNetworkConfig -NetworkSpec $supervisorDetails.supervisorComponentSpec.foundationLoadBalancerComponents.flbManagementNetwork -Gateway $gw -VanityPrefix "fmn"
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$NetworkSpec,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Gateway
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VanityPrefix
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-FLBNetworkConfig function..."
@@ -13313,10 +14278,17 @@ Function Get-FLBNetworkConfig {
             throw "Deployment failed. Check logs for details."
         }
 
+        $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
+            $networkName
+        } else {
+            Get-SupervisorNetworkVanityDisplayName -PortGroupName $networkName -VanityPrefix $VanityPrefix
+        }
+
         # Build configuration object (using gateway from infrastructure JSON). Include persona when present (from Get-SupervisorConfigurationFromJson).
         $config = [PSCustomObject]@{
-            Name = $networkName
+            Name = $displayName
             PortGroupID = $portGroupID
+            PortGroupName = $networkName
             Type = $NetworkSpec.flbNetworkType
             IPAssignmentMode = $NetworkSpec.flbNetworkIpAssignmentMode
             StartingIP = $NetworkSpec.flbNetworkIpAddressStartingIp
@@ -13327,8 +14299,8 @@ Function Get-FLBNetworkConfig {
             $config | Add-Member -NotePropertyName "Persona" -NotePropertyValue $NetworkSpec.flbNetworkPersona -Force
         }
 
-        Write-LogMessage -Type INFO -Message "  FLB network configuration extracted: $($config.Name), Type: $($config.Type)"
-        Write-LogMessage -Type INFO -Message "    IP Assignment: $($config.IPAssignmentMode), Count: $($config.IPCount)"
+        Write-LogMessage -Type DEBUG -Message "  FLB network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)), Type: $($config.Type)"
+        Write-LogMessage -Type DEBUG -Message "    IP Assignment: $($config.IPAssignmentMode), Count: $($config.IPCount)"
         return $config
     }
     catch {
@@ -13347,7 +14319,7 @@ Function Get-LoadBalancerConfig {
         Gateways are now provided from infrastructure JSON instead of supervisor JSON.
 
         .PARAMETER Spec
-        Foundation Load Balancer specification from supervisorDetails.tkgsComponentSpec.foundationLoadBalancerComponents
+        Foundation Load Balancer specification from supervisorDetails.supervisorComponentSpec.foundationLoadBalancerComponents
 
         .PARAMETER FlbMgmtNetworkGateway
         Gateway CIDR for FLB management network from infrastructure JSON (e.g., "10.30.11.1/24")
@@ -13355,17 +14327,29 @@ Function Get-LoadBalancerConfig {
         .PARAMETER FlbVirtualServerNetworkGateway
         Gateway CIDR for FLB virtual server network from infrastructure JSON (e.g., "10.30.12.1/24")
 
+        .PARAMETER FlbManagementNetworkVanityPrefix
+        Lowercase prefix for FLB management network vanity name (default fmn).
+
+        .PARAMETER FlbVirtualServerNetworkVanityPrefix
+        Lowercase prefix for FLB virtual server network vanity name (default fvsn).
+
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, FLB API-facing network names match port group labels (legacy behavior).
+
         .OUTPUTS
         PSCustomObject with complete FLB configuration
 
         .EXAMPLE
-        $flbConfig = Get-LoadBalancerConfig -Spec $supervisorDetails.tkgsComponentSpec.foundationLoadBalancerComponents -FlbMgmtNetworkGateway "10.30.11.1/24" -FlbVirtualServerNetworkGateway "10.30.12.1/24"
+        $flbConfig = Get-LoadBalancerConfig -Spec $supervisorDetails.supervisorComponentSpec.foundationLoadBalancerComponents -FlbMgmtNetworkGateway "10.30.11.1/24" -FlbVirtualServerNetworkGateway "10.30.12.1/24"
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec,
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbManagementNetworkVanityPrefix = "fmn",
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkGateway,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FlbVirtualServerNetworkGateway
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FlbVirtualServerNetworkGateway,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbVirtualServerNetworkVanityPrefix = "fvsn",
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCustomObject]$Spec
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-LoadBalancerConfig function..."
@@ -13374,8 +14358,8 @@ Function Get-LoadBalancerConfig {
         Write-LogMessage -Type DEBUG -Message "Extracting Foundation Load Balancer configuration..."
 
         # Extract management and virtual server network configurations (with gateways from infrastructure JSON).
-        $mgmtNetwork = Get-FLBNetworkConfig -NetworkSpec $Spec.flbManagementNetwork -Gateway $FlbMgmtNetworkGateway
-        $vsNetwork = Get-FLBNetworkConfig -NetworkSpec $Spec.flbVirtualServerNetwork -Gateway $FlbVirtualServerNetworkGateway
+        $mgmtNetwork = Get-FLBNetworkConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -Gateway $FlbMgmtNetworkGateway -NetworkSpec $Spec.flbManagementNetwork -VanityPrefix $FlbManagementNetworkVanityPrefix
+        $vsNetwork = Get-FLBNetworkConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -Gateway $FlbVirtualServerNetworkGateway -NetworkSpec $Spec.flbVirtualServerNetwork -VanityPrefix $FlbVirtualServerNetworkVanityPrefix
 
         # Build configuration object.
         $config = [PSCustomObject]@{
@@ -13392,7 +14376,7 @@ Function Get-LoadBalancerConfig {
             VirtualServerNetwork = $vsNetwork
         }
 
-        Write-LogMessage -Type INFO -Message "FLB configuration extracted: $($config.Name), Size: $($config.Size), VIPs: $($config.VipIPCount)"
+        Write-LogMessage -Type DEBUG -Message "FLB configuration extracted: $($config.Name), Size: $($config.Size), VIPs: $($config.VipIPCount)"
         return $config
     }
     catch {
@@ -13410,10 +14394,13 @@ Function Get-SupervisorConfigurationFromJson {
         Extracts and validates all supervisor configuration parameters from the input JSON file,
         returning a PSCustomObject with organized sections for control plane, networks, and FLB.
         This function delegates to specialized parsers for each configuration section.
-        Merges commonSupervisorSpec (shared config) with tkgsSiteSpec (site-specific config) based on edgeSite.
+        Merges commonSupervisorSpec (shared config) with siteSpec (site-specific config) based on edgeSite.
+
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, WCP API vanity network names match distributed port group labels (legacy). When not set (default), names are prefixed per network role (fmn, fvsn, pwn, tmn) so logical names do not collide within a site.
 
         .PARAMETER EdgeSite
-        Edge site identifier to match against tkgsSiteSpec entries
+        Edge site identifier to match against siteSpec entries
 
         .PARAMETER FlbMgmtNetworkPersona
         FLB management network persona. Default is Management.
@@ -13433,10 +14420,10 @@ Function Get-SupervisorConfigurationFromJson {
         .PARAMETER NetworkSegments
         Array of network segments from infrastructure JSON for gateway mapping
 
-        .PARAMETER TkgsMgmtIpAssignmentMode
-        TKGS management network IP assignment mode. Default is STATIC (only supported value).
+        .PARAMETER MgmtIpAssignmentMode
+        Supervisor management network IP assignment mode. Default is STATIC (only supported value).
 
-        .PARAMETER TkgsPrimaryWorkloadIpAssignmentMode
+        .PARAMETER PrimaryWorkloadIpAssignmentMode
         Primary workload network IP assignment mode. Default is STATIC (only supported value).
 
         .OUTPUTS
@@ -13447,11 +14434,12 @@ Function Get-SupervisorConfigurationFromJson {
         - LoadBalancer: FLB configuration including management and virtual server networks
 
         .EXAMPLE
-        $config = Get-SupervisorConfigurationFromJson -JsonFilePath "C:\configs\supervisor.json" -EdgeSite "site1" -NetworkSegments $networkSegments
+        $config = Get-SupervisorConfigurationFromJson -JsonFilePath "./configs/supervisor.json" -EdgeSite "site1" -NetworkSegments $networkSegments
         Write-LogMessage -Type INFO -Message "Control Plane Size: $($config.ControlPlane.Size)"
     #>
 
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$FlbNetworkIpAssignmentMode = "STATIC",
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkPersona = "MANAGEMENT",
@@ -13459,8 +14447,8 @@ Function Get-SupervisorConfigurationFromJson {
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$FlbVirtualServerNetworkPersona = @("FRONTEND", "WORKLOAD"),
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$JsonFilePath,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$NetworkSegments,
-        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$TkgsMgmtIpAssignmentMode = "STATIC",
-        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$TkgsPrimaryWorkloadIpAssignmentMode = "STATIC"
+        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$MgmtIpAssignmentMode = "STATIC",
+        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$PrimaryWorkloadIpAssignmentMode = "STATIC"
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-SupervisorConfigurationFromJson function..."
@@ -13486,9 +14474,9 @@ Function Get-SupervisorConfigurationFromJson {
 
         # Find matching site-specific specification by edgeSite.
         Write-LogMessage -Type DEBUG -Message "Finding matching site specification for edgeSite: $EdgeSite."
-        $siteSpec = $supervisorDetails.tkgsSiteSpec | Where-Object { $_.edgeSite -eq $EdgeSite } | Select-Object -First 1
+        $siteSpec = $supervisorDetails.siteSpec | Where-Object { $_.edgeSite -eq $EdgeSite } | Select-Object -First 1
         if (-not $siteSpec) {
-            Write-LogMessage -Type ERROR -Message "No matching tkgsSiteSpec found for edgeSite: $EdgeSite."
+            Write-LogMessage -Type ERROR -Message "No matching siteSpec found for edgeSite: $EdgeSite."
             throw "Deployment failed. Check logs for details."
         }
 
@@ -13521,38 +14509,38 @@ Function Get-SupervisorConfigurationFromJson {
         Write-LogMessage -Type DEBUG -Message "Extracting network configurations..."
 
         # Get gateway for management network.
-        $mgmtNetworkName = $siteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkName
+        $mgmtNetworkName = $siteSpec.mgmtNetworkSpec.mgmtNetworkName
         $mgmtNetworkGateway = Get-GatewayFromNetworkName -NetworkName $mgmtNetworkName
 
         # Merge common and site-specific configs for management network.
         $mgmtNetworkSpec = [PSCustomObject]@{
-            tkgsMgmtIpAssignmentMode = $TkgsMgmtIpAssignmentMode
-            tkgsMgmtNetworkName = $siteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkName
-            tkgsMgmtNetworkStartingIp = $siteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp
-            tkgsMgmtNetworkIPCount = $siteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount
-            tkgsMgmtNetworkDnsServers = $commonSpec.DnsServers
-            tkgsMgmtNetworkNtpServers = $commonSpec.NetworkNtpServers
-            tkgsMgmtNetworkSearchDomains = $commonSpec.NetworkSearchDomains
+            mgmtIpAssignmentMode = $MgmtIpAssignmentMode
+            mgmtNetworkName = $siteSpec.mgmtNetworkSpec.mgmtNetworkName
+            mgmtNetworkStartingIp = $siteSpec.mgmtNetworkSpec.mgmtNetworkStartingIp
+            mgmtNetworkIPCount = $siteSpec.mgmtNetworkSpec.mgmtNetworkIPCount
+            mgmtNetworkDnsServers = $commonSpec.DnsServers
+            mgmtNetworkNtpServers = $commonSpec.NetworkNtpServers
+            mgmtNetworkSearchDomains = $commonSpec.NetworkSearchDomains
         }
-        $mgmtNetwork = Get-ManagementNetworkConfig -Spec $mgmtNetworkSpec -Gateway $mgmtNetworkGateway
+        $mgmtNetwork = Get-ManagementNetworkConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -Gateway $mgmtNetworkGateway -Spec $mgmtNetworkSpec
 
         # Get gateway for workload network.
-        $workloadNetworkName = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName
+        $workloadNetworkName = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkName
         $workloadNetworkGateway = Get-GatewayFromNetworkName -NetworkName $workloadNetworkName
 
         # Merge common and site-specific configs for workload network.
         $workloadNetworkSpec = [PSCustomObject]@{
-            tkgsPrimaryWorkloadIpAssignmentMode = $TkgsPrimaryWorkloadIpAssignmentMode
-            tkgsPrimaryWorkloadNetworkName = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName
-            tkgsPrimaryWorkloadNetworkStartingIp = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp
-            tkgsPrimaryWorkloadNetworkIPCount = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount
-            tkgsWorkloadDnsServers = $commonSpec.DnsServers
-            tkgsWorkloadNtpServers = $commonSpec.NetworkNtpServers
-            tkgsPrimaryWorkloadNetworkSearchDomains = $commonSpec.NetworkSearchDomains
-            tkgsWorkloadServiceStartIp = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp
-            tkgsWorkloadServiceCount = $siteSpec.tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount
+            primaryWorkloadIpAssignmentMode = $PrimaryWorkloadIpAssignmentMode
+            primaryWorkloadNetworkName = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkName
+            primaryWorkloadNetworkStartingIp = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp
+            primaryWorkloadNetworkIPCount = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkIPCount
+            workloadDnsServers = $commonSpec.DnsServers
+            workloadNtpServers = $commonSpec.NetworkNtpServers
+            primaryWorkloadNetworkSearchDomains = $commonSpec.NetworkSearchDomains
+            workloadServiceStartIp = $siteSpec.primaryWorkloadNetwork.workloadServiceStartIp
+            workloadServiceCount = $siteSpec.primaryWorkloadNetwork.workloadServiceCount
         }
-        $workloadNetwork = Get-WorkloadNetworkConfig -Spec $workloadNetworkSpec -Gateway $workloadNetworkGateway
+        $workloadNetwork = Get-WorkloadNetworkConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -Gateway $workloadNetworkGateway -Spec $workloadNetworkSpec
 
         # Get gateways for FLB networks.
         $flbMgmtNetworkName = $siteSpec.foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName
@@ -13588,7 +14576,7 @@ Function Get-SupervisorConfigurationFromJson {
                 flbNetworkPersona = $FlbVirtualServerNetworkPersona
             }
         }
-        $loadBalancer = Get-LoadBalancerConfig -Spec $flbSpec -FlbMgmtNetworkGateway $flbMgmtNetworkGateway -FlbVirtualServerNetworkGateway $flbVsNetworkGateway
+        $loadBalancer = Get-LoadBalancerConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -FlbMgmtNetworkGateway $flbMgmtNetworkGateway -FlbVirtualServerNetworkGateway $flbVsNetworkGateway -Spec $flbSpec
 
         # Build structured configuration object.
         $config = [PSCustomObject]@{
@@ -13599,10 +14587,10 @@ Function Get-SupervisorConfigurationFromJson {
         }
 
         Write-LogMessage -Type INFO -Message "Supervisor configuration parsed successfully for edgeSite: $EdgeSite."
-        Write-LogMessage -Type INFO -Message "Control Plane: $($controlPlane.VMCount) x $($controlPlane.Size)"
-        Write-LogMessage -Type INFO -Message "Management Network: $($mgmtNetwork.Name)"
-        Write-LogMessage -Type INFO -Message "Workload Network: $($workloadNetwork.Name)"
-        Write-LogMessage -Type INFO -Message "Load Balancer: $($loadBalancer.Name)"
+        Write-LogMessage -Type DEBUG -Message "Control Plane: $($controlPlane.VMCount) x $($controlPlane.Size)"
+        Write-LogMessage -Type DEBUG -Message "Management Network: $($mgmtNetwork.Name)"
+        Write-LogMessage -Type DEBUG -Message "Workload Network: $($workloadNetwork.Name)"
+        Write-LogMessage -Type DEBUG -Message "Load Balancer: $($loadBalancer.Name)"
 
         return $config
     }
@@ -13779,7 +14767,7 @@ Function New-SupervisorControlPlaneSpec {
     Write-LogMessage -Type DEBUG -Message "Entered New-SupervisorControlPlaneSpec function..."
 
     try {
-        Write-LogMessage -Type INFO -Message "   Building control plane specification..."
+        Write-LogMessage -Type DEBUG -Message "   Building control plane specification..."
 
         # Build network backing.
         $networkBacking = Initialize-VcenterNamespaceManagementSupervisorsNetworksManagementNetworkBacking `
@@ -13831,7 +14819,7 @@ Function New-SupervisorControlPlaneSpec {
             -StoragePolicy $StoragePolicyId `
             -Count $ControlPlaneConfig.VMCount
 
-        Write-LogMessage -Type INFO -Message "   Control plane specification built successfully: Size=$($ControlPlaneConfig.Size), VMs=$($ControlPlaneConfig.VMCount)"
+        Write-LogMessage -Type DEBUG -Message "   Control plane specification built successfully: Size=$($ControlPlaneConfig.Size), VMs=$($ControlPlaneConfig.VMCount)"
         return $controlPlane
     }
     catch {
@@ -13924,7 +14912,7 @@ Function New-SupervisorWorkloadSpec {
             -Services $services `
             -IpManagement $ipManagement
 
-        Write-LogMessage -Type INFO -Message "   Workload network specification built successfully: $($WorkloadNetworkConfig.Name)"
+        Write-LogMessage -Type DEBUG -Message "   Workload network specification built successfully: $($WorkloadNetworkConfig.Name)"
         return $workloadNetwork
     }
     catch {
@@ -14170,7 +15158,7 @@ Function Invoke-SupervisorCreation {
     $tempJsonPath = $null
 
     try {
-        Write-LogMessage -Type INFO -Message "   Invoking supervisor creation on cluster `"$ClusterName`" (ID: $ClusterId)..."
+        Write-LogMessage -Type DEBUG -Message "   Invoking supervisor creation on cluster `"$ClusterName`" (ID: $ClusterId)..."
 
         # Create temporary JSON file with timestamp to avoid collisions.
         $timestamp = Get-Date -Format 'yyyyMMddHHmmss'
@@ -14180,10 +15168,10 @@ Function Invoke-SupervisorCreation {
         Write-LogMessage -Type DEBUG -Message "Serializing supervisor specification to JSON..."
 
         # Step 1: Serialize supervisor spec to JSON using VCF PowerCLI 9 ToJson() method.
-        $SupervisorSpec.ToJson() | Set-Content $tempJsonPath
+        $SupervisorSpec.ToJson() | Set-Content -Path $tempJsonPath -Encoding UTF8
 
         # Step 2: Read back and convert to PSCustomObject for manipulation.
-        $jsonFilePath = Get-Content $tempJsonPath -Raw
+        $jsonFilePath = Get-Content -Path $tempJsonPath -Raw -Encoding UTF8
         $obj = $jsonFilePath | ConvertFrom-Json
 
         # Step 3: Convert count properties to integers (VCF PowerCLI 9 requirement).
@@ -14654,7 +15642,7 @@ Function Add-Supervisor {
         .PARAMETER InfrastructureJson
         Specifies the full path to the JSON configuration file containing supervisor deployment details.
         This file must contain all required supervisor specifications including control plane
-        configuration, network settings, and TKGS component specifications. The JSON structure must match
+        configuration, network settings, and supervisor component specifications. The JSON structure must match
         the expected supervisor configuration schema.
 
         .PARAMETER StoragePolicyId
@@ -14672,11 +15660,14 @@ Function Add-Supervisor {
         This parameter is used primarily for enhanced logging messages and progress tracking
         to provide clear context about which cluster is being configured.
 
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, passes through to Get-SupervisorConfigurationFromJson so WCP API network vanity names match distributed port group labels (legacy behavior).
+
         .PARAMETER TotalWaitTime
         Specifies the maximum time in seconds to wait for the supervisor to become ready.
         The function will monitor supervisor status and wait for both ConfigStatus (RUNNING)
         and KubernetesStatus (READY) before completion. Default value is 3600 seconds (1 hour).
-        If the supervisor doesn't become ready within this time, the function will exit with error code 1.
+        If the supervisor does not become ready within this time, the function throws a terminating error.
 
         .PARAMETER CheckInterval
         Specifies the interval in seconds between status checks while waiting for the supervisor
@@ -14713,7 +15704,7 @@ Function Add-Supervisor {
         When set, the rollback prompt on supervisor timeout shows only Y/N (no A=always), since there is no next site.
 
         .EXAMPLE
-        Add-Supervisor -infrastructureJson "C:\config\supervisor.json" -storagePolicyId "aa6d5a82-1c88-45da-85d3-3d74b91a5bad" -clusterId "domain-c8" -clusterName "cl02"
+        Add-Supervisor -infrastructureJson "./config/supervisor.json" -storagePolicyId "aa6d5a82-1c88-45da-85d3-3d74b91a5bad" -clusterId "domain-c8" -clusterName "cl02"
 
         Creates a new supervisor on cluster "cl02" using the configuration from supervisor.json
         with the specified storage policy and cluster identifiers. Uses default timeout of 3600 seconds
@@ -14727,7 +15718,7 @@ Function Add-Supervisor {
         a supervisor already exists on the cluster. If supervisor exists, retrieves and returns its ID.
 
         .EXAMPLE
-        Add-Supervisor -CheckInterval 30 -ClusterId "domain-c8" -ClusterName "cl02" -InfrastructureJson "C:\config\supervisor.json" -StoragePolicyId "aa6d5a82-1c88-45da-85d3-3d74b91a5bad" -TotalWaitTime 7200
+        Add-Supervisor -CheckInterval 30 -ClusterId "domain-c8" -ClusterName "cl02" -InfrastructureJson "./config/supervisor.json" -StoragePolicyId "aa6d5a82-1c88-45da-85d3-3d74b91a5bad" -TotalWaitTime 7200
 
         Creates a new supervisor with custom timeout of 7200 seconds (2 hours) and check interval of 30 seconds.
         This is useful for larger deployments that may take longer to become ready or when you want less
@@ -14771,7 +15762,7 @@ Function Add-Supervisor {
         - Progress monitoring uses a do-while loop with configurable timeout (default 3600 seconds/1 hour)
         - Status checks occur at configurable intervals (default 5 seconds) during the monitoring phase
         - Idempotent: If supervisor already exists, retrieves and returns existing supervisor ID
-        - Function will exit with code 1 if supervisor creation fails (except for pre-existence)
+        - Throws a terminating error if supervisor creation fails (except for pre-existence, which is idempotent)
         - All operations are logged using Write-LogMessage for consistent logging format
         - Temporary JSON files are created in the system temp directory and cleaned up automatically
 
@@ -14794,19 +15785,20 @@ Function Add-Supervisor {
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$FlbNetworkIpAssignmentMode="STATIC",
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$FlbMgmtNetworkPersona = "MANAGEMENT",
         [Parameter(Mandatory = $false)] [ValidateSet("VSPHERE_FOUNDATION")] [String]$FlbProvider="VSPHERE_FOUNDATION",
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Array]$FlbWorkloadNetworkPersona=@("FRONTEND", "WORKLOAD"),
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$NetworkSegments,
         [Parameter(Mandatory = $false)] [Switch]$SingleSite,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
-        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$TkgsMgmtIpAssignmentMode="STATIC",
-        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$TkgsPrimaryWorkloadIpAssignmentMode="STATIC",
+        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$MgmtIpAssignmentMode="STATIC",
+        [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$PrimaryWorkloadIpAssignmentMode="STATIC",
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
         [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword
     )
@@ -14820,8 +15812,8 @@ Function Add-Supervisor {
         # STEP 1: Parse Configuration from JSON.
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Parsing configuration from JSON..." -PercentComplete 10
-        Write-LogMessage -Type INFO -Message "[Step 1/5] Parsing supervisor configuration from JSON..."
-        $config = Get-SupervisorConfigurationFromJson -EdgeSite $EdgeSite -FlbNetworkIpAssignmentMode $FlbNetworkIpAssignmentMode -FlbMgmtNetworkPersona $FlbMgmtNetworkPersona -FlbProvider $FlbProvider -FlbVirtualServerNetworkPersona $FlbWorkloadNetworkPersona -JsonFilePath $InfrastructureJson -NetworkSegments $NetworkSegments -TkgsMgmtIpAssignmentMode $TkgsMgmtIpAssignmentMode -TkgsPrimaryWorkloadIpAssignmentMode $TkgsPrimaryWorkloadIpAssignmentMode
+        Write-LogMessage -Type DEBUG -Message "[Step 1/5] Parsing supervisor configuration from JSON..."
+        $config = Get-SupervisorConfigurationFromJson -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -EdgeSite $EdgeSite -FlbNetworkIpAssignmentMode $FlbNetworkIpAssignmentMode -FlbMgmtNetworkPersona $FlbMgmtNetworkPersona -FlbProvider $FlbProvider -FlbVirtualServerNetworkPersona $FlbWorkloadNetworkPersona -JsonFilePath $InfrastructureJson -NetworkSegments $NetworkSegments -MgmtIpAssignmentMode $MgmtIpAssignmentMode -PrimaryWorkloadIpAssignmentMode $PrimaryWorkloadIpAssignmentMode
 
         # Validate configuration before proceeding.
         if (-not (Test-SupervisorConfiguration -Config $config)) {
@@ -14833,7 +15825,7 @@ Function Add-Supervisor {
         # STEP 2: Build VCF PowerCLI 9 Specifications.
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Building Supervisor specifications..." -PercentComplete 30
-        Write-LogMessage -Type INFO -Message "[Step 2/5] Building Supervisor specifications..."
+        Write-LogMessage -Type DEBUG -Message "[Step 2/5] Building Supervisor specifications..."
 
         # Build control plane specification using parameter splatting.
         $controlPlaneParams = @{
@@ -14862,7 +15854,7 @@ Function Add-Supervisor {
         # STEP 3: Assemble Complete Supervisor Specification.
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Assembling complete supervisor specification..." -PercentComplete 50
-        Write-LogMessage -Type INFO -Message "[Step 3/5] Assembling complete supervisor specification..."
+        Write-LogMessage -Type DEBUG -Message "[Step 3/5] Assembling complete supervisor specification..."
 
         # Build Kube API Server options (empty for now).
         $kubeApiServerOptions = Initialize-VcenterNamespaceManagementSupervisorsKubeAPIServerOptions
@@ -14883,7 +15875,7 @@ Function Add-Supervisor {
         # STEP 4: Invoke Supervisor Creation.
         # ========================================================================
         Write-Progress -Activity "Supervisor Deployment" -Status "Invoking supervisor creation API..." -PercentComplete 70
-        Write-LogMessage -Type INFO -Message "[Step 4/5] Invoking supervisor creation API..."
+        Write-LogMessage -Type DEBUG -Message "[Step 4/5] Invoking supervisor creation API..."
 
         # Invoke supervisor creation using parameter splatting. vCenter user comes from $Script:VCenterUser (set from input).
         $creationParams = @{
@@ -14909,11 +15901,11 @@ Function Add-Supervisor {
         }
 
         $supervisorId = $creationResult.SupervisorId
-        Write-LogMessage -Type INFO -Message "[Step 4/5] Supervisor API invocation completed. ID: $supervisorId"
+        Write-LogMessage -Type DEBUG -Message "[Step 4/5] Supervisor API invocation completed. ID: $supervisorId"
 
         # If supervisor already existed, skip waiting and return immediately.
         if ($creationResult.IsExisting) {
-            Write-LogMessage -Type INFO -Message "[Step 5/5] Supervisor already exists, skipping status monitoring."
+            Write-LogMessage -Type DEBUG -Message "[Step 5/5] Supervisor already exists, skipping status monitoring."
             Write-LogMessage -Type INFO -Message "Using existing supervisor ID: $supervisorId."
             return $supervisorId
         }
@@ -14926,7 +15918,7 @@ Function Add-Supervisor {
         Write-Progress -Activity "Supervisor Deployment" -Completed
         Write-Progress -Activity "Supervisor Deployment" -Status "Monitoring supervisor deployment status..." -PercentComplete 85
         [Console]::Out.Flush()
-        Write-LogMessage -Type INFO -Message "[Step 5/5] Monitoring supervisor deployment status..."
+        Write-LogMessage -Type DEBUG -Message "[Step 5/5] Monitoring supervisor deployment status..."
 
         # Monitor supervisor readiness using parameter splatting.
         $waitParams = @{
@@ -14944,7 +15936,7 @@ Function Add-Supervisor {
                 throw $Script:RollbackSkippedContinueToNextSiteMessage
             }
             Write-LogMessage -Type INFO -Message "Deactivating supervisor on cluster `"$ClusterName`" to leave cluster in a clean state for retry."
-            $disableResult = Disable-SupervisorOnCluster -ClusterId $ClusterId -ClusterName $ClusterName -SuppressConfirm
+            $disableResult = Disable-SupervisorOnCluster -ClusterId $ClusterId -ClusterName $ClusterName -SupervisorId $supervisorId -SuppressConfirm
             if ($disableResult.Success) {
                 Write-LogMessage -Type INFO -Message "Supervisor fully deactivated. You may retry deployment."
                 $deleteClusterPrompt = "Do you want to delete the compute cluster as well? (Y/N; press Enter for N)"
@@ -14992,7 +15984,7 @@ Function Add-Supervisor {
             throw "Deployment failed. Check logs for details."
         }
 
-        Write-LogMessage -Type INFO -Message "[Step 5/5] Supervisor is ready (elapsed: $($waitResult.ElapsedSeconds) seconds)"
+        Write-LogMessage -Type DEBUG -Message "[Step 5/5] Supervisor is ready (elapsed: $($waitResult.ElapsedSeconds) seconds)"
         Write-LogMessage -Type INFO -Message "Supervisor deployment completed successfully. Supervisor ID: $supervisorId"
 
         # ========================================================================
@@ -15018,10 +16010,11 @@ Function Add-Supervisor {
 
                 # Wait for upgrade to complete with progress monitoring.
                 $upgradeWaitParams = @{
+                    CheckInterval = $CheckInterval
                     ClusterId = $ClusterId
                     ClusterName = $ClusterName
                     DesiredVersion = $upgradeInfo.LatestVersion
-                    CheckInterval = $CheckInterval
+                    SupervisorId = $supervisorId
                     TotalWaitTime = $TotalWaitTime
                 }
                 $upgradeWaitResult = Wait-SupervisorUpgradeComplete @upgradeWaitParams
@@ -15332,14 +16325,14 @@ Function Invoke-MigrateHostManagementToVds {
         # Add first unused NIC to VDS (so we have connectivity before moving vmk0).
         $pnicToAdd = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $firstUnused -Server $Script:vCenterName -ErrorAction Stop
         $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAdd -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-        Write-LogMessage -Type INFO -Message "Added pNIC `"$firstUnused`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+        Write-LogMessage -Type DEBUG -Message "Added pNIC `"$firstUnused`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
     }
 
     # Migrate vmk0 to the distributed port group (same IP preserved by PowerCLI). VCF PowerCLI 9 does not support -Server on Set-VMHostNetworkAdapter. Use -Confirm:$false to avoid interactive prompt. -WarningAction SilentlyContinue suppresses VmwareVDPortgroup.VirtualSwitch deprecation.
     $vmk0 = $mgmtInfo.ManagementVmkernel
     Set-VMHostNetworkAdapter -VirtualNic $vmk0 -PortGroup $mgmtPortGroup -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
     $Script:DidMigrateVmk0ToVdsThisRun = $true
-    Write-LogMessage -Type INFO -Message "Migrated management (vmk0) to VDS `"$VdsName`" port group `"$ManagementPortGroupName`" on host `"$hostDisplay`"."
+    Write-LogMessage -Type DEBUG -Message "Migrated management (vmk0) to VDS `"$VdsName`" port group `"$ManagementPortGroupName`" on host `"$hostDisplay`"."
     $mgmtMtu = 1500
     $currentMtu = $null
     if ($vmk0.PSObject.Properties["Mtu"]) { $currentMtu = $vmk0.Mtu }
@@ -15398,7 +16391,7 @@ Function Invoke-MigrateHostManagementToVds {
     $stdSwitch = $mgmtInfo.StandardSwitch
     $portGroupsOnSwitch = Get-VirtualPortGroup -VirtualSwitch $stdSwitch -Server $Script:vCenterName -ErrorAction SilentlyContinue
     foreach ($pg in $portGroupsOnSwitch) {
-        $vmsOnPg = Get-VM -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object {
+        $vmsOnPg = Get-VM -Server $Script:vCenterName -Location $VMHost -ErrorAction SilentlyContinue | Where-Object {
             $_.NetworkAdapters | Where-Object { $_.Network -and ($_.Network.Name -eq $pg.Name) }
         }
         if ($vmsOnPg -and @($vmsOnPg).Count -gt 0) {
@@ -15408,7 +16401,7 @@ Function Invoke-MigrateHostManagementToVds {
         }
     }
     Remove-VirtualSwitch -VirtualSwitch $stdSwitch -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-    Write-LogMessage -Type INFO -Message "Removed standard switch `"$($stdSwitch.Name)`" from host `"$hostDisplay`"."
+    Write-LogMessage -Type DEBUG -Message "Removed standard switch `"$($stdSwitch.Name)`" from host `"$hostDisplay`"."
 
     # Add second uplink: prefer the other NIC from NicList (so VDS uses user-specified NICs, e.g. vmnic0 and vmnic1). After a deploy-then-cleanup cycle, management is on vSwitch0-restore with the pNIC that was removed from the VDS during restore (often alphabetically last, e.g. vmnic2); that pNIC would otherwise be "reclaimed" and added here. Preferring the second from NicList ensures correct uplinks on re-deploy. Fall back to reclaimed pNIC if NicList has only one or the second is unavailable.
     $secondFromNicList = @($nicNames | Where-Object { $_ -ne $firstUnused })[0]
@@ -15428,11 +16421,11 @@ Function Invoke-MigrateHostManagementToVds {
     if ($null -eq $pnicToAddAsSecond) {
         $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
         $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-        Write-LogMessage -Type INFO -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+        Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
     } else {
         try {
             $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-            Write-LogMessage -Type INFO -Message "Added pNIC `"$secondFromNicList`" to VDS `"$VdsName`" on host `"$hostDisplay`" (second from NicList)."
+            Write-LogMessage -Type DEBUG -Message "Added pNIC `"$secondFromNicList`" to VDS `"$VdsName`" on host `"$hostDisplay`" (second from NicList)."
             if ($stdSwitch.Name -eq "vSwitch0-restore") {
                 Write-LogMessage -Type DEBUG -Message "Management was on restore VSS; used second from NicList so VDS uplinks match NicList on re-deploy after cleanup."
             }
@@ -15440,7 +16433,7 @@ Function Invoke-MigrateHostManagementToVds {
             Write-LogMessage -Type WARNING -Message "Could not add pNIC `"$secondFromNicList`" to VDS (e.g. already on another switch): $($_.Exception.Message). Adding reclaimed pNIC `"$reclaimedPnicName`"."
             $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
             $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-            Write-LogMessage -Type INFO -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+            Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
         }
     }
 
@@ -15501,7 +16494,7 @@ Function Invoke-VDSCreation {
         .NOTES
         Error Handling: Helper function. Returns VDS object on success. Returns structured error
         object via Write-ErrorAndReturn on failure. Caller should check result type and handle
-        errors appropriately (typically by calling 'exit 1' in main workflow functions).
+        errors appropriately (typically by throwing a terminating error in main workflow functions).
     #>
 
     Param (
@@ -15743,7 +16736,6 @@ Function New-VDSPortGroups {
         }
     }
 }
-
 Function Set-VDSUplinkTeamingActiveStandby {
 
     <#
@@ -15817,7 +16809,6 @@ Function Set-VDSUplinkTeamingActiveStandby {
         Write-LogMessage -Type WARNING -Message "Set-VDSUplinkTeamingActiveStandby: Could not set active/standby on VDS `"$VdsName`": $($_.Exception.Message)."
     }
 }
-
 Function Add-PhysicalAdaptersToVDS {
 
     <#
@@ -15959,14 +16950,53 @@ Function Add-PhysicalAdaptersToVDS {
         return Write-ErrorAndReturn -ErrorMessage "Network adapter configuration failed" -ErrorCode "ERR_NIC_CONFIG"
     }
 }
+Function Get-VmkernelTrafficVdsNameForLayout {
+    <#
+        .SYNOPSIS
+        Resolves the distributed switch name used for a VMkernel traffic role given uplink count.
 
+        .DESCRIPTION
+        Centralizes the mapping from base VDS name and uplink layout to the actual VDS object name.
+        Today only two- and four-uplink layouts are supported: with four uplinks, vMotion and vSAN
+        VMkernel port groups use the second segment switch (BaseVdsName-sw2) and vSAN Witness uses
+        the first (BaseVdsName-sw1). Additional uplink counts or extra switches can be added as new
+        switch cases without scattering string concatenation through VMkernel creation code.
+
+        .PARAMETER BaseVdsName
+        Base VDS name from infrastructure JSON (for example VDS-site1).
+
+        .PARAMETER NumUplinks
+        Total uplinks for the layout (2 or 4).
+
+        .PARAMETER TrafficRole
+        VmotionVsan for vMotion and vSAN services; Witness for vSAN Witness only.
+
+        .OUTPUTS
+        [String] VDS name to pass to Get-VDSwitch / New-VDSPortGroups.
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$BaseVdsName,
+        [Parameter(Mandatory = $true)] [ValidateSet(2, 4)] [Int]$NumUplinks,
+        [Parameter(Mandatory = $true)] [ValidateSet("VmotionVsan", "Witness")] [String]$TrafficRole
+    )
+    switch ($NumUplinks) {
+        2 { return $BaseVdsName }
+        4 {
+            switch ($TrafficRole) {
+                "VmotionVsan" { return "$BaseVdsName-sw2" }
+                "Witness" { return "$BaseVdsName-sw1" }
+            }
+        }
+        default { return $BaseVdsName }
+    }
+}
 Function Add-VmkernelInterfacesFromNetworkingConfig {
     <#
         .SYNOPSIS
         Creates vMotion, vSAN, and optionally vSAN Witness distributed port groups on the VDS and adds VMkernel adapters on each host using networkingVmKernelInterfaces configuration.
 
         .DESCRIPTION
-        When storage is vSAN-ESA or vSAN-OSA, clusters.networking.networkingVmKernelInterfaces defines at least vMotion and vSAN (required); vSAN Witness is optional. When vSAN Witness is not defined, mgmt (vmk0) is tagged with vSAN witness traffic in addition to mgmt (no separate vmk3). When vSAN Witness is defined, a dedicated witness VMkernel (vmk3) is created. Each entry has service, vlanId, netmask, ipList (one IP per host). Mgmt (vmk0) is never modified by this function; vmk0 always retains mgmt traffic.
+        When storage is vSAN-ESA or vSAN-OSA, clusters.networking.networkingVmKernelInterfaces defines at least vMotion and vSAN (required); vSAN Witness is optional. When vSAN Witness is not defined, mgmt (vmk0) is tagged with vSAN witness traffic in addition to mgmt (no separate vmk3). When vSAN Witness is defined, a dedicated witness VMkernel (vmk3) is created. Each entry has service, vlanId, netmask, ipList (one IP per host). Optional **gateway** on the vSAN Witness entry is applied with esxcli after the VMkernel exists. Mgmt (vmk0) is never modified by this function; vmk0 always retains mgmt traffic.
 
         .PARAMETER ClusterName
         Name of the cluster.
@@ -15975,10 +17005,10 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         Array of ESX host names in the same order as ipList in networkingVmKernelInterfaces (ipList[0] = first host, ipList[1] = second host).
 
         .PARAMETER NetworkingVmKernelInterfaces
-        Array of at least two entries: vMotion, vSAN (required). Optional third entry: vSAN Witness. Each has service, vlanId, netmask, ipList (two IPs). Only the vSAN Witness entry requires gateway in JSON; VMkernel interfaces are not configured with a gateway by the script.
+        Array of at least two entries: vMotion, vSAN (required). Optional third entry: vSAN Witness. Each has service, vlanId, netmask, ipList (two IPs). Only the vSAN Witness entry uses **gateway** in JSON; when present, the default gateway is applied on the host with **esxcli network ip interface ipv4 set** (VCF PowerCLI does not set VMkernel default gateway on create).
 
         .PARAMETER NumUplinks
-        Number of uplinks (2 or 4). When 4, vmkernel port groups are created on the second VDS (VdsName-sw2).
+        Number of uplinks (2 or 4). When 4, vMotion and vSAN vmkernel port groups are created on the second VDS (VdsName-sw2); vSAN Witness (dedicated vmk3) port groups are created on the first VDS (VdsName-sw1) so witness traffic stays on the first distributed switch. VDS names per role come from Get-VmkernelTrafficVdsNameForLayout so additional layouts stay in one place.
 
         .PARAMETER VmkernelMtu
         MTU for vMotion and vSAN VMkernel adapters only (1500-9190). vSAN Witness and mgmt (vmk0) are always 1500. Default is 9000. Override via common.vSanvMotionVmKernelMtuValue in infrastructure JSON (validated 1500-9190).
@@ -15987,7 +17017,7 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         vCenter server name.
 
         .PARAMETER VdsName
-        Base VDS name (e.g. VDS-site2). For 4 NICs the vmkernel port groups are created on VdsName-sw2.
+        Base VDS name (e.g. VDS-site2). For 4 NICs, vMotion and vSAN vmkernel port groups use VdsName-sw2; vSAN Witness uses VdsName-sw1. For 2 NICs all vmkernel port groups use this VDS name.
     #>
     [CmdletBinding()]
     Param (
@@ -16003,9 +17033,11 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         Write-LogMessage -Type DEBUG -Message "Add-VmkernelInterfacesFromNetworkingConfig: networkingVmKernelInterfaces has fewer than 2 entries (vMotion and vSAN required); skipping."
         return
     }
-    $targetVdsName = if ($NumUplinks -eq 4) { "$VdsName-sw2" } else { $VdsName }
+    $vmotionVsanVdsName = Get-VmkernelTrafficVdsNameForLayout -BaseVdsName $VdsName -NumUplinks $NumUplinks -TrafficRole "VmotionVsan"
+    $witnessVmkernelVdsName = Get-VmkernelTrafficVdsNameForLayout -BaseVdsName $VdsName -NumUplinks $NumUplinks -TrafficRole "Witness"
     $edgeSuffix = ($VdsName -replace '^VDS-', '') -replace '-sw[12]$', ''
-    $vmkernelPortGroupSpecs = @()
+    $vmkernelPortGroupSpecsVmotionVsan = @()
+    $vmkernelPortGroupSpecsWitness = @()
     foreach ($vmk in $NetworkingVmKernelInterfaces) {
         $serviceName = if ($vmk.service) { [string]$vmk.service.Trim() } else { "" }
         if ([String]::IsNullOrWhiteSpace($serviceName)) { continue }
@@ -16019,21 +17051,50 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
                 if ([int]::TryParse([string]$vmk.vlanId, [ref]$parsed)) { $vlanId = $parsed }
             }
         }
-        $vmkernelPortGroupSpecs += @{ Name = $pgName; VlanId = $vlanId }
+        $specEntry = @{ Name = $pgName; VlanId = $vlanId }
+        if ($serviceName -eq "vSAN Witness") {
+            $vmkernelPortGroupSpecsWitness += $specEntry
+        } else {
+            $vmkernelPortGroupSpecsVmotionVsan += $specEntry
+        }
     }
-    if ($vmkernelPortGroupSpecs.Count -eq 0) {
+    if (($vmkernelPortGroupSpecsVmotionVsan.Count -eq 0) -and ($vmkernelPortGroupSpecsWitness.Count -eq 0)) {
         Write-LogMessage -Type DEBUG -Message "Add-VmkernelInterfacesFromNetworkingConfig: no valid port group specs; skipping."
         return
     }
-    $result = New-VDSPortGroups -PortGroups $vmkernelPortGroupSpecs -VdsName $targetVdsName
-    if ($result -and -not $result.Success) {
-        Write-LogMessage -Type ERROR -Message "Add-VmkernelInterfacesFromNetworkingConfig: failed to create vmkernel port groups on VDS `"$targetVdsName`"."
-        throw "Deployment failed. Could not create vMotion/vSAN/vSAN Witness port groups. Check logs for details."
+    if ($vmkernelPortGroupSpecsVmotionVsan.Count -gt 0) {
+        $vmotionVsanPgResult = New-VDSPortGroups -PortGroups $vmkernelPortGroupSpecsVmotionVsan -VdsName $vmotionVsanVdsName
+        if ($vmotionVsanPgResult -and -not $vmotionVsanPgResult.Success) {
+            Write-LogMessage -Type ERROR -Message "Add-VmkernelInterfacesFromNetworkingConfig: failed to create vMotion/vSAN vmkernel port groups on VDS `"$vmotionVsanVdsName`"."
+            throw "Deployment failed. Could not create vMotion/vSAN port groups. Check logs for details."
+        }
     }
-    $vdsObject = Get-VDSwitch -Name $targetVdsName -Server $Server -ErrorAction SilentlyContinue
-    if (-not $vdsObject) {
-        Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: VDS `"$targetVdsName`" not found; skipping VMkernel creation."
+    if ($vmkernelPortGroupSpecsWitness.Count -gt 0) {
+        if ($NumUplinks -eq 4) {
+            Write-LogMessage -Type DEBUG -Message "Add-VmkernelInterfacesFromNetworkingConfig: vSAN Witness vmkernel port group(s) are created on the first VDS (`"$witnessVmkernelVdsName`") for four-uplink layouts."
+        }
+        $witnessPgResult = New-VDSPortGroups -PortGroups $vmkernelPortGroupSpecsWitness -VdsName $witnessVmkernelVdsName
+        if ($witnessPgResult -and -not $witnessPgResult.Success) {
+            Write-LogMessage -Type ERROR -Message "Add-VmkernelInterfacesFromNetworkingConfig: failed to create vSAN Witness vmkernel port groups on VDS `"$witnessVmkernelVdsName`"."
+            throw "Deployment failed. Could not create vSAN Witness port groups. Check logs for details."
+        }
+    }
+    $vdsObjectVmotionVsan = Get-VDSwitch -Name $vmotionVsanVdsName -Server $Server -ErrorAction SilentlyContinue
+    if (-not $vdsObjectVmotionVsan) {
+        Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: VDS `"$vmotionVsanVdsName`" not found; skipping VMkernel creation."
         return
+    }
+    $vdsObjectWitness = $null
+    if ($vmkernelPortGroupSpecsWitness.Count -gt 0) {
+        if ($witnessVmkernelVdsName -eq $vmotionVsanVdsName) {
+            $vdsObjectWitness = $vdsObjectVmotionVsan
+        } else {
+            $vdsObjectWitness = Get-VDSwitch -Name $witnessVmkernelVdsName -Server $Server -ErrorAction SilentlyContinue
+        }
+        if (-not $vdsObjectWitness) {
+            Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: VDS `"$witnessVmkernelVdsName`" not found; skipping VMkernel creation."
+            return
+        }
     }
     $clusterObject = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction SilentlyContinue
     if (-not $clusterObject) {
@@ -16055,9 +17116,10 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         $pgName = ($serviceName.ToLower().Replace(" ", "")) + "-" + $edgeSuffix
         $ipList = @($vmk.ipList)
         $netmask = if ($vmk.netmask) { [string]$vmk.netmask.Trim() } else { "255.255.255.0" }
-        $dpg = Get-VDPortgroup -Name $pgName -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+        $vdsObjectForService = if ($serviceName -eq "vSAN Witness") { $vdsObjectWitness } else { $vdsObjectVmotionVsan }
+        $dpg = Get-VDPortgroup -Name $pgName -VDSwitch $vdsObjectForService -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
         if (-not $dpg) {
-            Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: port group `"$pgName`" not found on VDS; skipping VMkernel creation for service `"$serviceName`"."
+            Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: port group `"$pgName`" not found on VDS `"$($vdsObjectForService.Name)`"; skipping VMkernel creation for service `"$serviceName`"."
             continue
         }
         for ($hostIndex = 0; $hostIndex -lt $hostsOrdered.Count; $hostIndex++) {
@@ -16070,6 +17132,25 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
             $hostName = $vmhost.Name
             $existingVmk = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -PortGroup $dpg -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
             if ($existingVmk) {
+                if ($serviceName -eq "vSAN Witness") {
+                    $gwRawExisting = if ($vmk.gateway) { [string]$vmk.gateway.Trim() } else { "" }
+                    if (-not [String]::IsNullOrWhiteSpace($gwRawExisting)) {
+                        $exIp = $null
+                        $exMask = $null
+                        if ($existingVmk | Get-Member -Name IP -MemberType Properties -ErrorAction SilentlyContinue) {
+                            $exIp = [string]$existingVmk.IP
+                        }
+                        if ($existingVmk | Get-Member -Name SubnetMask -MemberType Properties -ErrorAction SilentlyContinue) {
+                            $exMask = [string]$existingVmk.SubnetMask
+                        }
+                        if ($exIp -and $exMask) {
+                            Set-VmkernelIpv4StaticGatewayViaEsxcli -GatewayAddress $gwRawExisting -Ipv4Address $exIp -Server $Server -SubnetMask $exMask -VMHost $vmhost -VmkernelName $existingVmk.Name
+                        }
+                        else {
+                            Write-LogMessage -Type WARNING -Message "Add-VmkernelInterfacesFromNetworkingConfig: witness gateway is set in JSON but IP/SubnetMask could not be read from existing VMkernel `"$($existingVmk.Name)`" on `"$hostName`"; set the default gateway on that VMkernel manually if witness traffic requires it."
+                        }
+                    }
+                }
                 Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" already has a VMkernel on port group `"$pgName`"; skipping create for service `"$serviceName`"."
                 continue
             }
@@ -16078,7 +17159,7 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
                 PortGroup             = $pgName
                 IP                    = $ip
                 SubnetMask            = $netmask
-                VirtualSwitch         = $vdsObject
+                VirtualSwitch         = $vdsObjectForService
                 Confirm               = $false
                 ErrorAction           = 'Stop'
             }
@@ -16100,7 +17181,7 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
                             PortGroup      = $pgName
                             IP             = $ip
                             SubnetMask     = $netmask
-                            VirtualSwitch  = $vdsObject
+                            VirtualSwitch  = $vdsObjectForService
                             Confirm        = $false
                             ErrorAction    = 'Stop'
                         }
@@ -16126,6 +17207,12 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
                     } catch {
                         Write-LogMessage -Type WARNING -Message "Could not set MTU $mtuForThisVmk on VMkernel `"$($newVmk.Name)`" on host `"$hostName`": $($_.Exception.Message). vSAN/vMotion health checks may report MTU or connectivity failures if MTU is inconsistent."
                     }
+                    if ($serviceName -eq "vSAN Witness") {
+                        $gwRawNew = if ($vmk.gateway) { [string]$vmk.gateway.Trim() } else { "" }
+                        if (-not [String]::IsNullOrWhiteSpace($gwRawNew)) {
+                            Set-VmkernelIpv4StaticGatewayViaEsxcli -GatewayAddress $gwRawNew -Ipv4Address $ip -Server $Server -SubnetMask $netmask -VMHost $vmhost -VmkernelName $newVmk.Name
+                        }
+                    }
                 }
                 Write-LogMessage -Type INFO -Message "Created VMkernel for `"$serviceName`" on host `"$hostName`" (port group `"$pgName`", IP $ip, MTU $(if ($serviceName -eq 'vSAN Witness') { 1500 } else { $VmkernelMtu }))."
             } catch {
@@ -16135,7 +17222,6 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         }
     }
 }
-
 Function Test-PhysicalNicConnected {
     <#
         .SYNOPSIS
@@ -16302,14 +17388,14 @@ Function Set-VirtualDistributedSwitch {
         • Creates distributed port groups with 128 static ports and specified VLAN configuration
         • Assigns physical adapters to VDS uplinks in the order specified in nicList
         • Provides warning messages for existing resources rather than errors
-        • Terminates script execution (exit 1) if critical operations fail or duplicate port groups found
+        • Throws a terminating error if critical operations fail or duplicate port groups found
 
         Network Configuration:
         • Port groups are created with static port binding for predictable VM network assignment
         • VLAN configuration is applied based on the VlanId property in port group objects
         • Physical adapters are assigned to uplinks to provide external network connectivity
         Error Handling:
-        • Main workflow function: Uses 'exit 1' to terminate script on critical failures
+        • Main workflow function: Throws a terminating error on critical failures
         • Calls helper functions that return structured error objects via Write-ErrorAndReturn
         • Checks $result.Success from helper functions and exits on failure
         • Comprehensive exception handling for authorization, timeout, and general errors
@@ -16424,9 +17510,11 @@ Function Set-VirtualDistributedSwitch {
                     throw "Deployment failed. Check logs for details."
                 }
             }
+            Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$VdsName`" for $($hosts.Count) host(s)... "
             foreach ($vmHost in $hosts) {
                 Invoke-MigrateHostManagementToVds -VMHost $vmHost -VdsName $VdsName -NicList $NicList -ManagementPortGroupName $managementPortGroupName
             }
+            Write-LogMessage -Type INFO -CompletePending -Message "Done"
             $result = New-VDSPortGroups -PortGroups $PortGroups -VdsName $VdsName
             if ($result -and -not $result.Success) {
                 throw "Deployment failed. Check logs for details."
@@ -16445,9 +17533,11 @@ Function Set-VirtualDistributedSwitch {
                 if ($result -and -not $result.Success) { throw "Deployment failed. Check logs for details." }
             }
             $nicListFirstTwo = @($NicList | Select-Object -First 2)
+            Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$vdsNameSw1`" for $($hosts.Count) host(s)... "
             foreach ($vmHost in $hosts) {
                 Invoke-MigrateHostManagementToVds -VMHost $vmHost -VdsName $vdsNameSw1 -NicList $nicListFirstTwo -ManagementPortGroupName $managementPortGroupName
             }
+            Write-LogMessage -Type INFO -CompletePending -Message "Done"
             $nicListLastTwo = @($NicList | Select-Object -Skip 2 -First 2)
             foreach ($vmHost in $hosts) {
                 $result = Add-PhysicalAdaptersToVDS -Hostname $vmHost -NicList $nicListLastTwo -VdsName $vdsNameSw2 -VdsObject $vdsObjectSw2
@@ -16569,7 +17659,7 @@ Function Set-StoragePolicy {
             $policyWithTag = Get-SpbmStoragePolicy -Name $PolicyName -Tag $tagObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
 
             if ($policyWithTag) {
-                Write-LogMessage -Type INFO -Message "Storage policy `"$PolicyName`" already contains tag `"$TagName`" from catalog `"$TagCatalog`". Skipping tag add."
+                Write-LogMessage -Type DEBUG -Message "Storage policy `"$PolicyName`" already contains tag `"$TagName`" from catalog `"$TagCatalog`". Skipping tag add."
                 return
             }
 
@@ -17043,7 +18133,7 @@ Function Set-VCFContextCreate {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContextName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Endpoint,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $false)] [String]$Namespace,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$RetryDelaySeconds = 1,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SsoUsername
@@ -17074,13 +18164,15 @@ Function Set-VCFContextCreate {
 
         # Verify the context is actually deleted by checking vcf context list.
         Start-Sleep -Seconds $RetryDelaySeconds
-        $tempPath = [System.IO.Path]::GetTempPath()
-        $temporaryDataFilePath = Join-Path $tempPath "vcfContextListDeleteCheck.json"
+        $temporaryDataFilePath = [System.IO.Path]::GetTempFileName()
         $contextListOutput = & $Script:VcfCmd context list -o json 2>&1
         if ($LASTEXITCODE -eq 0 -and $contextListOutput) {
-            $contextListOutput | Out-File -FilePath $temporaryDataFilePath
-            $contextListJson = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
-            Remove-Item -Path $temporaryDataFilePath -ErrorAction SilentlyContinue
+            try {
+                $contextListOutput | Out-File -FilePath $temporaryDataFilePath
+                $contextListJson = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
+            } finally {
+                Remove-Item -Path $temporaryDataFilePath -ErrorAction SilentlyContinue
+            }
 
             $existingContext = $contextListJson | Where-Object { $_.name -eq $ContextName } | Select-Object -First 1
             if ($existingContext) {
@@ -17141,14 +18233,16 @@ Function Set-VCFContextCreate {
 
         # Step 3: Verify context was created.
         Write-LogMessage -Type DEBUG -Message "Verifying VCF context `"$ContextName`" was created..."
-        $tempPath = [System.IO.Path]::GetTempPath()
-        $temporaryDataFilePath = Join-Path $tempPath "temporaryData.json"
+        $temporaryDataFilePath = [System.IO.Path]::GetTempFileName()
         $listOutput = & $Script:VcfCmd context list -o json 2>&1
 
         if ($LASTEXITCODE -eq 0) {
-            $listOutput | Out-File -FilePath $temporaryDataFilePath
-            $jsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
-            Remove-Item -Path $temporaryDataFilePath -ErrorAction SilentlyContinue
+            try {
+                $listOutput | Out-File -FilePath $temporaryDataFilePath
+                $jsonObject = Get-Content -Path $temporaryDataFilePath | ConvertFrom-Json
+            } finally {
+                Remove-Item -Path $temporaryDataFilePath -ErrorAction SilentlyContinue
+            }
 
             $contextFound = $false
             foreach ($context in $jsonObject) {
@@ -17193,7 +18287,7 @@ Function Set-VCFContextCreate {
 
         if ($contextUseExitCode -ne 0 -and -not [String]::IsNullOrWhiteSpace($Namespace)) {
             $contextUseTarget = $ContextName
-            Write-LogMessage -Type INFO -Message "Namespace-scoped context switch failed. Trying base context `"$contextUseTarget`"..."
+            Write-LogMessage -Type DEBUG -Message "Namespace-scoped context switch failed. Trying base context `"$contextUseTarget`"..."
             if ($InsecureTls) {
                 $contextUseOutput = & $Script:VcfCmd context use $contextUseTarget --insecure-skip-tls-verify 2>&1
             } else {
@@ -17716,7 +18810,7 @@ Function Wait-ArgoCDPodsReady {
         # Log ready pods only once.
         foreach ($pod in $podStatus.ReadyPodObjects) {
             if ($pod.metadata.name -notin $loggedReadyPods) {
-                Write-LogMessage -Type INFO -Message "ArgoCD pod `"$($pod.metadata.name)`" is now in status $($pod.status.phase)."
+                Write-LogMessage -Type DEBUG -Message "ArgoCD pod `"$($pod.metadata.name)`" is now in status $($pod.status.phase)."
                 $loggedReadyPods += $pod.metadata.name
             }
         }
@@ -17765,7 +18859,7 @@ Function Update-YamlNamespace {
         The new namespace value to set in the YAML file.
 
         .EXAMPLE
-        $tempYaml = Update-YamlNamespace -YamlFilePath "C:\config\argocd-deployment.yml" -NewNamespace "argocd-c462"
+        $tempYaml = Update-YamlNamespace -YamlFilePath "./config/argocd-deployment.yml" -NewNamespace "argocd-c462"
 
         Updates the namespace in the YAML file and returns the path to the temporary file.
 
@@ -17833,6 +18927,7 @@ Function Update-YamlNamespace {
         if (-not ($updatedContent -match '(?m)^spec:')) {
             Write-LogMessage -Type ERROR -Message "CRITICAL: spec section is MISSING from updated YAML content! The ArgoCD operator requires spec.version to process the Custom Resource."
             Write-LogMessage -Type ERROR -Message "This will cause the operator to not process the Custom Resource and no pods will be created."
+            throw "Deployment failed. spec section was removed during namespace replacement in YAML file `"$YamlFilePath`". Check logs for details."
         }
 
         # Write the updated content to the temporary file.
@@ -17910,7 +19005,6 @@ Function Get-KubectlNamespaceNamesMatchingPattern {
         return [PSCustomObject]@{ KubectlSucceeded = $false; Names = [string[]]@() }
     }
 }
-
 Function Get-ArgoCDOperatorServiceNamespace {
 
     <#
@@ -17972,7 +19066,6 @@ Function Get-ArgoCDOperatorServiceNamespace {
 
     return $null
 }
-
 Function Add-ArgoCDInstance {
 
     <#
@@ -18052,7 +19145,7 @@ Function Add-ArgoCDInstance {
         - WebhookRetryTimeoutSeconds: Timeout for webhook re-check before retrying YAML apply after webhook timeout, in seconds (default: 60)
 
         .EXAMPLE
-        Add-ArgoCDInstance -ArgoCdNamespace "argocd-system" -ArgoCdDeploymentYamlPath "C:\configs\argocd-deployment.yaml" -ContextName "prod-context" -ClusterId "domain-c462" -Service "argocd-service.vsphere.vmware.com"
+        Add-ArgoCDInstance -ArgoCdNamespace "argocd-system" -ArgoCdDeploymentYamlPath "./configs/argocd-deployment.yaml" -ContextName "prod-context" -ClusterId "domain-c462" -Service "argocd-service.vsphere.vmware.com"
 
         Deploys an ArgoCD instance to the "argocd-system" namespace using secure TLS verification.
         The function writes the YAML content and applies it using kubectl, then verifies the deployment.
@@ -18138,7 +19231,7 @@ Function Add-ArgoCDInstance {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ArgoCdNamespace,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContextName,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Service,
         [Parameter(Mandatory = $false)] [Hashtable]$TimeoutConfig
     )
@@ -18246,7 +19339,7 @@ Function Add-ArgoCDInstance {
         $tempYamlPath = Update-YamlNamespace -YamlFilePath $ArgoCdDeploymentYamlPath -NewNamespace $ArgoCdNamespace
 
         try {
-            Write-LogMessage -Type INFO -Message "Applying temporary ArgoCD deployment YAML file to the namespace `"$ArgoCdNamespace`"..."
+            Write-LogMessage -Type DEBUG -Message "Applying temporary ArgoCD deployment YAML file to the namespace `"$ArgoCdNamespace`"..."
             $applyErrorOutput = $null
             $applySuccessOutput = $null
             & $Script:KubectlCmd apply -f $tempYamlPath 2>&1 | Tee-Object -Variable applyOutput | Out-Null
@@ -18257,7 +19350,7 @@ Function Add-ArgoCDInstance {
                 $applySuccessOutput = $applyOutput
                 $successMessage = ($applySuccessOutput | Where-Object { $_ -is [string] }) -join " "
                 $logSuffix = if ([String]::IsNullOrWhiteSpace($successMessage)) { "" } else { " Output: $successMessage" }
-                Write-LogMessage -Type INFO -Message "Successfully applied ArgoCD deployment YAML.$logSuffix"
+                Write-LogMessage -Type DEBUG -Message "Successfully applied ArgoCD deployment YAML to namespace `"$ArgoCdNamespace`".$logSuffix"
 
                 # Verify the resource was created and has required spec section.
                 try {
@@ -18308,7 +19401,7 @@ Function Add-ArgoCDInstance {
                     $retryErrorMessage = ($retryApplyOutput | Where-Object { $_ -is [System.Management.Automation.ErrorRecord] -or ($_ -is [string]) }) -join " "
                     return Write-ErrorAndReturn -ErrorMessage "Failed to apply ArgoCD deployment YAML file after webhook retry: $retryErrorMessage" -ErrorCode "ERR_KUBECTL_APPLY"
                 }
-                Write-LogMessage -Type INFO -Message "Successfully applied ArgoCD deployment YAML after webhook retry."
+                Write-LogMessage -Type DEBUG -Message "Successfully applied ArgoCD deployment YAML to namespace `"$ArgoCdNamespace`" after webhook retry."
             }
         } finally {
             # Clean up temporary YAML file.
@@ -18350,7 +19443,7 @@ Function Add-ArgoCDInstance {
         }
 
         # Wait for kubectl authentication with retry logic.
-        Write-LogMessage -Type INFO -Message "Verifying kubectl authentication for namespace `"$ArgoCdNamespace`" (timeout: $authTimeoutSeconds seconds)..."
+        Write-LogMessage -Type DEBUG -Message "Verifying kubectl authentication for namespace `"$ArgoCdNamespace`" (timeout: $authTimeoutSeconds seconds)..."
 
         $elapsedTime = 0
         $authSuccess = $false
@@ -18364,7 +19457,7 @@ Function Add-ArgoCDInstance {
                 if ($authExitCode -eq 0 -and $canGetPods -eq "yes") {
                     # Authentication successful.
                     $authSuccess = $true
-                    Write-LogMessage -Type INFO -Message "kubectl authentication verified for namespace `"$ArgoCdNamespace`" after $elapsedTime seconds"
+                    Write-LogMessage -Type DEBUG -Message "kubectl authentication verified for namespace `"$ArgoCdNamespace`" after $elapsedTime seconds"
                     break
                 }
 
@@ -18411,7 +19504,7 @@ Function Add-ArgoCDInstance {
         # Wait for all ArgoCD pods to be ready.
         Wait-ArgoCDPodsReady -Namespace $ArgoCdNamespace -CheckInterval $podReadyCheckInterval -TimeoutSeconds $podReadyTimeoutSeconds
 
-        Write-LogMessage -Type INFO -Message "ArgoCD namespace `"$vksNs`" is now available with all pods ready."
+        Write-LogMessage -Type DEBUG -Message "ArgoCD namespace `"$vksNs`" is now available with all pods ready."
 
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to add ArgoCD instance: $_"
@@ -18572,8 +19665,14 @@ Function Show-ArgoCDInstanceDetails {
     }
 
     # Decode initial admin password from Base64 encoded string.
-    $decodedPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encodedPassword))
-    if ($null -eq $decodedPassword) {
+    $decodedPassword = $null
+    try {
+        $decodedPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encodedPassword))
+    } catch {
+        Write-LogMessage -Type ERROR -Message "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`": $($_.Exception.Message)."
+        throw "Deployment failed. Check logs for details."
+    }
+    if ([String]::IsNullOrWhiteSpace($decodedPassword)) {
         Write-LogMessage -Type ERROR -Message "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`"."
         throw "Deployment failed. Check logs for details."
     }
@@ -18610,6 +19709,7 @@ Function Show-HarborInstanceDetails {
         - Logs the Harbor URL (https://<lb-ip>), username ("admin"), and resolved admin password
           (screen only; never written to the log file).
         - Advises the user to create a DNS record pointing harborConfiguration.hostname to the LB IP.
+        When LabGeneratedSelfSignedTls is set, notes that TLS uses a lab-generated self-signed certificate.
         Best-effort: logs warnings rather than throwing on kubectl or namespace-discovery failures.
 
         .PARAMETER ClusterName
@@ -18623,6 +19723,9 @@ Function Show-HarborInstanceDetails {
 
         .PARAMETER InsecureTls
         When set, passes --insecure-skip-tls-verify when re-establishing VCF context.
+
+        .PARAMETER LabGeneratedSelfSignedTls
+        When set, Harbor TLS was generated in lab mode (common.labenvironment true with tlsCrt/tlsKey omitted).
 
         .PARAMETER RetryDelaySeconds
         Seconds to wait before retrying kubectl after a context fix. Default is 2.
@@ -18648,6 +19751,7 @@ Function Show-HarborInstanceDetails {
         [Parameter(Mandatory = $false)] [String]$ContextName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCustomObject]$HarborConfig,
         [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$LabGeneratedSelfSignedTls,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$RetryDelaySeconds = 2,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
         [Parameter(Mandatory = $false)] [String]$YamlFilePath
@@ -18696,6 +19800,9 @@ Function Show-HarborInstanceDetails {
         Write-LogMessage -Type INFO -ForceToScreen -Message "  Namespace: <unknown>   (run: kubectl get namespace | Select-String svc-harbor)"
         Write-LogMessage -Type INFO -ForceToScreen -Message "  URL      : https://<load-balancer-ip>   (find IP: kubectl get svc -n <svc-harbor-*-namespace>)"
         Write-LogMessage -Type INFO -ForceToScreen -Message "DNS: Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
+        if ($LabGeneratedSelfSignedTls.IsPresent) {
+            Write-LogMessage -Type INFO -ForceToScreen -Message "  TLS      : Self-signed certificate (lab mode: common.labenvironment true; tlsCrt/tlsKey were omitted). Browsers and clients will warn until you trust the certificate or replace TLS with your own PEM files."
+        }
         Remove-Variable -Name adminPassword -Force -ErrorAction SilentlyContinue
         return
     }
@@ -18762,6 +19869,9 @@ Function Show-HarborInstanceDetails {
         Write-LogMessage -Type INFO -ForceToScreen -Message "  URL      : https://<load-balancer-ip>   (find IP: kubectl get svc -n $harborNamespace)"
         Write-LogMessage -Type INFO -ForceToScreen -Message "DNS: Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
     }
+    if ($LabGeneratedSelfSignedTls.IsPresent) {
+        Write-LogMessage -Type INFO -ForceToScreen -Message "  TLS      : Self-signed certificate (lab mode: common.labenvironment true; tlsCrt/tlsKey were omitted). Browsers and clients will warn until you trust the certificate or replace TLS with your own PEM files."
+    }
     Write-Output "$($PSStyle.Foreground.BrightYellow)"---------------------------------------"$($PSStyle.Reset)"
 
 
@@ -18769,7 +19879,6 @@ Function Show-HarborInstanceDetails {
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
 }
-
 Function Get-Base64FromYml {
 
     <#
@@ -18790,7 +19899,7 @@ Function Get-Base64FromYml {
         and be readable. This parameter is mandatory and cannot be null or empty.
 
         .EXAMPLE
-        Get-Base64FromYml -Path "C:\configs\argocd-service.yml"
+        Get-Base64FromYml -Path "./configs/argocd-service.yml"
         Converts the ArgoCD service YAML file to Base64 encoded string.
 
         .EXAMPLE
@@ -18817,10 +19926,19 @@ Function Get-Base64FromYml {
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-Base64FromYml function..."
 
-    $raw = Get-Content -Path $Path -Raw
-    $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($raw))
+    try {
+        if (-not (Test-Path -Path $Path)) {
+            throw "YAML file not found: $Path"
+        }
 
-    return $base64
+        $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
+        $base64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($raw))
+
+        return $base64
+    } catch {
+        Write-LogMessage -Type ERROR -Message "Get-Base64FromYml: Failed to read or encode YAML file `"$Path`": $($_.Exception.Message)."
+        throw "Deployment failed. Check logs for details."
+    }
 }
 Function Set-ArgoCDService {
 
@@ -19163,6 +20281,9 @@ Function Install-HarborSupervisorService {
         .PARAMETER ClusterId
         The vCenter cluster MoRef (e.g. domain-c462) used to construct the service namespace for log messages.
 
+        .PARAMETER ClusterName
+        The vSphere cluster display name for Kubernetes diagnostic logging.
+
         .PARAMETER Service
         The Harbor supervisor service identifier extracted from the harbor-service YAML
         (e.g. "harbor-service.vsphere.vmware.com").
@@ -19183,7 +20304,7 @@ Function Install-HarborSupervisorService {
 
         .EXAMPLE
         $yamlContent = Get-Content -Path $harborYamlPath -Raw -Encoding UTF8
-        Install-HarborSupervisorService -ClusterId $clusterId -SupervisorId $supervisorId -Service $harborServiceName -Version $harborServiceVersion -YamlServiceConfig $yamlContent
+        Install-HarborSupervisorService -ClusterId $clusterId -ClusterName $clusterName -SupervisorId $supervisorId -Service $harborServiceName -Version $harborServiceVersion -YamlServiceConfig $yamlContent
 
         .OUTPUTS
         None. Throws on failure.
@@ -19199,6 +20320,7 @@ Function Install-HarborSupervisorService {
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Service,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime = 600,
@@ -19206,7 +20328,7 @@ Function Install-HarborSupervisorService {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$YamlServiceConfig
     )
 
-    Write-LogMessage -Type DEBUG -Message "Entered Install-HarborSupervisorService: supervisor=`"$SupervisorId`", service=`"$Service`", version=`"$Version`"."
+    Write-LogMessage -Type DEBUG -Message "Entered Install-HarborSupervisorService: cluster=`"$ClusterName`", supervisor=`"$SupervisorId`", service=`"$Service`", version=`"$Version`"."
     # Strip the last DNS label suffix (e.g. ".tanzu.vmware.com" or ".vsphere.vmware.com") to produce
     # a short slug for the diagnostic namespace hint shown to the user when the service is stuck.
     $serviceSlug = $Service -replace '\.[^.]+\.[^.]+\.[^.]+$', ''
@@ -19325,12 +20447,53 @@ Function Install-HarborSupervisorService {
                     $harborDiagDiscovery = Get-KubectlNamespaceNamesMatchingPattern -DebugLogPrefix "Install-HarborSupervisorService" -NameLike "svc-harbor*"
                     $harborNamespaces = if ($harborDiagDiscovery.KubectlSucceeded) { @($harborDiagDiscovery.Names) } else { @() }
                     $diagnosticNamespace = if ($harborNamespaces.Count -gt 0) { $harborNamespaces[0] } else { $serviceNamespace }
+                    $namespacesToCheck = if ($harborNamespaces.Count -gt 0) { $harborNamespaces } else { @($serviceNamespace) }
+
+                    # Gather Kubernetes events from all Harbor namespaces now, before diagnosis.
+                    # Only retain Warning-type events — Normal events are high-volume and not actionable.
+                    $harborAllEventsText = ""
+                    $harborWarningEventsText = ""
+                    foreach ($ns in $namespacesToCheck) {
+                        try {
+                            $nsEventsOutput = & $Script:KubectlCmd get events -n $ns --sort-by=".lastTimestamp" 2>&1
+                            if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($nsEventsOutput)) {
+                                $nsEventsStr = ($nsEventsOutput | Out-String).Trim()
+                                $harborAllEventsText += $nsEventsStr + "`n"
+                                # Keep the header line plus all Warning-type event lines for concise display.
+                                $nsLines = $nsEventsStr -split "`n"
+                                $headerLine = $nsLines | Select-Object -First 1
+                                $warnLines = $nsLines | Where-Object { $_ -match "\s+Warning\s+" }
+                                if ($warnLines.Count -gt 0) {
+                                    $harborWarningEventsText += $headerLine + "`n" + ($warnLines -join "`n") + "`n"
+                                }
+                            }
+                        } catch {
+                            Write-LogMessage -Type DEBUG -Message "Could not pre-fetch events from `"$ns`": $($_.Exception.Message)"
+                        }
+                    }
+
+                    # IP exhaustion check runs against events regardless of what the vCenter API reported.
+                    # The vCenter service status may say "OCI Registry" while the real cause is IP exhaustion.
+                    $ipExhaustionDetected = $harborAllEventsText -match "exhausted all IP addresses in requested IPPools|has 0 free ips which is less than"
+                    if ($ipExhaustionDetected) {
+                        $svcApiReport = if ([String]::IsNullOrWhiteSpace($svcErrorDetail)) { "no detail" } else { "`"$svcErrorDetail`"" }
+                        Write-LogMessage -Type ERROR -Message "ROOT CAUSE — workload network IP pool exhausted: pods could not get IP addresses. The vCenter service API reported $svcApiReport but the underlying cause is visible in Kubernetes events."
+                        Write-LogMessage -Type ERROR -Message "DIAGNOSIS: The supervisor workload network IP pool has no free addresses. Harbor pods were scheduled but their network interfaces could not be realized."
+                        Write-LogMessage -Type ERROR -Message "SOLUTION: Increase the pool size in supervisor.json: raise `"siteSpec[N].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount`" to allocate more addresses, then roll back (Y) and redeploy. As a guide, Harbor needs one IP per pod (~9 pods); add at least 16 to the current count to leave headroom."
+                        $ipExhaustionLines = $harborAllEventsText -split "`n" | Where-Object { $_ -match "exhausted|has 0 free ips|NetworkInterfaceRealizationFailed" }
+                        if ($ipExhaustionLines.Count -gt 0) {
+                            Write-LogMessage -Type ERROR -Message "IP exhaustion events:"
+                            $ipExhaustionLines | Select-Object -Unique | ForEach-Object { Write-LogMessage -Type INFO -Message "  $_" }
+                        }
+                    }
+
                     switch -Regex ($svcErrorDetail) {
                         "OCI Registry|registry" {
-                            Write-LogMessage -Type ERROR -Message "DIAGNOSIS: The OCI Registry component failed to initialize. Possible causes: (A) Stale PVCs from a prior installation hold data encrypted with different secrets — the registry pod cannot read its PVC if registry.secret changed. (B) The new deployment started before namespace `"$diagnosticNamespace`" from a prior rollback had fully terminated, leaving stale endpoint or secret objects. (C) A Harbor data values configuration error (e.g. malformed or missing registry.secret, invalid storageClass, incorrect YAML structure). If the PVCs below show a recent AGE (seconds or a few minutes), they were created by the current install — cause (A) does not apply."
-                            Write-LogMessage -Type ERROR -Message "SOLUTION: (1) Roll back (choose Y) to remove this service. (2) Wait for namespace `"$diagnosticNamespace`" to terminate fully: kubectl get namespace $diagnosticNamespace (must be gone, not Terminating). (3) Confirm all PVCs are deleted: kubectl get pvc -n $diagnosticNamespace (should return 'No resources found'). (4) If PVCs were stale: re-run using the SAME secrets, OR use -CleanUp Harbor first. If PVCs were fresh (new install): check the registry pod logs below for the specific error, then verify registry.secret, storageClass, and vCenter Events on the supervisor."
+                            if (-not $ipExhaustionDetected) {
+                                Write-LogMessage -Type ERROR -Message "DIAGNOSIS: The OCI Registry component failed to initialize. Possible causes: (A) Stale PVCs from a prior installation hold data encrypted with different secrets — the registry pod cannot read its PVC if registry.secret changed. (B) The new deployment started before namespace `"$diagnosticNamespace`" from a prior rollback had fully terminated, leaving stale endpoint or secret objects. (C) A Harbor data values configuration error (e.g. malformed or missing registry.secret, invalid storageClass, incorrect YAML structure). If the PVCs below show a recent AGE (seconds or a few minutes), they were created by the current install — cause (A) does not apply."
+                                Write-LogMessage -Type ERROR -Message "SOLUTION: (1) Roll back (choose Y) to remove this service. (2) Wait for namespace `"$diagnosticNamespace`" to terminate fully: kubectl get namespace $diagnosticNamespace (must be gone, not Terminating). (3) Confirm all PVCs are deleted: kubectl get pvc -n $diagnosticNamespace (should return 'No resources found'). (4) If PVCs were stale: re-run using the SAME secrets, OR use -CleanUp Harbor first. If PVCs were fresh (new install): check the registry pod logs below for the specific error, then verify registry.secret, storageClass, and vCenter Events on the supervisor."
+                            }
                             # Check PVCs in all discovered Harbor namespaces to surface stale state.
-                            $namespacesToCheck = if ($harborNamespaces.Count -gt 0) { $harborNamespaces } else { @($serviceNamespace) }
                             foreach ($ns in $namespacesToCheck) {
                                 try {
                                     $pvcOutput = & $Script:KubectlCmd get pvc -n $ns 2>&1
@@ -19355,9 +20518,7 @@ Function Install-HarborSupervisorService {
                                             Write-LogMessage -Type INFO -Message "  $_"
                                         }
                                     } else {
-                                        # No pods with app=registry found — pod never scheduled or label differs.
-                                        # Show all pods and recent events to diagnose the scheduling failure.
-                                        Write-LogMessage -Type WARNING -Message "No OCI Registry pods found in `"$ns`" (label app=registry). Pod may not have been scheduled. Showing all pods and events:"
+                                        Write-LogMessage -Type WARNING -Message "No OCI Registry pods found in `"$ns`" (label app=registry). Pod may not have been scheduled. Showing all pods:"
                                         try {
                                             $allPodsOutput = & $Script:KubectlCmd get pods -n $ns -o wide 2>&1
                                             if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($allPodsOutput)) {
@@ -19368,19 +20529,13 @@ Function Install-HarborSupervisorService {
                                         } catch {
                                             Write-LogMessage -Type DEBUG -Message "Could not list pods in `"$ns`": $($_.Exception.Message)"
                                         }
-                                        try {
-                                            $eventsOutput = & $Script:KubectlCmd get events -n $ns --sort-by=".lastTimestamp" 2>&1
-                                            if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($eventsOutput)) {
-                                                Write-LogMessage -Type WARNING -Message "Kubernetes events in `"$ns`":"
-                                                ($eventsOutput | Out-String).Trim() -split "`n" | ForEach-Object { Write-LogMessage -Type INFO -Message "  $_" }
-                                                # Detect vSphere HA admission control blocking scheduling.
-                                                if ($eventsOutput -match "FailedScheduling.*(?:Insufficient resources.*vSphere HA|failover level for vSphere|admission control)") {
-                                                    Write-LogMessage -Type ERROR -Message "ROOT CAUSE — vSphere HA admission control: pods are blocked from scheduling because the cluster does not have enough unreserved resources to satisfy the configured HA failover level. This is a resource constraint, not a Harbor configuration error."
-                                                    Write-LogMessage -Type ERROR -Message "SOLUTION (HA admission control): (A) Add ESX hosts to increase cluster capacity. (B) Lower the admission control reservation: vCenter > cluster > Configure > vSphere Availability > Admission Control > reduce Percentage of cluster resources reserved. (C) In lab/dev environments, disable admission control entirely. After resolving capacity, roll back (Y) and redeploy."
-                                                }
+                                        if (-not $ipExhaustionDetected -and -not [String]::IsNullOrWhiteSpace($harborWarningEventsText)) {
+                                            Write-LogMessage -Type WARNING -Message "Warning events in `"$ns`":"
+                                            $harborWarningEventsText -split "`n" | ForEach-Object { Write-LogMessage -Type INFO -Message "  $_" }
+                                            if ($harborAllEventsText -match "FailedScheduling.*(?:Insufficient resources.*vSphere HA|failover level for vSphere|admission control)") {
+                                                Write-LogMessage -Type ERROR -Message "ROOT CAUSE — vSphere HA admission control: pods are blocked from scheduling because the cluster does not have enough unreserved resources to satisfy the configured HA failover level. This is a resource constraint, not a Harbor configuration error."
+                                                Write-LogMessage -Type ERROR -Message "SOLUTION (HA admission control): (A) Add ESX hosts to increase cluster capacity. (B) Lower the admission control reservation: vCenter > cluster > Configure > vSphere Availability > Admission Control > reduce Percentage of cluster resources reserved. (C) In lab/dev environments, disable admission control entirely. After resolving capacity, roll back (Y) and redeploy."
                                             }
-                                        } catch {
-                                            Write-LogMessage -Type DEBUG -Message "Could not list events in `"$ns`": $($_.Exception.Message)"
                                         }
                                         Write-LogMessage -Type WARNING -Message "To check pod logs once a pod starts: kubectl logs -n $ns -l app=registry --previous"
                                     }
@@ -19394,8 +20549,19 @@ Function Install-HarborSupervisorService {
                             Write-LogMessage -Type ERROR -Message "SOLUTION: Roll back (choose Y), then re-run. If this error repeats, in vCenter UI go to Menu > Supervisor Management > Services, delete `"$Service`" entirely, then re-run this script."
                         }
                         default {
-                            Write-LogMessage -Type ERROR -Message "DIAGNOSIS: Harbor service configuration failed. Check vCenter Events for supervisor `"$SupervisorId`" for additional error details. Roll back (choose Y), correct the issue, and re-run."
+                            if (-not $ipExhaustionDetected) {
+                                Write-LogMessage -Type ERROR -Message "DIAGNOSIS: Harbor service configuration failed. Check vCenter Events for supervisor `"$SupervisorId`" for additional error details. Roll back (choose Y), correct the issue, and re-run."
+                                if (-not [String]::IsNullOrWhiteSpace($harborWarningEventsText)) {
+                                    Write-LogMessage -Type WARNING -Message "Warning events from Harbor namespaces:"
+                                    $harborWarningEventsText -split "`n" | ForEach-Object { Write-LogMessage -Type INFO -Message "  $_" }
+                                }
+                            }
                         }
+                    }
+                    try {
+                        Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Harbor supervisor service entered ERROR state" -SupervisorId $SupervisorId
+                    } catch {
+                        Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor ERROR): $($_.Exception.Message)"
                     }
                     throw "Deployment failed. Harbor service entered ERROR state. Check logs."
                 }
@@ -19407,6 +20573,11 @@ Function Install-HarborSupervisorService {
         Write-Progress -Activity $progressActivity -Status "Timeout" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type WARNING -Message "Harbor service `"$Service`" did not reach CONFIGURED status within ${TotalWaitTime}s. Verify in vCenter."
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Harbor supervisor service configuration timed out" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor timeout): $($_.Exception.Message)"
+        }
         throw "Deployment failed. Harbor service configuration timed out. Check logs."
     } catch {
         if ($_.Exception.Message -match "Deployment failed") { throw }
@@ -19414,7 +20585,6 @@ Function Install-HarborSupervisorService {
         throw "Deployment failed. Check logs for details."
     }
 }
-
 Function Test-YamlPropertyConsistency {
 
     <#
@@ -19754,7 +20924,7 @@ Function Get-ArgoCDServiceDetail {
         - Requires the YAML file to contain at least one Package document with spec.refName and spec.version
         - Uses native PowerShell YAML parsing (no external dependencies)
         - Handles both single and multi-document YAML files
-        - Will exit with error code 1 if the required Package document is not found
+        - Throws a terminating error if the required Package document is not found
         - The function specifically looks for Package documents, not PackageMetadata documents
     #>
 
@@ -19854,8 +21024,8 @@ Function Get-ContentLibraryId {
         for operations such as VM template deployment, supervisor cluster configuration, or other
         vSphere operations that reference content libraries by their unique identifiers.
 
-        If the specified content library is not found, the function will exit the script with an
-        error code to prevent subsequent operations from proceeding with invalid library references.
+        If the specified content library is not found, the function throws a terminating error
+        to prevent subsequent operations from proceeding with invalid library references.
 
         .PARAMETER LibraryName
         The name of the content library for which to retrieve the unique identifier.
@@ -19923,7 +21093,6 @@ Function Get-ContentLibraryId {
         throw "Deployment failed. Check logs for details."
     }
 }
-
 Function New-VCenterRestApiSession {
 
     <#
@@ -20075,7 +21244,7 @@ Function New-VCenterRestApiSession {
             }
         }
 
-        Write-LogMessage -Type INFO -Message "  Creating REST API session with vCenter..."
+        Write-LogMessage -Type DEBUG -Message "  Creating REST API session with vCenter..."
 
         # Log target and user for troubleshooting (no password).
         Write-LogMessage -Type DEBUG -Message "Attempting REST API session with vCenter `"$Script:vCenterName`" and user `"$VcenterUser`"."
@@ -20098,7 +21267,7 @@ Function New-VCenterRestApiSession {
         $sessionId = $session.value
         $authHeaders = @{ "vmware-api-session-id" = $sessionId }
 
-        Write-LogMessage -Type INFO -Message "  REST API session created successfully."
+        Write-LogMessage -Type DEBUG -Message "  REST API session created successfully."
 
         # Return success result with session information.
         return [PSCustomObject]@{
@@ -20232,7 +21401,7 @@ Function Find-SupervisorByName {
     Write-LogMessage -Type DEBUG -Message "Entered Find-SupervisorByName function..."
 
     try {
-        Write-LogMessage -Type INFO -Message "  Searching for supervisor `"$SupervisorName`"..."
+        Write-LogMessage -Type DEBUG -Message "  Searching for supervisor `"$SupervisorName`"..."
 
         # Query supervisor summaries from vCenter API.
         $response = Invoke-RestMethod -Method GET `
@@ -20257,7 +21426,7 @@ Function Find-SupervisorByName {
             }
         }
         else {
-            Write-LogMessage -Type INFO -Message "  Supervisor `"$SupervisorName`" not found."
+            Write-LogMessage -Type DEBUG -Message "  Supervisor `"$SupervisorName`" not found."
 
             # Return success but not found (not an error - may not be created yet).
             return [PSCustomObject]@{
@@ -20370,7 +21539,7 @@ Function Wait-SupervisorDiscoverable {
 
     Write-LogMessage -Type DEBUG -Message "Entered Wait-SupervisorDiscoverable function..."
 
-    Write-LogMessage -Type INFO -Message "  Waiting for supervisor `"$SupervisorName`" to become ready (timeout: $TimeoutSeconds seconds)..."
+    Write-LogMessage -Type DEBUG -Message "  Waiting for supervisor `"$SupervisorName`" to become ready (timeout: $TimeoutSeconds seconds)..."
 
     $elapsedTime = 0
     $lastStatus = "UNKNOWN"
@@ -20409,7 +21578,7 @@ Function Wait-SupervisorDiscoverable {
             # Check if supervisor is ready.
             if ($lastStatus -eq "READY") {
                 Write-Progress -Activity "Waiting for Supervisor `"$SupervisorName`"" -Status "Ready" -Completed
-                Write-LogMessage -Type INFO -Message "  Supervisor `"$SupervisorName`" reached READY status after $elapsedTime seconds"
+                Write-LogMessage -Type DEBUG -Message "  Supervisor `"$SupervisorName`" reached READY status after $elapsedTime seconds"
 
                 # Return success.
                 return [PSCustomObject]@{
@@ -20680,7 +21849,7 @@ Function Get-SupervisorId {
         • Waits for supervisor to reach READY status with progress indication (configurable intervals)
         • Configurable maximum wait time for supervisor readiness (default: 1 hour)
         • Returns supervisor ID immediately once supervisor reaches READY status
-        • Terminates script execution (exit 1) if supervisor not found or errors occur
+        • Throws a terminating error if supervisor not found or errors occur
         • Provides detailed error logging for troubleshooting API communication issues
         • Shows simplified status updates during wait period via Write-Progress
 
@@ -20718,8 +21887,8 @@ Function Get-SupervisorId {
 
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=5,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$Silence,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$Silence,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
         [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword,
@@ -20766,7 +21935,7 @@ Function Get-SupervisorId {
         # ========================================================================
         # STEP 2: Create REST API Session.
         # ========================================================================
-        Write-LogMessage -Type INFO -Message "[Step 1/3] Creating REST API session..."
+        Write-LogMessage -Type DEBUG -Message "[Step 1/3] Creating REST API session..."
         Write-LogMessage -Type DEBUG -Message "Calling New-VCenterRestApiSession for vCenter `"$Script:vCenterName`", user `"$VcenterUser`", InsecureTls = $InsecureTls."
 
         $sessionParams = @{
@@ -20793,7 +21962,7 @@ Function Get-SupervisorId {
         # ========================================================================
         # STEP 3: Search for Supervisor and Wait for Ready.
         # ========================================================================
-        Write-LogMessage -Type INFO -Message "[Step 2/3] Searching for supervisor cluster..."
+        Write-LogMessage -Type DEBUG -Message "[Step 2/3] Searching for supervisor cluster..."
 
         $findParams = @{
             SupervisorName = $SupervisorName
@@ -20809,12 +21978,12 @@ Function Get-SupervisorId {
 
         # If supervisor not found, return null (may not be created yet).
         if (-not $findResult.Found) {
-            Write-LogMessage -Type INFO -Message "[Step 3/3] Supervisor instance `"$SupervisorName`" not found. Proceeding to create it."
+            Write-LogMessage -Type DEBUG -Message "[Step 3/3] Supervisor instance `"$SupervisorName`" not found. Proceeding to create it."
             return $null
         }
 
         # Supervisor found - now wait for it to become ready.
-        Write-LogMessage -Type INFO -Message "[Step 3/3] Waiting for supervisor to become ready..."
+        Write-LogMessage -Type INFO -Message "Waiting for supervisor `"$SupervisorName`" to become ready..."
 
         $waitParams = @{
             SupervisorName = $SupervisorName
@@ -20903,10 +22072,10 @@ Function Get-StoragePolicyId {
         .NOTES
         - Requires an active PowerCLI connection to vCenter via the $Script:vCenterName variable
         - Uses the Get-SpbmStoragePolicy cmdlet from VMware PowerCLI
-        - Will terminate script execution (exit 1) if the storage policy is not found or any errors occur
+        - Throws a terminating error if the storage policy is not found or any errors occur
         - The returned ID is typically used for supervisor cluster configuration and VM deployment operations
         - Storage policy names are case-sensitive and must match exactly as they appear in vCenter
-        - This function is commonly used in conjunction with supervisor cluster creation and TKGS configuration
+        - This function is commonly used in conjunction with supervisor cluster creation and supervisor configuration
     #>
 
     Param (
@@ -20959,6 +22128,9 @@ Function Get-OrCreateSupervisor {
         The name of the vSphere cluster. This is used for logging and identification purposes
         when creating a supervisor. The cluster must exist and match the ClusterId.
 
+        .PARAMETER DisableSupervisorNetworkVanityPrefix
+        When set, passes through to Add-Supervisor so WCP API network vanity names match distributed port group labels (legacy behavior).
+
         .PARAMETER InsecureTls
         Optional switch parameter that bypasses SSL certificate validation for vCenter connections.
         When specified, this flag is passed to both Get-SupervisorId and Add-Supervisor functions,
@@ -20973,7 +22145,7 @@ Function Get-OrCreateSupervisor {
         .PARAMETER SupervisorJson
         The JSON configuration file path or content for supervisor creation. This configuration is used
         when creating a new supervisor and must contain all required supervisor specifications including
-        control plane configuration, network settings, and TKGS component specifications.
+        control plane configuration, network settings, and supervisor component specifications.
 
         .PARAMETER SupervisorName
         The name of the supervisor to check for existence or create if it doesn't exist. This name must
@@ -20985,7 +22157,7 @@ Function Get-OrCreateSupervisor {
         text string (decrypted from SecureString).
 
         .PARAMETER EdgeSite
-        Edge site identifier to match against tkgsSiteSpec entries in supervisor JSON.
+        Edge site identifier to match against siteSpec entries in supervisor JSON.
 
         .PARAMETER NetworkSegments
         Array of network segments from infrastructure JSON for gateway mapping.
@@ -21025,8 +22197,9 @@ Function Get-OrCreateSupervisor {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$DisableSupervisorNetworkVanityPrefix,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$NetworkSegments,
         [Parameter(Mandatory = $false)] [Switch]$SingleSite,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
@@ -21043,13 +22216,13 @@ Function Get-OrCreateSupervisor {
     # Check if supervisor already exists, if not create it.
     if ($InsecureTls) {
         if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -insecureTls)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -insecureTls
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -insecureTls -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
         } else {
             $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -silence -insecureTls
         }
     } else {
         if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
         } else {
             $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -silence
         }
@@ -21107,7 +22280,7 @@ Function Add-ArgoCDNamespace {
 
         .DESCRIPTION
         The Add-ArgoCDNamespace function creates a dedicated vSphere Supervisor namespace designed specifically for
-        ArgoCD deployment within a Tanzu Kubernetes Grid Service (TKGS) environment. This function handles the complete
+        ArgoCD deployment within a vSphere Supervisor environment. This function handles the complete
         namespace provisioning lifecycle including resource allocation, storage configuration, and VM service setup.
 
         The function performs the following comprehensive operations:
@@ -21307,8 +22480,7 @@ Function Add-ArgoCDNamespace {
         # Pass VM classes as array (API expects List<string>, not comma-separated string).
         # Build a new array with foreach (no pipeline) to avoid triggering a bug in the VCF cmdlet
         # that can cause '"$_"' to be evaluated when the parameter is bound from a piped array.
-        Write-LogMessage -Type INFO -Message "Configuring VM classes: $($VmClasses -join ', ')"
-        Write-LogMessage -Type DEBUG -Message "VM classes count: $($VmClasses.Count)"
+        Write-LogMessage -Type DEBUG -Message "Configuring VM classes ($($VmClasses.Count)): $($VmClasses -join ', ')"
         $vmClassesArray = [System.Collections.ArrayList]::new()
         foreach ($className in $VmClasses) {
             [void]$vmClassesArray.Add([string]$className)
@@ -21375,8 +22547,7 @@ Function Add-ArgoCDNamespace {
         }
 
         Start-Sleep $NamespaceStabilizationDelaySeconds
-        Write-LogMessage -Type INFO -Message "The ArgoCD namespace `"$ArgoCdNamespace`" was created successfully."
-        Write-LogMessage -Type INFO -Message "VM classes assigned: $($VmClasses -join ', ')"
+        Write-LogMessage -Type INFO -Message "The ArgoCD namespace `"$ArgoCdNamespace`" was created successfully with $($VmClasses.Count) VM classes assigned: $($VmClasses -join ', ')"
     }
     catch {
         $namespaceError = $_.Exception.Message
@@ -21422,6 +22593,9 @@ Function Install-ArgoCDOperator {
         This is used to dynamically construct the service namespace for error messages and diagnostics.
         The cluster ID is obtained from Get-ClusterId.
 
+        .PARAMETER ClusterName
+        The vSphere cluster display name used when logging supervisor Kubernetes diagnostics on failure.
+
         .PARAMETER SupervisorId
         The unique identifier of the vSphere Supervisor cluster where the ArgoCD operator will be installed.
         This should be the supervisor cluster ID obtained from supervisor creation or discovery operations.
@@ -21442,7 +22616,7 @@ Function Install-ArgoCDOperator {
         The version must be compatible with the supervisor cluster version and capabilities.
 
         .EXAMPLE
-        Install-ArgoCDOperator -ClusterId "domain-c462" -SupervisorId "domain-s123" -Service "argocd-service.vsphere.vmware.com" -Version "1.0.0-24815986"
+        Install-ArgoCDOperator -ClusterId "domain-c462" -ClusterName "MyCluster" -SupervisorId "domain-s123" -Service "argocd-service.vsphere.vmware.com" -Version "1.0.0-24815986"
 
         Installs the ArgoCD operator version 1.0.0-24815986 on supervisor cluster "domain-s123" using the
         standard ArgoCD service identifier. The function will monitor the installation progress and report
@@ -21482,7 +22656,7 @@ Function Install-ArgoCDOperator {
         • Implements 300-second (5-minute) timeout for configuration completion
         • Handles existing services with warning messages rather than errors
         • Provides detailed error messages for troubleshooting deployment issues
-        • Terminates script execution (exit 1) on critical failures
+        • Throws a terminating error on critical failures
 
         Configuration States:
         • CONFIGURING: Service is being configured (monitored with progress updates)
@@ -21520,13 +22694,14 @@ Function Install-ArgoCDOperator {
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Service,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime = 600,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Version
     )
 
-    Write-LogMessage -Type DEBUG -Message "Entered Install-ArgoCDOperator function..."
+    Write-LogMessage -Type DEBUG -Message "Entered Install-ArgoCDOperator function for cluster `"$ClusterName`"..."
 
     # Construct the service namespace (format: svc-<service-slug>-<cluster-id>).
     # The service slug is derived from the service name by removing the domain suffix.
@@ -21538,7 +22713,7 @@ Function Install-ArgoCDOperator {
         $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec = Initialize-VcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -SupervisorService $Service -Version $Version
         try {
             Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -Confirm:$false -ErrorAction:Stop
-            Write-LogMessage -Type INFO -Message "The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete."
+            Write-LogMessage -Type DEBUG -Message "The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete."
             Start-Sleep $CheckInterval
         } catch {
             $errMsg = $_.Exception.Message
@@ -21720,6 +22895,31 @@ Function Install-ArgoCDOperator {
                     # Extract clean error message for user-friendly display.
                     $cleanErrorMessage = Get-CleanServiceErrorMessage -ErrorMessage $errorMessages
 
+                    # Pre-fetch kubectl events from the ArgoCD service namespace so every branch can
+                    # pattern-match against them, even when the vCenter API message is empty.
+                    $argoCDEventsText = ""
+                    try {
+                        $argoCDEventsOutput = & $Script:KubectlCmd get events -n $serviceNamespace --sort-by=".lastTimestamp" 2>&1
+                        if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($argoCDEventsOutput)) {
+                            $argoCDEventsText = ($argoCDEventsOutput | Out-String).Trim()
+                        }
+                    } catch {
+                        Write-LogMessage -Type DEBUG -Message "Could not pre-fetch events from `"$serviceNamespace`": $($_.Exception.Message)"
+                    }
+
+                    # IP exhaustion check runs against kubectl events regardless of what the vCenter API reported.
+                    $argoCDIpExhaustionDetected = $argoCDEventsText -match "exhausted all IP addresses in requested IPPools|has 0 free ips which is less than"
+                    if ($argoCDIpExhaustionDetected) {
+                        Write-LogMessage -Type ERROR -Message "ROOT CAUSE — workload network IP pool exhausted: pods could not get IP addresses."
+                        Write-LogMessage -Type ERROR -Message "DIAGNOSIS: The supervisor workload network IP pool has no free addresses. ArgoCD pods were scheduled but their network interfaces could not be realized."
+                        Write-LogMessage -Type ERROR -Message "SOLUTION: Increase the pool size in supervisor.json: raise `"siteSpec[N].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount`" to allocate more addresses, then roll back (Y) and redeploy. Add at least 8-16 to the current count to leave headroom."
+                        $argoCDIpLines = $argoCDEventsText -split "`n" | Where-Object { $_ -match "exhausted|has 0 free ips|NetworkInterfaceRealizationFailed" }
+                        if ($argoCDIpLines.Count -gt 0) {
+                            Write-LogMessage -Type ERROR -Message "IP exhaustion events:"
+                            $argoCDIpLines | Select-Object -Unique | ForEach-Object { Write-LogMessage -Type INFO -Message "  $_" }
+                        }
+                    }
+
                     # Check for specific reconciliation failures that indicate leftover resources.
                     switch -Regex ($errorMessages) {
                         "ReconcileFailed|already exists|AlreadyExists" {
@@ -21803,10 +23003,14 @@ Function Install-ArgoCDOperator {
                 }
             }
         }
+        try {
+            Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "Argo CD operator installation did not complete successfully" -SupervisorId $SupervisorId
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Argo CD operator outer catch): $($_.Exception.Message)"
+        }
         throw "Deployment failed. Check logs for details."
     }
 }
-
 Function Resolve-HarborSecretValue {
 
     <#
@@ -21943,11 +23147,15 @@ Function Resolve-HarborSecretValue {
     }
 
     # Persist in the process environment so subsequent calls resolve without re-prompting.
+    # Security note: storing a plaintext secret in a process environment variable is a known
+    # trade-off. The value is scoped to the current process, cleared when the process exits,
+    # and is accessible to other code running in the same PowerShell session. It is not written
+    # to disk. The caller (New-HarborDataValuesFile) expands it immediately and the YAML it
+    # produces is cleaned up in a finally block.
     [System.Environment]::SetEnvironmentVariable($envVarName, $envValue)
     Write-LogMessage -Type DEBUG -Message "Stored interactive input in environment variable `"$envVarName`" for harborConfiguration.$FieldName."
     return $envValue
 }
-
 Function ConvertTo-YamlLiteralBlock {
 
     <#
@@ -22004,7 +23212,6 @@ Function ConvertTo-YamlLiteralBlock {
     $indentedLines = $lines | ForEach-Object { $contentIndent + $_ }
     return $keyIndent + $KeyName + ": |`n" + ($indentedLines -join "`n") + "`n"
 }
-
 Function Update-HarborYamlContent {
 
     <#
@@ -22194,7 +23401,6 @@ Function Update-HarborYamlContent {
     }
     return $YamlContent
 }
-
 Function New-HarborDataValuesFile {
 
     <#
@@ -22426,7 +23632,21 @@ Function New-HarborDataValuesFile {
             throw "Deployment failed. Generated Harbor YAML is structurally invalid. Check DEBUG logs for the full numbered content."
         }
 
-        Set-Content -Path $tempYamlFile -Value $yamlContent -Encoding UTF8 -NoNewline
+        # Write secrets file with owner-only permissions to prevent other OS users from reading secrets.
+        $yamlBytes = [System.Text.Encoding]::UTF8.GetBytes($yamlContent)
+        $fileStream = [System.IO.File]::Open($tempYamlFile, [System.IO.FileMode]::Create, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        try {
+            $fileStream.Write($yamlBytes, 0, $yamlBytes.Length)
+        } finally {
+            $fileStream.Dispose()
+        }
+        # Restrict file to owner-only on non-Windows platforms (equivalent to chmod 600).
+        if (-not $IsWindows) {
+            & chmod 600 $tempYamlFile
+            if ($LASTEXITCODE -ne 0) {
+                Write-LogMessage -Type WARNING -Message "New-HarborDataValuesFile: chmod 600 failed (exit $LASTEXITCODE) on `"$tempYamlFile`". Harbor secrets file may be readable by other OS users."
+            }
+        }
 
         if (-not (Test-Path -Path $tempYamlFile)) {
             Write-LogMessage -Type ERROR -Message "New-HarborDataValuesFile: Temporary file was not created: `"$tempYamlFile`"."
@@ -22470,7 +23690,6 @@ Function New-HarborDataValuesFile {
         throw "Deployment failed. Check logs for details."
     }
 }
-
 Function Convert-CountToInt {
 
     <#
@@ -22690,7 +23909,7 @@ Function Get-InteractiveInput {
 
     Param (
         [Parameter(Mandatory = $false)] [Switch]$AllowEmpty,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [Switch]$AsSecureString,
+        [Parameter(Mandatory = $false)] [Switch]$AsSecureString,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PromptMessage
     )
 
@@ -22812,7 +24031,7 @@ Function Test-JsonFile {
         All errors are logged using the Write-LogMessage system for consistent error reporting.
 
         .EXAMPLE
-        Test-JsonFile -JsonFilePath "C:\config\settings.json"
+        Test-JsonFile -JsonFilePath "./config/settings.json"
         Returns $true if the file exists and contains valid JSON, $false otherwise.
 
         .EXAMPLE
@@ -22959,7 +24178,7 @@ Function ConvertFrom-JsonSafely {
         contain valid JSON content.
 
         .EXAMPLE
-        $config = ConvertFrom-JsonSafely -JsonFilePath "C:\configs\settings.json"
+        $config = ConvertFrom-JsonSafely -JsonFilePath "./configs/settings.json"
         Loads application settings from a JSON file with error handling.
 
         .NOTES
@@ -22975,7 +24194,7 @@ Function ConvertFrom-JsonSafely {
     Write-LogMessage -Type DEBUG -Message "Entered ConvertFrom-JsonSafely function..."
 
     try {
-        # Read file content, filter out empty lines, and convert from JSON,.
+        # Read file content, filter out empty lines, and convert from JSON.
 
         # Empty-line filtering prevents ConvertFrom-Json from failing on trailing newlines or editor-inserted blank lines between properties.
         return (Get-Content $JsonFilePath) | Select-String -Pattern "^\s*$" -NotMatch | ConvertFrom-Json -ErrorVariable ErrorMessage
@@ -22986,7 +24205,7 @@ Function ConvertFrom-JsonSafely {
         $errorMessage = $_.Exception.Message
 
         Write-LogMessage -Type ERROR -Message "JSON validation failed for file: $JsonFilePath."
-        Write-Output ""
+        Write-Host ""
 
         switch -Regex ($errorMessage) {
             "Bad JSON escape sequence: \\([A-Za-z])\..*'([^']+)'.*line (\d+).*position (\d+)" {
@@ -22996,12 +24215,12 @@ Function ConvertFrom-JsonSafely {
                 $position = $Matches[4]
                 Write-LogMessage -Type ERROR -Message "Invalid escape sequence: `"\$badChar`" in JSON property `"$jsonFilePathPath`""
                 Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Common causes:"
                 Write-LogMessage -Type ERROR -Message "  1. Windows file paths must use forward slashes (/) or escaped backslashes (\\\\)"
                 Write-LogMessage -Type ERROR -Message "     Example: `"C:/Users/Admin/file.yml`" or `"C:\\\\Users\\\\Admin\\\\file.yml`""
                 Write-LogMessage -Type ERROR -Message "  2. Backslash (\) is a special character in JSON and must be escaped"
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in `"$JsonFilePath`" at line $lineNum and try again."
                 break
             }
@@ -23013,7 +24232,7 @@ Function ConvertFrom-JsonSafely {
                 Write-LogMessage -Type ERROR -Message "JSON parsing error: $jsonFilePathError."
                 Write-LogMessage -Type ERROR -Message "Property: `"$jsonFilePathPath`""
                 Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in `"$JsonFilePath`" and try again."
                 break
             }
@@ -23035,7 +24254,7 @@ Function Test-CommandAvailability {
         This function checks whether a given command or executable is available and accessible
         through the system PATH. It can be used to verify that required tools or utilities
         are installed before attempting to use them in the script. If the command is not found,
-        the function will log an error and exit the script.
+        the function logs an error and throws a terminating error.
 
         .EXAMPLE
         Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
@@ -23070,10 +24289,10 @@ Function Test-Filepath {
         .DESCRIPTION
         The function Test-Filepath validates whether a file exists at the specified path.
         If the file exists, it logs a success message. If the file does not exist,
-        it logs an error message and exits the script with code 1.
+        it logs an error message and throws a terminating error.
 
         .EXAMPLE
-        Test-Filepath -FilePath "c:\\argocd.yml" -Description "ArgoCD configuration"
+        Test-Filepath -FilePath "./argocd.yml" -Description "ArgoCD configuration"
 
         .PARAMETER FilePath
         The absolute path to the file that needs to be validated for existence.
@@ -23159,7 +24378,7 @@ Function Test-JsonMissingProperties {
             "common.argoCD.argoCdOperatorYamlPath",
             "common.datastore.lunId"
         )
-        $result = Test-JsonMissingProperties -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration" -ShowExpectedStructure
+        $result = Test-JsonMissingProperties -JsonFilePath "infrastructure.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration" -ShowExpectedStructure
 
         .NOTES
         This function uses the existing ConvertFrom-JsonSafely function for safe JSON loading
@@ -23550,7 +24769,7 @@ Function Test-JsonNullValues {
             "common.VcenterUser",
             "common.esxHost"
         )
-        $result = Test-JsonNullValues -JsonFilePath "input.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration"
+        $result = Test-JsonNullValues -JsonFilePath "infrastructure.json" -RequiredProperties $requiredProps -JsonObjectName "InputConfiguration"
 
         .NOTES
         - This function is designed to work in conjunction with Test-JsonMissingProperties
@@ -23559,7 +24778,7 @@ Function Test-JsonNullValues {
         - Integrates with VCF PowerShell Toolbox logging infrastructure
         - Null values in arrays or objects are also detected
 
-        Error Handling: Main workflow function. Uses 'exit 1' to terminate script on critical
+        Error Handling: Main workflow function. Throws a terminating error on critical
         validation failures when properties contain null values.
     #>
 
@@ -23705,7 +24924,6 @@ Function Test-JsonNullValues {
 
     return $validationResult
 }
-
 Function Test-ArrayPropertyNullValue {
     <#
         .SYNOPSIS
@@ -23871,7 +25089,6 @@ Function Test-ArrayPropertyNullValue {
         }
     }
 }
-
 Function Get-EdgeSitesFromParameter {
 
     <#
@@ -23944,7 +25161,6 @@ Function Get-EdgeSitesFromParameter {
 
     return $requestedSites
 }
-
 Function Get-EffectiveNicListForCluster {
 
     <#
@@ -23980,7 +25196,6 @@ Function Get-EffectiveNicListForCluster {
     }
     return $CommonNicList
 }
-
 Function Test-InfrastructureNicListEffective {
 
     <#
@@ -24023,7 +25238,6 @@ Function Test-InfrastructureNicListEffective {
         }
     }
 }
-
 Function Test-EdgeSiteMatching {
 
     <#
@@ -24032,7 +25246,7 @@ Function Test-EdgeSiteMatching {
 
         .DESCRIPTION
         This function validates that every edgeSite value in the infrastructure JSON clusters array
-        has a corresponding entry in the supervisor JSON tkgsSiteSpec array, and vice versa.
+        has a corresponding entry in the supervisor JSON siteSpec array, and vice versa.
         This ensures proper linking between infrastructure and supervisor configurations.
 
         .PARAMETER InfrastructureJson
@@ -24085,8 +25299,8 @@ Function Test-EdgeSiteMatching {
 
         # Collect edgeSite values from supervisor JSON.
         $supervisorEdgeSites = @()
-        if ($supervisorData.tkgsSiteSpec) {
-            foreach ($siteSpec in $supervisorData.tkgsSiteSpec) {
+        if ($supervisorData.siteSpec) {
+            foreach ($siteSpec in $supervisorData.siteSpec) {
                 if ($siteSpec.edgeSite) {
                     # If EdgeSite is specified, only include matching site specs.
                     if (-not $EdgeSite -or $siteSpec.edgeSite -eq $EdgeSite) {
@@ -24155,42 +25369,32 @@ Function Test-EdgeSiteMatching {
 
     return $validationResult
 }
-
 Function Test-JsonShallowValidation {
 
     <#
         .SYNOPSIS
-        Validates both input.json and supervisor.json configuration files to ensure all required properties are present and have non-null values.
+        Validates infrastructure.json and supervisor.json configuration files to ensure all required properties are present and non-null.
 
         .DESCRIPTION
-        This function performs comprehensive validation of two critical JSON configuration files used in the one node deployment:
-        1. input.json - Contains infrastructure configuration including vCenter, ESX host, storage, and networking details
-        2. supervisor.json - Contains supervisor cluster configuration including TKGS components, load balancer, and network specifications
+        Performs two-phase shallow validation of the two JSON configuration files used by this module:
+        1. infrastructure.json — vCenter, ESX host, storage, and networking details.
+        2. supervisor.json — supervisor components, load balancer, and network specifications.
 
-        The function performs the following validation operations:
-        - Defines comprehensive arrays of required properties for both JSON files
-        - Loads and parses both JSON configuration files
-        - Validates each file against its respective required properties using Test-JsonMissingProperties (checks if keys exist)
-        - Validates each file's required properties for null values using Test-JsonNullValues (checks if values are non-null)
-        - Provides detailed logging for validation results
-        - Exits with error code 1 if any validation fails, ensuring deployment doesn't proceed with incomplete or null configuration
+        Validation phases:
+        - Test-JsonMissingProperties: checks that all required keys exist in the JSON structure.
+        - Test-JsonNullValues: checks that all required keys have non-null values.
 
-        This two-phase validation is critical to prevent deployment failures due to:
-        1. Missing properties (keys don't exist in JSON)
-        2. Null values (keys exist but have no value)
-
-        Both conditions would cause deployment failures and must be caught early.
+        Both phases must pass for deployment to proceed. Any failure throws a terminating error.
 
         .EXAMPLE
-        Test-JsonShallowValidation -InfrastructureJson "C:\config\input.json" -SupervisorJson "C:\config\SupervisorDetails.json"
+        Test-JsonShallowValidation -InfrastructureJson "./config/infrastructure.json" -SupervisorJson "./config/supervisor.json"
 
-        This example validates both configuration files located in the C:\config directory before proceeding with deployment.
+        Validates both configuration files before deployment.
 
         .EXAMPLE
         Test-JsonShallowValidation -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
 
-        This function is typically called during the initialization phase using variables containing the file paths
-        to validate configuration files before proceeding with the one node deployment process.
+        Called during the initialization phase to validate configuration files before proceeding with deployment.
 
         .PARAMETER ComputeOnly
         When set, skips supervisor.json checks and infrastructure/supervisor edgeSite pairing, and does not require common.contextName.
@@ -24199,36 +25403,32 @@ Function Test-JsonShallowValidation {
         When set, scopes cluster-derived checks (for example Argo CD requirement and nicList) to the listed edge sites.
 
         .PARAMETER InfrastructureJson
-        Specifies the full path to the input.json configuration file. This file must contain all required infrastructure
-        configuration properties including vCenter details, ESX host information, storage configuration, content library
-        settings, and virtual distributed switch specifications. The file must be valid JSON format and accessible.
+        Full path to infrastructure.json. Must contain all required infrastructure configuration properties including
+        vCenter details, ESX host information, storage configuration, and networking. Must be valid JSON.
 
         .PARAMETER SupervisorJson
-        Specifies the full path to the supervisor.json (SupervisorDetails.json) configuration file. This file must contain
-        all required TKGS supervisor cluster configuration properties including supervisor specifications, foundation load
-        balancer components, management network settings, and primary workload network configurations. The file must be
-        valid JSON format and accessible.
+        Full path to supervisor.json. Must contain all required supervisor cluster configuration properties including
+        supervisor specifications, foundation load balancer components, and network configurations. Ignored when
+        -ComputeOnly is set. Must be valid JSON.
 
         .NOTES
-        - When every cluster in scope has supervisorServices.disableArgoCD true, common.contextName is omitted from the required infrastructure property list (VCF context is not used).
-        - Both JSON files must exist and be readable at the specified paths (supervisor.json is not read when -ComputeOnly is set).
-        - Performs two-phase validation:
-          1. Test-JsonMissingProperties: Checks if all required keys exist in the JSON structure
-          2. Test-JsonNullValues: Checks if all required properties have non-null values
-        - Function will terminate script execution with exit code 1 if any validation phase fails
-        - Validation covers 25 input.json properties and 30+ supervisor.json properties across multiple categories
-        - Both JSON files must be valid JSON format and contain all required nested properties with non-null values
-        - Validation includes deep property path checking (e.g., "common.argoCD.nameSpace", "tkgsComponentSpec.foundationLoadBalancerComponents.flbName")
-        - Missing properties are reported with detailed expected structure information for troubleshooting
-        - Null values are reported with clear error messages indicating which properties have null values
+        - When every cluster in scope has supervisorServices.disableArgoCD true, common.contextName is omitted from
+          the required infrastructure property list (the VCF Kubernetes context is not used in that configuration).
+        - supervisor.json is not read when -ComputeOnly is set.
+        - Performs two-phase validation: missing-key check then null-value check.
+        - Throws a terminating error if any validation phase fails.
+        - Validation includes deep property path checking using dot notation (e.g. "siteSpec[].mgmtNetworkSpec.mgmtNetworkName").
+        - Missing properties are reported with expected structure detail for troubleshooting.
+        - Null values are reported with clear error messages indicating which properties need values.
 
-        Validation Order:
-        1. Check if JSON files exist and are parseable
-        2. Validate supervisor.json for missing properties
-        3. Validate input.json for missing properties
-        4. Validate supervisor.json for null values
-        5. Validate input.json for null values
-        6. Exit with error if any validation fails, otherwise proceed with deployment
+        Validation order:
+        1. Parse and scope infrastructure.json; resolve edge-site filter.
+        2. Validate supervisor.json for missing properties (skipped with -ComputeOnly).
+        3. Validate infrastructure.json for missing properties.
+        4. Validate supervisor.json for null values (skipped with -ComputeOnly).
+        5. Validate infrastructure.json for null values.
+        6. Validate edgeSite matching between the two files (skipped with -ComputeOnly).
+        7. Validate nicList, esxHosts format, boolean flags, and service YAML paths.
     #>
 
     # Define required properties for input.json validation.
@@ -24246,23 +25446,24 @@ Function Test-JsonShallowValidation {
 
     $shallowValidationFunctionStartTime = Get-Date
 
+    # Parse infrastructure.json once; all subsequent blocks reuse $inputData.
+    $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+
     # If EdgeSite is specified, resolve to list (validates delimiter and site names; throws if invalid).
-    $inputDataForEdgeSite = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+    $edgeSitesArray = @()
     if ($EdgeSite) {
-        $edgeSitesArray = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputDataForEdgeSite
+        $edgeSitesArray = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputData
         $siteList = $edgeSitesArray -join '", "'
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating only edgeSite(s) `"$siteList`" configuration..."
     }
 
-    $clustersScopeForArgo = if ($EdgeSite -and $null -ne $edgeSitesArray -and $edgeSitesArray.Count -gt 0) {
-        @($inputDataForEdgeSite.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray })
-    } else {
-        @($inputDataForEdgeSite.clusters)
-    }
+    # Resolve scope-filtered cluster collection used throughout validation.
+    $clustersInScope = if ($inputData.clusters) { Get-ClustersInScope -EdgeSitesArray $edgeSitesArray -InputData $inputData } else { @() }
+
     $requireArgoInfraKeys = $false
     if (-not $ComputeOnly) {
-        foreach ($clusterRow in $clustersScopeForArgo) {
-            if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterRow -CommonData $inputDataForEdgeSite.common -FlagName "disableArgoCD")) {
+        foreach ($clusterRow in $clustersInScope) {
+            if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterRow -CommonData $inputData.common -FlagName "disableArgoCD")) {
                 $requireArgoInfraKeys = $true
                 break
             }
@@ -24294,7 +25495,7 @@ Function Test-JsonShallowValidation {
     }
 
     # Define required properties for supervisor.json validation.
-    # This array contains all mandatory property paths for TKGS supervisor cluster configuration.
+    # This array contains all mandatory property paths for supervisor cluster configuration.
     # Properties cover supervisor specs, load balancer components, and network configurations.
 
     $supervisorJsonRequiredProperties = @(
@@ -24309,25 +25510,25 @@ Function Test-JsonShallowValidation {
         "commonSupervisorSpec.DnsServers",               # DNS servers (shared)
 
         # Site-Specific Supervisor Configuration
-        "tkgsSiteSpec",                                  # Array of site-specific configurations
-        "tkgsSiteSpec[].edgeSite",                       # Edge site identifier
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbName",           # Load balancer name
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipStartIP",     # Starting IP for VIP range
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipIPCount",     # Number of VIP addresses
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName",                # Management network name
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp", # Starting IP for management network
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount",      # Number of IPs in management network range
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName",                # Virtual server network name
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp", # Starting IP for virtual server network
-        "tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount",      # Number of IPs in virtual server network range
-        "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkName",            # Name of the TKGS management network
-        "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp",      # Starting IP address for TKGS management network
-        "tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount",         # Number of IP addresses for TKGS management network
-        "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName",             # Name of the primary workload network
-        "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp",       # Starting IP address for primary workload network
-        "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount",          # Number of IP addresses for primary workload network
-        "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp",                 # Starting IP for workload services
-        "tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"                    # Number of service IP addresses for workloads
+        "siteSpec",                                  # Array of site-specific configurations
+        "siteSpec[].edgeSite",                       # Edge site identifier
+        "siteSpec[].foundationLoadBalancerComponents.flbName",           # Load balancer name
+        "siteSpec[].foundationLoadBalancerComponents.flbVipStartIP",     # Starting IP for VIP range
+        "siteSpec[].foundationLoadBalancerComponents.flbVipIPCount",     # Number of VIP addresses
+        "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName",                # Management network name
+        "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp", # Starting IP for management network
+        "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount",      # Number of IPs in management network range
+        "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName",                # Virtual server network name
+        "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp", # Starting IP for virtual server network
+        "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount",      # Number of IPs in virtual server network range
+        "siteSpec[].mgmtNetworkSpec.mgmtNetworkName",            # Name of the supervisor management network
+        "siteSpec[].mgmtNetworkSpec.mgmtNetworkStartingIp",      # Starting IP address for supervisor management network
+        "siteSpec[].mgmtNetworkSpec.mgmtNetworkIPCount",         # Number of IP addresses for supervisor management network
+        "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkName",             # Name of the primary workload network
+        "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp",       # Starting IP address for primary workload network
+        "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount",          # Number of IP addresses for primary workload network
+        "siteSpec[].primaryWorkloadNetwork.workloadServiceStartIp",                 # Starting IP for workload services
+        "siteSpec[].primaryWorkloadNetwork.workloadServiceCount"                    # Number of service IP addresses for workloads
     )
 
     if ($ComputeOnly) {
@@ -24401,22 +25602,11 @@ Function Test-JsonShallowValidation {
     }
 
     # Validate nicList: at least one definition (common or per-cluster) mandatory; cluster overrides common; 2 or 4 NICs.
-    $inputDataForNicList = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
-    $clustersForNicList = if ($EdgeSite) {
-        $edgeSitesArray = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputDataForNicList
-        @($edgeSitesArray | ForEach-Object {
-            $site = $_
-            $inputDataForNicList.clusters | Where-Object { $_.edgeSite -eq $site } | Select-Object -First 1
-        } | Where-Object { $null -ne $_ })
-    } else {
-        @($inputDataForNicList.clusters)
-    }
-    Test-InfrastructureNicListEffective -InputData $inputDataForNicList -Clusters $clustersForNicList
+    Test-InfrastructureNicListEffective -InputData $inputData -Clusters $clustersInScope
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Infrastructure nicList validation passed (cluster override or common; 2 or 4 NICs per cluster)."
 
     # Validate esxHosts is an array (not singular esxHost).
     Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating esxHosts format in infrastructure JSON..."
-    $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
     if ($inputData.clusters) {
         foreach ($cluster in $inputData.clusters) {
             if ($cluster.PSObject.Properties.Name -contains "esxHost") {
@@ -24458,15 +25648,9 @@ Function Test-JsonShallowValidation {
 
     if (-not $ComputeOnly) {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating supervisor service YAML and Harbor TLS paths (shallow check)..."
-        $inputDataForServicePaths = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
-        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputDataForServicePaths
-        $clustersForServicePaths = if ($EdgeSite) {
-            $edgeSitesForServicePaths = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputDataForServicePaths
-            @($inputDataForServicePaths.clusters | Where-Object { $_.edgeSite -in $edgeSitesForServicePaths })
-        } else {
-            @($inputDataForServicePaths.clusters)
-        }
-        Test-JsonShallowSupervisorServicesPathConfiguration -ClustersToValidate $clustersForServicePaths -InputData $inputDataForServicePaths
+        # Resolve referenced file paths so relative paths in infrastructure.json are expanded before validation.
+        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
+        Test-JsonShallowSupervisorServicesPathConfiguration -ClustersToValidate $clustersInScope -InputData $inputData
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Supervisor service YAML and Harbor TLS shallow path validation passed."
     }
 
@@ -24479,6 +25663,31 @@ Function Test-JsonShallowValidation {
     $shallowValidationFunctionElapsed = (Get-Date) - $shallowValidationFunctionStartTime
     $siteIndication = if (-not $EdgeSite) { "all sites" } elseif ($null -ne $edgeSitesArray -and $edgeSitesArray.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArray -join '", "')`"" } else { "edgeSite `"$EdgeSite`"" }
     Write-LogMessage -Type DEBUG -Message "Test-JsonShallowValidation completed all validation calls for $siteIndication in $($shallowValidationFunctionElapsed.TotalSeconds.ToString('F3')) seconds."
+}
+Function ConvertTo-IpInt {
+
+    <#
+        .SYNOPSIS
+        Converts a dotted-quad IPv4 address string to a 32-bit integer.
+
+        .PARAMETER IpString
+        The IPv4 address string to convert (e.g. "192.168.1.1").
+
+        .OUTPUTS
+        Int64
+        The address as a 32-bit unsigned value stored in an Int64.
+
+        .NOTES
+        Helper for Test-IpAddressInCidrRange. Input is assumed to be a valid dotted-quad string;
+        validate with Test-ValidIPv4Address before calling.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$IpString
+    )
+
+    $octets = $IpString.Split('.')
+    return ([int64]$octets[0] -shl 24) -bor ([int64]$octets[1] -shl 16) -bor ([int64]$octets[2] -shl 8) -bor [int64]$octets[3]
 }
 Function Test-IpAddressInCidrRange {
 
@@ -24556,14 +25765,6 @@ Function Test-IpAddressInCidrRange {
         $cidrParts = $CidrRange.Split('/')
         $networkAddress = $cidrParts[0]
         $prefixLength = [int]$cidrParts[1]
-
-        # Convert IP addresses to 32-bit integers.
-
-        Function ConvertTo-IpInt {
-            param([String]$IpString)
-            $octets = $IpString.Split('.')
-            return ([int64]$octets[0] -shl 24) -bor ([int64]$octets[1] -shl 16) -bor ([int64]$octets[2] -shl 8) -bor [int64]$octets[3]
-        }
 
         # Calculate subnet mask from prefix length.
 
@@ -25331,7 +26532,7 @@ Function Test-JsonPropertyFormat {
         Validates datastore name from JSON by excluding filesystem-unsafe characters with a maximum length limit.
 
         .EXAMPLE
-        $isValid = Test-JsonPropertyFormat -InputData $supervisorConfig -PropertyPath "tkgsComponentSpec.foundationLoadBalancerComponents.flbVipStartIP" -ValidationPreset "IpAddress"
+        $isValid = Test-JsonPropertyFormat -InputData $supervisorConfig -PropertyPath "supervisorComponentSpec.foundationLoadBalancerComponents.flbVipStartIP" -ValidationPreset "IpAddress"
         Validates that the load balancer VIP start IP from JSON is a properly formatted IPv4 address.
 
         .EXAMPLE
@@ -25528,7 +26729,7 @@ Function Test-TagCatalogCategory {
         a new one with a predefined description for edge-node greenfield deployments.
 
         This function is designed for greenfield deployments and uses a hardcoded description.
-        The function will exit the script with code 1 if any errors occur during the lookup
+        The function throws a terminating error if any errors occur during the lookup
         or creation process.
 
         .PARAMETER TagCatalog
@@ -25546,7 +26747,7 @@ Function Test-TagCatalogCategory {
         .NOTES
         - This function requires a valid connection to vCenter via the $Script:vCenterName variable
         - The function uses hardcoded description: "Tag catalog for edge-node greenfield deployment"
-        - The function will terminate the script execution (exit 1) if errors occur
+        - The function throws a terminating error if errors occur
         - Designed specifically for greenfield deployments; may need revision for brownfield scenarios
         - Uses Write-LogMessage for error logging
 
@@ -25578,7 +26779,7 @@ Function Test-TagCatalogCategory {
     }
 
     if (-not $tagFoundCategory) {
-        # Hard coded description for the tag category assuming greenfield.  Can revisit for non-greenfield.
+        # Hard coded description for the tag category assuming greenfield. Can revisit for non-greenfield.
         try {
             New-TagCategory -Name $TagCatalog -Description "Tag catalog for edge-node greenfield deployment" -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type INFO -Message "Successfully created tag catalog `"$TagCatalog`" on `"$Script:vCenterName`"."
@@ -25617,7 +26818,7 @@ Function Test-Tag {
         predefined description for edge-node greenfield deployments.
 
         This function is designed for greenfield deployments and uses a hardcoded description.
-        The function will exit the script with code 1 if any errors occur during the lookup
+        The function throws a terminating error if any errors occur during the lookup
         or creation process.
 
         .PARAMETER TagCatalog
@@ -25640,7 +26841,7 @@ Function Test-Tag {
         .NOTES
         - This function requires a valid connection to vCenter via the $Script:vCenterName variable
         - The function uses hardcoded description: "New Tag for supervisor instance {tagName} for edge-node greenfield deployment"
-        - The function will terminate the script execution (exit 1) if errors occur during tag catalog lookup or tag creation
+        - The function throws a terminating error if errors occur during tag catalog lookup or tag creation
         - Designed specifically for greenfield deployments; may need revision for brownfield scenarios
         - Uses Write-LogMessage for error logging
         - The tag catalog category must exist before calling this function (use Test-TagCatalogCategory first)
@@ -25992,7 +27193,7 @@ Function Test-JsonNetworkSegmentGateways {
         }
 
         # Find matching supervisor site spec.
-        $matchingSiteSpec = $SupervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -eq $currentEdgeSite } | Select-Object -First 1
+        $matchingSiteSpec = $SupervisorData.siteSpec | Where-Object { $_.edgeSite -eq $currentEdgeSite } | Select-Object -First 1
         if (-not $matchingSiteSpec) {
             Write-LogMessage -Type ERROR -Message "No matching supervisor site spec found for edgeSite '$currentEdgeSite'."
             $validationFailures++
@@ -26017,14 +27218,14 @@ Function Test-JsonNetworkSegmentGateways {
 
         # Validate that supervisor network names exist in infrastructure network segments (case-sensitive).
         $vksNetworks = @()
-        if ($matchingSiteSpec.tkgsMgmtNetworkSpec -and $matchingSiteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkName) {
-            $vksNetworks += $matchingSiteSpec.tkgsMgmtNetworkSpec.tkgsMgmtNetworkName
+        if ($matchingSiteSpec.mgmtNetworkSpec -and $matchingSiteSpec.mgmtNetworkSpec.mgmtNetworkName) {
+            $vksNetworks += $matchingSiteSpec.mgmtNetworkSpec.mgmtNetworkName
         }
         if ($matchingSiteSpec.foundationLoadBalancerComponents -and $matchingSiteSpec.foundationLoadBalancerComponents.flbManagementNetwork -and $matchingSiteSpec.foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName) {
             $vksNetworks += $matchingSiteSpec.foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName
         }
-        if ($matchingSiteSpec.tkgsPrimaryWorkloadNetwork -and $matchingSiteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName) {
-            $vksNetworks += $matchingSiteSpec.tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName
+        if ($matchingSiteSpec.primaryWorkloadNetwork -and $matchingSiteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkName) {
+            $vksNetworks += $matchingSiteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkName
         }
         if ($matchingSiteSpec.foundationLoadBalancerComponents -and $matchingSiteSpec.foundationLoadBalancerComponents.flbVirtualServerNetwork -and $matchingSiteSpec.foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName) {
             $vksNetworks += $matchingSiteSpec.foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName
@@ -26122,8 +27323,8 @@ Function Test-JsonNumericPropertiesWithRanges {
             @{Path = "foundationLoadBalancerComponents.flbVipIPCount"; Min = 1; SiteSpec = $siteSpec},
             @{Path = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount"; Min = 2; SiteSpec = $siteSpec},
             @{Path = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount"; Min = 2; SiteSpec = $siteSpec},
-            @{Path = "tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount"; Min = 5; SiteSpec = $siteSpec},
-            @{Path = "tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount"; Min = 2; SiteSpec = $siteSpec}
+            @{Path = "mgmtNetworkSpec.mgmtNetworkIPCount"; Min = 5; SiteSpec = $siteSpec},
+            @{Path = "primaryWorkloadNetwork.primaryWorkloadNetworkIPCount"; Min = 2; SiteSpec = $siteSpec}
         )
 
         foreach ($prop in $numericPropertiesWithRanges) {
@@ -26152,7 +27353,7 @@ Function Test-JsonRfc1123NetworkNames {
         Validates that network names conform to RFC1123 format per site.
 
         .DESCRIPTION
-        Validates that supervisor network names (FLB management, FLB virtual server, TKGS management, TKGS primary workload) conform to lowercase RFC1123 hostname format for WCP compliance.
+        Validates that supervisor network names (FLB management, FLB virtual server, supervisor management, primary workload) conform to lowercase RFC1123 hostname format for WCP compliance.
 
         .PARAMETER SiteSpecsToValidate
         Array of site specification objects to validate.
@@ -26172,8 +27373,8 @@ Function Test-JsonRfc1123NetworkNames {
         $vksNetworkNameProperties = @(
             @{Path = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName"; SiteSpec = $siteSpec},
             @{Path = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName"; SiteSpec = $siteSpec},
-            @{Path = "tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName"; SiteSpec = $siteSpec},
-            @{Path = "tkgsMgmtNetworkSpec.tkgsMgmtNetworkName"; SiteSpec = $siteSpec}
+            @{Path = "primaryWorkloadNetwork.primaryWorkloadNetworkName"; SiteSpec = $siteSpec},
+            @{Path = "mgmtNetworkSpec.mgmtNetworkName"; SiteSpec = $siteSpec}
         )
         foreach ($vksNetworkNameProperty in $vksNetworkNameProperties) {
             $networkName = Get-JsonPropertyValue -InputData $vksNetworkNameProperty.SiteSpec -PropertyPath $vksNetworkNameProperty.Path
@@ -26408,7 +27609,7 @@ Function Test-JsonStartingIpAddresses {
         Validates starting IP address properties per site.
 
         .DESCRIPTION
-        Validates that starting IP addresses for FLB networks, TKGS networks, VIP, and workload service IPs are in valid IP address format.
+        Validates that starting IP addresses for FLB networks, supervisor networks, VIP, and workload service IPs are in valid IP address format.
 
         .PARAMETER SiteSpecsToValidate
         Array of site specification objects to validate.
@@ -26428,10 +27629,10 @@ Function Test-JsonStartingIpAddresses {
         $startingIpAddressProperties = @(
             @{Path = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp"; SiteSpec = $siteSpec},
             @{Path = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp"; SiteSpec = $siteSpec},
-            @{Path = "tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp"; SiteSpec = $siteSpec},
-            @{Path = "tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp"; SiteSpec = $siteSpec},
+            @{Path = "mgmtNetworkSpec.mgmtNetworkStartingIp"; SiteSpec = $siteSpec},
+            @{Path = "primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp"; SiteSpec = $siteSpec},
             @{Path = "foundationLoadBalancerComponents.flbVipStartIP"; SiteSpec = $siteSpec},
-            @{Path = "tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp"; SiteSpec = $siteSpec}
+            @{Path = "primaryWorkloadNetwork.workloadServiceStartIp"; SiteSpec = $siteSpec}
         )
         foreach ($startingIpAddressProperty in $startingIpAddressProperties) {
             $ipAddress = Get-JsonPropertyValue -InputData $startingIpAddressProperty.SiteSpec -PropertyPath $startingIpAddressProperty.Path
@@ -26476,7 +27677,7 @@ Function Test-JsonIpAddressesInCidrRanges {
 
     foreach ($cluster in $ClustersToValidate) {
         $currentEdgeSite = $cluster.edgeSite
-        $matchingSiteSpec = $SupervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -eq $currentEdgeSite } | Select-Object -First 1
+        $matchingSiteSpec = $SupervisorData.siteSpec | Where-Object { $_.edgeSite -eq $currentEdgeSite } | Select-Object -First 1
         if (-not $matchingSiteSpec -or -not $cluster.networking -or -not $cluster.networking.networkSegments) {
             continue
         }
@@ -26504,15 +27705,15 @@ Function Test-JsonIpAddressesInCidrRanges {
                 SiteSpec = $matchingSiteSpec
             },
             @{
-                IpPath = "tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp"
-                NetworkNamePath = "tkgsMgmtNetworkSpec.tkgsMgmtNetworkName"
-                Description = "TKGS Management Network Starting IP"
+                IpPath = "mgmtNetworkSpec.mgmtNetworkStartingIp"
+                NetworkNamePath = "mgmtNetworkSpec.mgmtNetworkName"
+                Description = "Supervisor Management Network Starting IP"
                 SiteSpec = $matchingSiteSpec
             },
             @{
-                IpPath = "tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp"
-                NetworkNamePath = "tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName"
-                Description = "TKGS Primary Workload Network Starting IP"
+                IpPath = "primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp"
+                NetworkNamePath = "primaryWorkloadNetwork.primaryWorkloadNetworkName"
+                Description = "Primary Workload Network Starting IP"
                 SiteSpec = $matchingSiteSpec
             }
         )
@@ -26545,7 +27746,6 @@ Function Test-JsonIpAddressesInCidrRanges {
 
     return $validationFailures
 }
-
 Function Test-JsonShallowSupervisorServicesPathConfiguration {
 
     <#
@@ -26622,7 +27822,6 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
         }
     }
 }
-
 Function Test-JsonYamlFilePaths {
 
     <#
@@ -26692,10 +27891,10 @@ Function Test-JsonYamlFilePaths {
 Function Test-JsonWorkloadServiceCount {
     <#
         .SYNOPSIS
-        Validates tkgsWorkloadServiceCount as a valid CIDR range per site.
+        Validates workloadServiceCount as a valid CIDR range per site.
 
         .DESCRIPTION
-        Validates that tkgsWorkloadServiceCount represents a valid CIDR block (/8 to /32). This represents the number of service IP addresses to allocate for workloads.
+        Validates that workloadServiceCount represents a valid CIDR block (/8 to /32). This represents the number of service IP addresses to allocate for workloads.
 
         .PARAMETER SiteSpecsToValidate
         Array of site specification objects to validate.
@@ -26710,18 +27909,18 @@ Function Test-JsonWorkloadServiceCount {
 
     $validationFailures = 0
 
-    Write-LogMessage -Type DEBUG -Message "Validating tkgsWorkloadServiceCount as valid CIDR range."
+    Write-LogMessage -Type DEBUG -Message "Validating workloadServiceCount as valid CIDR range."
     foreach ($siteSpec in $SiteSpecsToValidate) {
         $currentEdgeSite = $siteSpec.edgeSite
-        $serviceCountValue = Get-JsonPropertyValue -InputData $siteSpec -PropertyPath "tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"
+        $serviceCountValue = Get-JsonPropertyValue -InputData $siteSpec -PropertyPath "primaryWorkloadNetwork.workloadServiceCount"
         if ($null -ne $serviceCountValue) {
-            $isValid = Test-ValidCidrRange -InputText $serviceCountValue -PropertyPath "tkgsSiteSpec[$currentEdgeSite].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount"
+            $isValid = Test-ValidCidrRange -InputText $serviceCountValue -PropertyPath "siteSpec[$currentEdgeSite].primaryWorkloadNetwork.workloadServiceCount"
             if (-not $isValid) {
-                Write-LogMessage -Type ERROR -Message "Invalid tkgsWorkloadServiceCount value in edgeSite `"$currentEdgeSite`"."
+                Write-LogMessage -Type ERROR -Message "Invalid workloadServiceCount value in edgeSite `"$currentEdgeSite`"."
                 $validationFailures++
             }
         } else {
-            Write-LogMessage -Type ERROR -Message "Property `"tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount`" is missing or null in edgeSite `"$currentEdgeSite`"."
+            Write-LogMessage -Type ERROR -Message "Property `"primaryWorkloadNetwork.workloadServiceCount`" is missing or null in edgeSite `"$currentEdgeSite`"."
             $validationFailures++
         }
     }
@@ -26939,7 +28138,6 @@ Function Test-JsonvSanWitnessVmName {
 
     return $validationFailures
 }
-
 Function Test-JsonHaPolicy {
 
     <#
@@ -27007,7 +28205,172 @@ Function Test-JsonHaPolicy {
 
     return $validationFailures
 }
+Function Get-CommonLabEnvironmentEnabled {
+    <#
+        .SYNOPSIS
+        Returns whether infrastructure JSON enables lab mode (common.labenvironment true).
 
+        .PARAMETER InputData
+        Parsed infrastructure JSON root object.
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$InputData
+    )
+    if (-not $InputData -or -not $InputData.common) {
+        return $false
+    }
+    $labProp = $InputData.common.PSObject.Properties | Where-Object { $_.Name -ieq "labenvironment" } | Select-Object -First 1
+    if ($null -eq $labProp) {
+        return $false
+    }
+    return ($labProp.Value -eq $true)
+}
+Function Get-HarborHostnameFromDataValuesTemplateFile {
+    <#
+        .SYNOPSIS
+        Reads the top-level hostname value from a Harbor data values YAML template.
+
+        .PARAMETER HarborTemplateFilePath
+        Full path to the Harbor data values template (e.g. harbor-data-values-v2.14.2.yml).
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HarborTemplateFilePath
+    )
+    if (-not (Test-Path -LiteralPath $HarborTemplateFilePath -PathType Leaf)) {
+        return $null
+    }
+    $raw = Get-Content -LiteralPath $HarborTemplateFilePath -Raw -Encoding UTF8 -ErrorAction SilentlyContinue
+    if ([String]::IsNullOrWhiteSpace($raw)) {
+        return $null
+    }
+    # Anchor to start of line so we read the real top-level Harbor data-values hostname, not a nested key.
+    # Allow an optional YAML comment marker before hostname (some templates comment the sample line).
+    if ($raw -match '(?m)^(?:#\s*)?hostname:\s*(.+)\s*$') {
+        $candidate = $Matches[1].Trim().Trim('"').Trim("'")
+        if ([String]::IsNullOrWhiteSpace($candidate)) {
+            return $null
+        }
+        # Return raw template text here; callers validate with Test-JsonPropertyFormat -ValidationPreset IpAddressOrFqdn (DNS host or IPv4).
+        return $candidate
+    }
+    return $null
+}
+Function Get-EffectiveHarborHostnameForInfrastructureCluster {
+    <#
+        .SYNOPSIS
+        Resolves the Harbor hostname for YAML and validation (JSON hostname or lab template fallback).
+
+        .DESCRIPTION
+        When clusters[].harborConfiguration.hostname is set, returns the trimmed value. When lab mode is
+        enabled and both tlsCrt and tlsKey are omitted (including when the entire harborConfiguration
+        stanza is omitted), reads hostname from the Harbor data values template file resolved via
+        supervisorServices. Returns null if the hostname cannot be resolved.
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$CommonData,
+        [Parameter(Mandatory = $false)] [bool]$LabEnvironmentEnabled = $false
+    )
+    $hc = $Cluster.harborConfiguration
+    if ($hc) {
+        $rawHostname = if ($hc.PSObject.Properties["hostname"]) { [string]$hc.hostname } else { "" }
+        if (-not [String]::IsNullOrWhiteSpace($rawHostname)) {
+            return $rawHostname.Trim()
+        }
+        $hasTlsCrt = ($null -ne $hc.PSObject.Properties["tlsCrt"]) -and -not [String]::IsNullOrWhiteSpace([string]$hc.tlsCrt)
+        $hasTlsKey = ($null -ne $hc.PSObject.Properties["tlsKey"]) -and -not [String]::IsNullOrWhiteSpace([string]$hc.tlsKey)
+    } else {
+        if (-not $LabEnvironmentEnabled) {
+            return $null
+        }
+        $hasTlsCrt = $false
+        $hasTlsKey = $false
+    }
+    # Lab-only fallback when JSON does not carry a hostname and no customer TLS PEM paths are set: read hostname from the Harbor Carvel data-values YAML (same file deploy uses).
+    if ($LabEnvironmentEnabled -and -not $hasTlsCrt -and -not $hasTlsKey) {
+        $templatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $Cluster -CommonData $CommonData -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
+        if ([String]::IsNullOrWhiteSpace($templatePath) -or -not (Test-Path -LiteralPath $templatePath -PathType Leaf)) {
+            return $null
+        }
+        $fromTemplate = Get-HarborHostnameFromDataValuesTemplateFile -HarborTemplateFilePath $templatePath
+        if ([String]::IsNullOrWhiteSpace($fromTemplate)) {
+            return $null
+        }
+        return $fromTemplate.Trim()
+    }
+    return $null
+}
+Function New-LabHarborSelfSignedTlsMaterialFiles {
+    <#
+        .SYNOPSIS
+        Creates temporary PEM files for a Harbor TLS certificate (self-signed, RSA).
+
+        .DESCRIPTION
+        Uses .NET CertificateRequest so key material generation works on Windows, macOS, and Linux
+        without OpenSSL. Writes tls.crt, tls.key, and ca.crt (same certificate as CA for self-signed)
+        under the system temp directory. The caller must delete the files when finished.
+
+        .PARAMETER DnsName
+        Subject CN and SAN (DNS or IP).
+
+        .PARAMETER EdgeSite
+        Used only for unique temporary file names.
+
+        .PARAMETER RsaKeySize
+        RSA key size in bits. Default 2048.
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DnsName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $false)] [ValidateRange(2048, 8192)] [Int]$RsaKeySize = 2048
+    )
+
+    $rsa = [System.Security.Cryptography.RSA]::Create($RsaKeySize)
+    try {
+        $distinguishedName = "CN=$DnsName"
+        $dnObj = [System.Security.Cryptography.X509Certificates.X500DistinguishedName]::new($distinguishedName)
+        $req = [System.Security.Cryptography.X509Certificates.CertificateRequest]::new(
+            $dnObj,
+            $rsa,
+            [System.Security.Cryptography.HashAlgorithmName]::SHA256,
+            [System.Security.Cryptography.RSASignaturePadding]::Pkcs1
+        )
+        $sanBuilder = [System.Security.Cryptography.X509Certificates.SubjectAlternativeNameBuilder]::new()
+        $parsedIp = $null
+        if ([System.Net.IPAddress]::TryParse($DnsName, [ref]$parsedIp)) {
+            $null = $sanBuilder.AddIpAddress($parsedIp)
+        } else {
+            $null = $sanBuilder.AddDnsName($DnsName)
+        }
+        $null = $req.CertificateExtensions.Add($sanBuilder.Build())
+        $notBefore = [DateTimeOffset]::UtcNow.AddMinutes(-5)
+        $notAfter = $notBefore.AddYears(1)
+        $cert = $req.CreateSelfSigned($notBefore, $notAfter)
+        try {
+            $certPem = $cert.ExportCertificatePem()
+            # Export the key from the same RSA instance passed to CertificateRequest (.NET 10+ may not expose GetRSAPrivateKey on the cert).
+            $keyPem = $rsa.ExportPkcs8PrivateKeyPem()
+        } finally {
+            $cert.Dispose()
+        }
+    } finally {
+        $rsa.Dispose()
+    }
+
+    $tempBase = Join-Path ([System.IO.Path]::GetTempPath()) ("harbor-lab-tls-" + ($EdgeSite -replace '[^\w\-]', '_') + "-" + [Guid]::NewGuid().ToString("N"))
+    $crtPath = "$tempBase.crt.pem"
+    $keyPath = "$tempBase.key.pem"
+    $caPath = "$tempBase.ca.pem"
+    [System.IO.File]::WriteAllText($crtPath, $certPem, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($keyPath, $keyPem, [System.Text.UTF8Encoding]::new($false))
+    [System.IO.File]::WriteAllText($caPath, $certPem, [System.Text.UTF8Encoding]::new($false))
+    Write-LogMessage -Type INFO -Message "Lab mode: wrote self-signed Harbor TLS material for `"$DnsName`" (edge site `"$EdgeSite`") to temporary PEM files under the system temp directory."
+    return [ordered]@{
+        CaCrtPath  = $caPath
+        TlsCrtPath = $crtPath
+        TlsKeyPath = $keyPath
+    }
+}
 Function Test-JsonHarborConfiguration {
 
     <#
@@ -27019,11 +28382,15 @@ Function Test-JsonHarborConfiguration {
         level), performs both shallow presence checks and deep format validation:
 
         Shallow checks:
-        - harborConfiguration stanza must exist at the cluster level.
-        - harborConfiguration.hostname must be present and non-empty.
+        - harborConfiguration stanza must exist at the cluster level unless common.labenvironment is
+          true (lab: the stanza may be omitted; hostname is read from the Harbor data values template and
+          TLS is generated at deploy time).
+        - harborConfiguration.hostname must be present and non-empty unless common.labenvironment is
+          true and both tlsCrt and tlsKey are omitted (hostname is then read from the Harbor data values
+          template).
 
         Deep checks:
-        - harborConfiguration.hostname must be a valid DNS-compatible FQDN or IP address.
+        - Resolved hostname (JSON or lab template fallback) must be a valid DNS-compatible FQDN or IP address.
         - Any optional volume size key (registryVolumeSize, jobserviceVolumeSize, databaseVolumeSize,
           redisVolumeSize, trivyVolumeSize) that is present must be a positive integer followed by
           "Gi" (e.g. "10Gi", "100Gi").
@@ -27036,7 +28403,8 @@ Function Test-JsonHarborConfiguration {
           both tlsCrt and tlsKey are defined. When harborConfiguration.parentDirectory is set, tlsCrt,
           tlsKey, and caCrt are file names (or relative path fragments) under that directory; when
           parentDirectory is omitted, use full paths (legacy). Update-InfrastructureJsonReferencedFilePaths
-          expands paths before existence and PEM type checks.
+          expands paths before existence and PEM type checks. When common.labenvironment is true and
+          both tlsCrt and tlsKey are omitted, TLS files are generated at deploy time (not validated here).
 
         .PARAMETER ClustersToValidate
         Array of cluster objects to validate.
@@ -27056,6 +28424,7 @@ Function Test-JsonHarborConfiguration {
     $validationFailures = 0
     $volumeSizePattern = '^[1-9]\d*Gi$'
     $volumeSizeKeys = @("registryVolumeSize", "jobserviceVolumeSize", "databaseVolumeSize", "redisVolumeSize", "trivyVolumeSize")
+    $labEnvironment = Get-CommonLabEnvironmentEnabled -InputData $InputData
 
     foreach ($cluster in $ClustersToValidate) {
         $currentEdgeSite = $cluster.edgeSite
@@ -27066,22 +28435,54 @@ Function Test-JsonHarborConfiguration {
             continue
         }
 
-        # (Shallow) Require harborConfiguration stanza at the cluster level.
+        # (Shallow) Require harborConfiguration stanza unless lab mode (synthesized at deploy time).
         if (-not $cluster.harborConfiguration) {
-            Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration is required for edgeSite `"$currentEdgeSite`" because Harbor is not disabled. Add a harborConfiguration stanza with at least a hostname, or set supervisorServices.disableHarbor to true to skip Harbor."
+            if ($labEnvironment) {
+                Write-LogMessage -Type DEBUG -Message "Harbor: clusters[].harborConfiguration omitted for edgeSite `"$currentEdgeSite`"; lab mode will synthesize an empty stanza at deploy (hostname from Harbor data values template, self-signed TLS)."
+                $effectiveHostnameOnly = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $InputData.common -LabEnvironmentEnabled $labEnvironment
+                if ([String]::IsNullOrWhiteSpace($effectiveHostnameOnly)) {
+                    Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration is omitted for edgeSite `"$currentEdgeSite`" while Harbor is enabled in lab mode; the Harbor hostname could not be read from the data values template (hostname: key). Add harborConfiguration with hostname, or fix supervisorServices harbor template path and template content, or set supervisorServices.disableHarbor to true."
+                    $validationFailures++
+                } else {
+                    # Same bar as JSON hostname: Test-JsonPropertyFormat IpAddressOrFqdn allowlists safe DNS labels / IPv4 (see function help for preset rules).
+                    $hostOk = Test-JsonPropertyFormat -InputData $effectiveHostnameOnly -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname (resolved from template)"
+                    if (-not $hostOk) {
+                        Write-LogMessage -Type ERROR -Message "Resolved Harbor hostname from template `"$effectiveHostnameOnly`" for edgeSite `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address."
+                        $validationFailures++
+                    }
+                }
+                continue
+            }
+            Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration is required for edgeSite `"$currentEdgeSite`" because Harbor is not disabled. Add a harborConfiguration stanza, enable common.labenvironment to omit it in lab, or set supervisorServices.disableHarbor to true to skip Harbor."
             $validationFailures++
             continue
         }
 
-        # (Shallow) Require hostname within harborConfiguration.
-        if ([String]::IsNullOrWhiteSpace($cluster.harborConfiguration.hostname)) {
-            Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.hostname is required for edgeSite `"$currentEdgeSite`" and must not be empty."
+        $hasTlsCrt = ($null -ne $cluster.harborConfiguration.PSObject.Properties["tlsCrt"]) -and -not [String]::IsNullOrWhiteSpace($cluster.harborConfiguration.tlsCrt)
+        $hasTlsKey = ($null -ne $cluster.harborConfiguration.PSObject.Properties["tlsKey"]) -and -not [String]::IsNullOrWhiteSpace($cluster.harborConfiguration.tlsKey)
+        if ($hasTlsCrt -xor $hasTlsKey) {
+            Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.tlsCrt and tlsKey must both be defined together for edgeSite `"$currentEdgeSite`". Define both PEM paths, omit both (when common.labenvironment is true, both omitted triggers a generated self-signed certificate), or do not set exactly one of them."
             $validationFailures++
+        }
+
+
+        $effectiveHostname = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $InputData.common -LabEnvironmentEnabled $labEnvironment
+        if ([String]::IsNullOrWhiteSpace($effectiveHostname)) {
+            if ($labEnvironment -and -not $hasTlsCrt -and -not $hasTlsKey) {
+                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.hostname is missing for edgeSite `"$currentEdgeSite`" and could not be read from the Harbor data values template (hostname: key). Set hostname in JSON or fix the template file referenced by supervisorServices (harborDataTemplateYamlFileName / harborDataTemplateYamlPath)."
+                $validationFailures++
+            } elseif ($hasTlsCrt -and $hasTlsKey) {
+                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.hostname is required for edgeSite `"$currentEdgeSite`" when tlsCrt and tlsKey are supplied."
+                $validationFailures++
+            } else {
+                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.hostname is required for edgeSite `"$currentEdgeSite`" and must not be empty (or enable common.labenvironment and omit tlsCrt/tlsKey to use the template hostname)."
+                $validationFailures++
+            }
         } else {
-            # (Deep) Validate hostname is a DNS-compatible FQDN or IP address.
-            $isValid = Test-JsonPropertyFormat -InputData $cluster.harborConfiguration.hostname -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname"
+            # Resolved string is either JSON hostname, trimmed, or lab template hostname; reject invalid DNS/IP before deploy or TLS generation.
+            $isValid = Test-JsonPropertyFormat -InputData $effectiveHostname -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname (resolved)"
             if (-not $isValid) {
-                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.hostname value `"$($cluster.harborConfiguration.hostname)`" in edgeSite `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address."
+                Write-LogMessage -Type ERROR -Message "Resolved Harbor hostname `"$effectiveHostname`" for edgeSite `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address."
                 $validationFailures++
             }
         }
@@ -27109,29 +28510,23 @@ Function Test-JsonHarborConfiguration {
             }
         }
 
-        # (Coupling) Validate that tlsCrt and tlsKey are both present or both absent.
-        $hasTlsCrt = ($null -ne $cluster.harborConfiguration.PSObject.Properties["tlsCrt"]) -and -not [String]::IsNullOrWhiteSpace($cluster.harborConfiguration.tlsCrt)
-        $hasTlsKey = ($null -ne $cluster.harborConfiguration.PSObject.Properties["tlsKey"]) -and -not [String]::IsNullOrWhiteSpace($cluster.harborConfiguration.tlsKey)
         $hasCaCrt = ($null -ne $cluster.harborConfiguration.PSObject.Properties["caCrt"]) -and -not [String]::IsNullOrWhiteSpace($cluster.harborConfiguration.caCrt)
-
-        if ($hasTlsCrt -xor $hasTlsKey) {
-            Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.tlsCrt and tlsKey must both be defined together for edgeSite `"$currentEdgeSite`". Define both or omit both."
-            $validationFailures++
-        }
         if ($hasCaCrt -and -not ($hasTlsCrt -and $hasTlsKey)) {
             Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.caCrt can only be defined when both tlsCrt and tlsKey are also defined for edgeSite `"$currentEdgeSite`"."
             $validationFailures++
         }
 
-        # (Deep) Verify TLS certificate files exist and contain the correct PEM type.
+        # (Deep) Verify TLS certificate files exist and contain the correct PEM type (skipped in lab when both tls paths are omitted; PEMs are generated at deploy time).
         # tlsCrt and caCrt must begin with "-----BEGIN CERTIFICATE-----".
         # tlsKey must begin with "-----BEGIN" but must NOT begin with "-----BEGIN CERTIFICATE-----"
         # (accepts PRIVATE KEY, ENCRYPTED PRIVATE KEY, RSA PRIVATE KEY, EC PRIVATE KEY, etc.).
+        $skipTlsFileChecks = ($labEnvironment -and -not $hasTlsCrt -and -not $hasTlsKey)
         foreach ($tlsEntry in @(
             [PSCustomObject]@{ Field = "tlsCrt"; HasValue = $hasTlsCrt; ExpectCertificate = $true  },
             [PSCustomObject]@{ Field = "tlsKey"; HasValue = $hasTlsKey; ExpectCertificate = $false },
             [PSCustomObject]@{ Field = "caCrt";  HasValue = $hasCaCrt;  ExpectCertificate = $true  }
         )) {
+            if ($skipTlsFileChecks) { continue }
             if (-not $tlsEntry.HasValue) { continue }
             $filePath = $cluster.harborConfiguration.($tlsEntry.Field)
             if (-not (Test-Path -LiteralPath $filePath)) {
@@ -27159,9 +28554,9 @@ Function Test-JsonHarborConfiguration {
     $harborHostnames = @()
     foreach ($cluster in $ClustersToValidate) {
         if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableHarbor")) {
-            $hostname = $cluster.harborConfiguration.hostname
-            if (-not [String]::IsNullOrWhiteSpace($hostname)) {
-                $harborHostnames += $hostname
+            $resolvedHost = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $InputData.common -LabEnvironmentEnabled $labEnvironment
+            if (-not [String]::IsNullOrWhiteSpace($resolvedHost)) {
+                $harborHostnames += $resolvedHost
             }
         }
     }
@@ -27169,12 +28564,74 @@ Function Test-JsonHarborConfiguration {
     foreach ($dup in $duplicateHostnames) {
         $affectedSites = ($ClustersToValidate | Where-Object {
             -not (Get-EffectiveSupervisorServiceFlag -Cluster $_ -CommonData $InputData.common -FlagName "disableHarbor") -and
-            $_.harborConfiguration.hostname -eq $dup.Name
+            (Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $_ -CommonData $InputData.common -LabEnvironmentEnabled $labEnvironment) -eq $dup.Name
         } | ForEach-Object { $_.edgeSite }) -join ", "
         Write-LogMessage -Type WARNING -Message "Multiple clusters share harborConfiguration.hostname `"$($dup.Name)`" (edgeSite(s): $affectedSites). Each Harbor instance needs a unique DNS name; both clusters will register to the same hostname, causing DNS conflicts."
     }
 
     return $validationFailures
+}
+Function Get-ClustersInScope {
+
+    <#
+        .SYNOPSIS
+        Returns the subset of clusters from InputData that fall within the given edge-site scope.
+
+        .DESCRIPTION
+        When EdgeSitesArray is non-empty, filters InputData.clusters to only those whose edgeSite
+        property is in the array. When EdgeSitesArray is empty (all-sites run), returns all clusters.
+        Used by Test-JsonDeeperValidation to replace the repeated inline filter pattern.
+
+        .PARAMETER EdgeSitesArray
+        Array of edgeSite names to include. Pass an empty array to include all clusters.
+
+        .PARAMETER InputData
+        The parsed infrastructure JSON object.
+
+        .OUTPUTS
+        Object[]. Array of cluster objects in scope; may be empty.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [Array]$EdgeSitesArray,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$InputData
+    )
+
+    if ($EdgeSitesArray.Count -gt 0) {
+        return @($InputData.clusters | Where-Object { $_.edgeSite -in $EdgeSitesArray })
+    }
+    return @($InputData.clusters)
+}
+Function Get-SiteSpecsInScope {
+
+    <#
+        .SYNOPSIS
+        Returns the subset of supervisor siteSpec entries that fall within the given edge-site scope.
+
+        .DESCRIPTION
+        When EdgeSitesArray is non-empty, filters SupervisorData.siteSpec to only those whose edgeSite
+        property is in the array. When EdgeSitesArray is empty (all-sites run), returns all site specs.
+        Used by Test-JsonDeeperValidation to replace the repeated inline filter pattern.
+
+        .PARAMETER EdgeSitesArray
+        Array of edgeSite names to include. Pass an empty array to include all site specs.
+
+        .PARAMETER SupervisorData
+        The parsed supervisor JSON object.
+
+        .OUTPUTS
+        Object[]. Array of siteSpec objects in scope; may be empty.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [Array]$EdgeSitesArray,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$SupervisorData
+    )
+
+    if ($EdgeSitesArray.Count -gt 0) {
+        return @($SupervisorData.siteSpec | Where-Object { $_.edgeSite -in $EdgeSitesArray })
+    }
+    return @($SupervisorData.siteSpec)
 }
 Function Test-JsonDeeperValidation {
 
@@ -27189,7 +28646,7 @@ Function Test-JsonDeeperValidation {
         validation failures.
 
         .PARAMETER ComputeOnly
-        When set, does not load supervisor.json and skips deeper rules that require supervisor, Argo CD, Harbor, or TKGS site data.
+        When set, does not load supervisor.json and skips deeper rules that require supervisor, Argo CD, Harbor, or supervisor site data.
 
         .PARAMETER EdgeSite
         Optional comma-separated edge sites; validation is limited to those clusters where applicable.
@@ -27229,15 +28686,14 @@ Function Test-JsonDeeperValidation {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating edgeSite(s) `"$siteList`" configuration..."
     }
 
-    $clustersToValidateForFlags = if ($edgeSitesArray.Count -gt 0) {
-        @($inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray })
-    } else {
-        @($inputData.clusters)
-    }
+    # Resolve scope-filtered collections used throughout validation.
+    $clustersInScope = if ($inputData.clusters) { Get-ClustersInScope -EdgeSitesArray $edgeSitesArray -InputData $inputData } else { @() }
+    $siteSpecsInScope = if (-not $ComputeOnly -and $supervisorData -and $supervisorData.siteSpec) { Get-SiteSpecsInScope -EdgeSitesArray $edgeSitesArray -SupervisorData $supervisorData } else { @() }
+
     $anyArgoEnabledForScope = $false
     $anyHarborEnabledForScope = $false
     if (-not $ComputeOnly) {
-        foreach ($clusterFlagRow in $clustersToValidateForFlags) {
+        foreach ($clusterFlagRow in $clustersInScope) {
             if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterFlagRow -CommonData $inputData.common -FlagName "disableArgoCD")) {
                 $anyArgoEnabledForScope = $true
             }
@@ -27294,23 +28750,13 @@ Function Test-JsonDeeperValidation {
     }
 
     # Validate network segment gateways and network name matching per cluster (requires supervisor.json).
-    if (-not $ComputeOnly -and $inputData.clusters -and $supervisorData.tkgsSiteSpec) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonNetworkSegmentGateways -ClustersToValidate $clustersToValidate -SupervisorData $supervisorData
+    if (-not $ComputeOnly -and $clustersInScope.Count -gt 0 -and $siteSpecsInScope.Count -gt 0) {
+        $validationFailures += Test-JsonNetworkSegmentGateways -ClustersToValidate $clustersInScope -SupervisorData $supervisorData
     }
 
-    # Test for VMware object character validation (per cluster).
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonStoragePolicyFormats -ClustersToValidate $clustersToValidate
+    # VMware object character validation (per cluster).
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonStoragePolicyFormats -ClustersToValidate $clustersInScope
     }
 
     # Validate other vSphere objects (datacenter always; content library datastore only when defined).
@@ -27354,98 +28800,48 @@ Function Test-JsonDeeperValidation {
             $validationFailures++
         }
     }
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
+    foreach ($cluster in $clustersInScope) {
+        $currentEdgeSite = $cluster.edgeSite
+        if ($null -eq $cluster.PSObject.Properties["vLcmImageName"] -or [String]::IsNullOrWhiteSpace($cluster.vLcmImageName)) {
+            continue
         }
-        foreach ($cluster in $clustersToValidate) {
-            $currentEdgeSite = $cluster.edgeSite
-            if ($null -eq $cluster.PSObject.Properties["vLcmImageName"] -or [String]::IsNullOrWhiteSpace($cluster.vLcmImageName)) {
-                continue
-            }
-            Write-LogMessage -Type DEBUG -Message "Validating vLcmImageName format for cluster edgeSite `"$currentEdgeSite`"..."
-            $isValid = Test-JsonPropertyFormat -InputData $cluster.vLcmImageName -ValidationPreset "vSphereObject80Characters"
-            if (-not $isValid) {
-                Write-LogMessage -Type ERROR -Message "Invalid vLcmImageName format in cluster `"$currentEdgeSite`". Value must conform to vSphere object naming (e.g. up to 80 characters, alphanumeric, spaces, hyphens, underscores, parentheses)."
-                $validationFailures++
-            }
+        Write-LogMessage -Type DEBUG -Message "Validating vLcmImageName format for cluster edgeSite `"$currentEdgeSite`"..."
+        $isValid = Test-JsonPropertyFormat -InputData $cluster.vLcmImageName -ValidationPreset "vSphereObject80Characters"
+        if (-not $isValid) {
+            Write-LogMessage -Type ERROR -Message "Invalid vLcmImageName format in cluster `"$currentEdgeSite`". Value must conform to vSphere object naming (e.g. up to 80 characters, alphanumeric, spaces, hyphens, underscores, parentheses)."
+            $validationFailures++
         }
     }
 
     # Test supervisor service YAML path resolution (per cluster). Argo paths when Argo is enabled; Harbor Carvel YAML paths when Harbor is enabled. Skipped when ComputeOnly or both services disabled for all clusters in scope.
-    if (-not $ComputeOnly -and $inputData.clusters -and ($anyArgoEnabledForScope -or $anyHarborEnabledForScope)) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonYamlFilePaths -InputData $inputData -ClustersToValidate $clustersToValidate
+    if (-not $ComputeOnly -and $clustersInScope.Count -gt 0 -and ($anyArgoEnabledForScope -or $anyHarborEnabledForScope)) {
+        $validationFailures += Test-JsonYamlFilePaths -InputData $inputData -ClustersToValidate $clustersInScope
     }
 
-    # Objects that must be an unsigned integer with minimum value requirements (per site).
-    if (-not $ComputeOnly -and $supervisorData.tkgsSiteSpec) {
-        $siteSpecsToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $supervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $supervisorData.tkgsSiteSpec
-        }
-        $validationFailures += Test-JsonNumericPropertiesWithRanges -SiteSpecsToValidate $siteSpecsToValidate
-    }
-
-    # Validate tkgsWorkloadServiceCount as a valid CIDR range (per site).
-    # This represents the number of service IP addresses to allocate for workloads.
-    # Must correspond to a valid CIDR block (/8 to /32).
-    if (-not $ComputeOnly -and $supervisorData.tkgsSiteSpec) {
-        $siteSpecsToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $supervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $supervisorData.tkgsSiteSpec
-        }
-        $validationFailures += Test-JsonWorkloadServiceCount -SiteSpecsToValidate $siteSpecsToValidate
-    }
-
-    # Require that all networks be lower-cased RFC1123 hostname for WCP compliance (per site).
-    # vcenter.wcp.dns.name.noncompliant error will be thrown if not compliant.
-    if (-not $ComputeOnly -and $supervisorData.tkgsSiteSpec) {
-        $siteSpecsToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $supervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $supervisorData.tkgsSiteSpec
-        }
-        $validationFailures += Test-JsonRfc1123NetworkNames -SiteSpecsToValidate $siteSpecsToValidate
+    # Per-site validations: numeric ranges, workload service CIDR, and RFC1123 network names.
+    # All three require supervisor siteSpec data; share one guard.
+    if ($siteSpecsInScope.Count -gt 0) {
+        $validationFailures += Test-JsonNumericPropertiesWithRanges -SiteSpecsToValidate $siteSpecsInScope
+        # Validate workloadServiceCount as a valid CIDR range (/8 to /32).
+        $validationFailures += Test-JsonWorkloadServiceCount -SiteSpecsToValidate $siteSpecsInScope
+        # Require lowercase RFC1123 network names for WCP compliance (vcenter.wcp.dns.name.noncompliant).
+        $validationFailures += Test-JsonRfc1123NetworkNames -SiteSpecsToValidate $siteSpecsInScope
     }
 
     # Require that all network segments be lowercase RFC1123 compliant for WCP/Kubernetes compatibility.
     # vcenter.wcp.dns.name.noncompliant error will be thrown by vCenter if not compliant.
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonRfc1123NetworkSegments -ClustersToValidate $clustersToValidate
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonRfc1123NetworkSegments -ClustersToValidate $clustersInScope
     }
 
     # Validate networking: networkingVmKernelInterfaces (ipList exactly two unique IPv4s, valid netmask, VLAN 0-4095, services exactly vMotion/vSAN/vSAN Witness), networkSegments VLAN 0-4095.
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonNetworkingVmKernelAndTemporaryIp -ClustersToValidate $clustersToValidate
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonNetworkingVmKernelAndTemporaryIp -ClustersToValidate $clustersInScope
     }
 
     # Validate VM class names follow RFC1123 format (per cluster). Used for Argo CD namespace VM classes when specified.
-    if ($anyArgoEnabledForScope -and $inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonRfc1123VmClassNames -ClustersToValidate $clustersToValidate
+    if ($anyArgoEnabledForScope -and $clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonRfc1123VmClassNames -ClustersToValidate $clustersInScope
     }
 
     # Validate DNS servers from commonSupervisorSpec (shared across all networks).
@@ -27454,63 +28850,33 @@ Function Test-JsonDeeperValidation {
     }
 
     # Storage policy type validation (per cluster).
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonStoragePolicyTypes -ClustersToValidate $clustersToValidate
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonStoragePolicyTypes -ClustersToValidate $clustersInScope
     }
 
     # vSAN witness FQDN validation (required when storage type is VSAN-OSA or VSAN-ESA).
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonvSanWitnessVmName -ClustersToValidate $clustersToValidate -InputData $inputData
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonvSanWitnessVmName -ClustersToValidate $clustersInScope -InputData $inputData
     }
 
     # haPolicy (optional): when defined at common or cluster root, must be slotBased, reservationBased, or disabled.
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonHaPolicy -ClustersToValidate $clustersToValidate -InputData $inputData
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonHaPolicy -ClustersToValidate $clustersInScope -InputData $inputData
     }
 
     # ESX host count validation based on storage policy type (per cluster).
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonEsxHostCountByStoragePolicyType -ClustersToValidate $clustersToValidate
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonEsxHostCountByStoragePolicyType -ClustersToValidate $clustersInScope
     }
 
     # ESX host format validation (IP address or FQDN) (per cluster).
-    if ($inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonEsxHostFormats -ClustersToValidate $clustersToValidate
+    if ($clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonEsxHostFormats -ClustersToValidate $clustersInScope
     }
 
     # Harbor configuration validation (per cluster: required stanza when Harbor not disabled, hostname format, optional volume sizes).
-    if (-not $ComputeOnly -and $inputData.clusters) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonHarborConfiguration -ClustersToValidate $clustersToValidate -InputData $inputData
+    if (-not $ComputeOnly -and $clustersInScope.Count -gt 0) {
+        $validationFailures += Test-JsonHarborConfiguration -ClustersToValidate $clustersInScope -InputData $inputData
     }
 
     # Foundation Load Balancer configuration validation (size, provider, network type, availability).
@@ -27523,29 +28889,14 @@ Function Test-JsonDeeperValidation {
         $validationFailures += Test-JsonControlPlaneConfiguration -SupervisorData $supervisorData
     }
 
-    # Network Gateway property validation (gateways are now in infrastructure JSON network segments).
-    # Gateways are validated when checking network segment gateways above.
-    # No additional gateway validation needed here as they're already validated in the network segment validation section.
-
     # Starting IP address property validation (per site).
-    if (-not $ComputeOnly -and $supervisorData.tkgsSiteSpec) {
-        $siteSpecsToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $supervisorData.tkgsSiteSpec | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $supervisorData.tkgsSiteSpec
-        }
-        $validationFailures += Test-JsonStartingIpAddresses -SiteSpecsToValidate $siteSpecsToValidate
+    if ($siteSpecsInScope.Count -gt 0) {
+        $validationFailures += Test-JsonStartingIpAddresses -SiteSpecsToValidate $siteSpecsInScope
     }
 
     # Validate that starting IP addresses are within their respective CIDR ranges.
-    # Gateways are now in infrastructure JSON network segments, so we need to match by network name.
-    if (-not $ComputeOnly -and $inputData.clusters -and $supervisorData.tkgsSiteSpec) {
-        $clustersToValidate = if ($edgeSitesArray.Count -gt 0) {
-            $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArray }
-        } else {
-            $inputData.clusters
-        }
-        $validationFailures += Test-JsonIpAddressesInCidrRanges -ClustersToValidate $clustersToValidate -SupervisorData $supervisorData
+    if (-not $ComputeOnly -and $clustersInScope.Count -gt 0 -and $siteSpecsInScope.Count -gt 0) {
+        $validationFailures += Test-JsonIpAddressesInCidrRanges -ClustersToValidate $clustersInScope -SupervisorData $supervisorData
     }
 
     if ($validationFailures -gt 0) {
@@ -28325,7 +29676,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                     if ($allArgocdExists) {
                         try {
                             Invoke-DeleteNamespaceInstances -Namespace $allArgocdNs -Confirm:$false -ErrorAction Stop | Out-Null
-                            Write-LogMessage -Type INFO -Message "All cleanup: ArgoCD namespace `"$allArgocdNs`" deletion initiated for cluster `"$clusterName`"."
+                            Write-LogMessage -Type INFO -NoNewline -Message "All cleanup: ArgoCD namespace `"$allArgocdNs`" deletion initiated for cluster `"$clusterName`"... "
                             $allArgocdElapsed = 0
                             $allArgocdStillExists = $true
                             while ($allArgocdElapsed -lt $ArgoCDNamespaceDeleteTimeoutSeconds) {
@@ -28338,15 +29689,15 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                                     Write-LogMessage -Type DEBUG -Message "All cleanup: namespace poll failed during ArgoCD wait. $($_.Exception.Message)"
                                 }
                                 if (-not $allArgocdStillExists) {
-                                    Write-LogMessage -Type INFO -Message "All cleanup: ArgoCD namespace `"$allArgocdNs`" deleted for cluster `"$clusterName`"."
+                                    Write-LogMessage -Type INFO -CompletePending -Message "deleted after $allArgocdElapsed seconds."
                                     break
                                 }
                             }
                             if ($allArgocdStillExists) {
-                                Write-LogMessage -Type WARNING -Message "All cleanup: ArgoCD namespace `"$allArgocdNs`" still present after ${ArgoCDNamespaceDeleteTimeoutSeconds}s. Supervisor deactivation will proceed."
+                                Write-LogMessage -Type WARNING -CompletePending -Message "still present after ${ArgoCDNamespaceDeleteTimeoutSeconds}s. Supervisor deactivation will proceed."
                             }
                         } catch {
-                            Write-LogMessage -Type WARNING -Message "All cleanup: ArgoCD namespace deletion failed for cluster `"$clusterName`": $($_.Exception.Message). Continuing with supervisor deactivation."
+                            Write-LogMessage -Type WARNING -CompletePending -Message "deletion failed for cluster `"$clusterName`": $($_.Exception.Message). Continuing with supervisor deactivation."
                         }
                     } else {
                         Write-LogMessage -Type DEBUG -Message "All cleanup: ArgoCD namespace `"$allArgocdNs`" not found for cluster `"$clusterName`". Nothing to remove."
@@ -28355,7 +29706,6 @@ Function Invoke-VcfEdgeAtScaleCleanup {
 
                 $clusterIdForCleanup = $clusterObjectForCleanup.ExtensionData.MoRef.Value
                 if (-not $clusterIdForCleanup) { $clusterIdForCleanup = $clusterObjectForCleanup.Id -replace "^ClusterComputeResource-", "" }
-                Write-LogMessage -Type INFO -Message "Deactivating supervisor on cluster `"$clusterName`" before compute cleanup (All)."
                 $disableResult = Disable-SupervisorOnCluster -ClusterId $clusterIdForCleanup -ClusterName $clusterName -SuppressConfirm
                 if (-not $disableResult.Success) {
                     Write-LogMessage -Type ERROR -Message "Supervisor deactivation did not complete: $($disableResult.ErrorMessage). Skipping compute cleanup for `"$clusterName`"."
@@ -28404,6 +29754,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
             } else {
                 $vdsRemovalSucceeded = $true
                 if ($storagePolicyType -eq "VMFS") {
+                    Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName }
                     catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" for cluster `"$clusterName`": $($_.Exception.Message)." }
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" }
@@ -28411,6 +29762,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" }
                     catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName-sw2`" for cluster `"$clusterName`": $($_.Exception.Message)." }
                     if ($vdsRemovalSucceeded) {
+                        Write-LogMessage -Type INFO -CompletePending -Message "Done"
                         $vmfsDatastoreName = Get-DatastoreNameFromPrefix -DatastoreNamePrefix $DatastoreNamePrefix -EdgeSite $currentEdgeSite
                         Remove-VmfsDatastoreForCluster -ClusterName $clusterName -DatastoreName $vmfsDatastoreName
                         try { Remove-ClusterSafely -ClusterName $clusterName }
@@ -28433,10 +29785,12 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                         }
                     } else {
                         $cleanupHadErrors = $true
+                        Write-LogMessage -Type WARNING -CompletePending -Message "Partial (see warnings above)"
                         Write-LogMessage -Type WARNING -Message "Skipping VMFS datastore and cluster removal for `"$clusterName`" because VDS removal failed. Move VMkernel adapters and VMs off the VDS port groups, then remove the VDS and cluster manually or retry cleanup."
                     }
                 } else {
                     Invoke-VsanDeploymentRollback @rollbackParams
+                    Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName }
                     catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" for cluster `"$clusterName`": $($_.Exception.Message)." }
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" }
@@ -28444,6 +29798,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                     try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" }
                     catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName-sw2`" for cluster `"$clusterName`": $($_.Exception.Message)." }
                     if ($vdsRemovalSucceeded) {
+                        Write-LogMessage -Type INFO -CompletePending -Message "Done"
                         try { Remove-ClusterSafely -ClusterName $clusterName }
                         catch {
                             Write-LogMessage -Type DEBUG -Message "Remove-Cluster threw for `"$clusterName`"; waiting $ClusterExistenceCheckDelaySeconds s then re-checking if cluster still exists (vCenter may have removed it despite the error)."
@@ -28464,6 +29819,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                         }
                     } else {
                         $cleanupHadErrors = $true
+                        Write-LogMessage -Type WARNING -CompletePending -Message "Partial (see warnings above)"
                         Write-LogMessage -Type WARNING -Message "Skipping cluster removal for `"$clusterName`" because VDS removal failed. Move VMkernel adapters and VMs off the VDS port groups, then remove the VDS and cluster manually or retry cleanup."
                     }
                 }
@@ -28507,7 +29863,6 @@ Function Get-VsanWitnessNameForCluster {
     }
     return $null
 }
-
 Function Get-EffectiveHaPolicyForCluster {
 
     <#
@@ -28549,7 +29904,6 @@ Function Get-EffectiveHaPolicyForCluster {
     }
     return "reservationBased"
 }
-
 Function Get-EffectiveSupervisorServicesYamlPath {
 
     <#
@@ -28636,7 +29990,6 @@ Function Get-EffectiveSupervisorServicesYamlPath {
 
     return $null
 }
-
 Function Get-EffectiveArgoCdYamlPath {
 
     <#
@@ -28671,7 +30024,6 @@ Function Get-EffectiveArgoCdYamlPath {
 
     return Get-EffectiveSupervisorServicesYamlPath -Cluster $Cluster -CommonData $CommonData -LogicalYamlPathPropertyName $PropertyName
 }
-
 Function Resolve-InfrastructureReferencedFilePath {
 
     <#
@@ -28748,7 +30100,6 @@ Function Resolve-InfrastructureReferencedFilePath {
 
     return $trimmed
 }
-
 Function Update-InfrastructureJsonReferencedFilePaths {
 
     <#
@@ -28838,7 +30189,6 @@ Function Update-InfrastructureJsonReferencedFilePaths {
         }
     }
 }
-
 Function Get-EffectiveSupervisorServiceFlag {
 
     <#
@@ -28969,6 +30319,12 @@ Function Initialize-VcfEdgeAtScale {
         - Manages environment variables for password-less access
         - Properly disconnects from vCenter upon completion
 
+        .PARAMETER AcceptBadCheckResults
+        When set, proceeds without prompting when triggered alarms remain red (vSAN health, vLCM remediation, vSAN HCL). Mirrors the same-named switch on **Start-VcfEdgeAtScale** and is forwarded when this function is invoked from the entry point. Pass explicitly when calling this function directly (otherwise the red-alarm prompt appears even if the operator set the switch on the parent call).
+
+        .PARAMETER DelayBeforeAddingNextHostSeconds
+        Seconds to pause after each ESX host add (from the second host onward) so the cluster can settle. Default **0** (no delay). Mirrors the same-named parameter on **Start-VcfEdgeAtScale**.
+
         .PARAMETER MaximumSupervisorsPerVcenter
         Maximum number of supervisors allowed on the target vCenter before this run (default **50**, per vCenter 9 guidance). Override only for lab or vendor-directed scenarios.
 
@@ -28986,8 +30342,10 @@ Function Initialize-VcfEdgeAtScale {
 
     [CmdletBinding()]
     Param (
+        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
         [Parameter(Mandatory = $false)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
         [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(Mandatory = $false)] [Switch]$Force,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
@@ -29077,15 +30435,12 @@ Function Initialize-VcfEdgeAtScale {
             Write-LogMessage -Type INFO -Message "Beginning workflow for $($clustersToProcess.Count) edge site(s), starting with edgeSite: `"$firstEdgeSite`"."
         }
 
-        # TCP 443 reachability check. Cleanup only tests vCenter; deployment tests vCenter and ESX hosts.
-        if ($CleanUp -in @("Supervisor", "Compute", "All", "ArgoCD", "Harbor")) {
-            Write-LogMessage -Type INFO -Message "Performing vCenter reachability check (TCP 443) for cleanup..."
-            Test-VcenterAndEsxReachability -EsxHosts @() -Port 443 -VcenterName $Script:vCenterName
-        } else {
-            Write-LogMessage -Type INFO -Message "Performing vCenter and ESX reachability check (TCP 443)..."
-            $esxHostsForReach = @($clustersToProcess | ForEach-Object { $_.esxHosts } | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-            Test-VcenterAndEsxReachability -EsxHosts $esxHostsForReach -Port 443 -VcenterName $Script:vCenterName
-        }
+        # TCP 443 reachability check for vCenter only. ESX reachability is deferred until after
+        # the vCenter connect + version check so we do not burn time probing ESX hosts or
+        # prompting for ESX credentials when vCenter itself is unreachable or on an unsupported
+        # version.
+        Write-LogMessage -Type INFO -Message "Performing vCenter reachability check (TCP 443)..."
+        Test-VcenterAndEsxReachability -EsxHosts @() -Port 443 -VcenterName $Script:vCenterName
 
         # Get the password for the vCenter: when nonInteractivePassword is true and VCENTER_COMMON_PASSWORD is set, try it first; on auth failure fall back to prompt.
         $vCenterCredential = $null
@@ -29168,7 +30523,7 @@ Function Initialize-VcfEdgeAtScale {
             Write-LogMessage -Type INFO -Message "-Force is ignored when not performing cleanup."
         }
 
-        # Collect ESX credentials: when esxUniquePasswordPerHost is false or omitted (default), one password for all hosts ($esxUniquePassword true); when true, prompt per host when needed.
+        # Build the unique list of ESX hosts across all clusters for reachability/pre-flight checks.
         $allEsxHosts = @()
         foreach ($cluster in $clustersToProcess) {
             if ($cluster.esxHosts) {
@@ -29180,6 +30535,15 @@ Function Initialize-VcfEdgeAtScale {
             }
         }
 
+        # ESX TCP 443 reachability check. Deferred from the initial reachability block (which now
+        # only tests vCenter) so we fail on vCenter issues before probing ESX or prompting for ESX
+        # credentials.
+        if ($allEsxHosts.Count -gt 0) {
+            Write-LogMessage -Type INFO -Message "Performing ESX reachability check (TCP 443) for $($allEsxHosts.Count) host(s)..."
+            Test-VcenterAndEsxReachability -EsxHosts $allEsxHosts -Port 443 -VcenterName $Script:vCenterName
+        }
+
+        # Collect ESX credentials: when esxUniquePasswordPerHost is false or omitted (default), one password for all hosts ($esxUniquePassword true); when true, prompt per host when needed.
         $esxPasswords = @{}
         $esxUsedEnvPassword = $false
         if ($esxUniquePassword -and $allEsxHosts.Count -gt 0) {
@@ -29206,6 +30570,47 @@ Function Initialize-VcfEdgeAtScale {
         # Track which ESX hosts have been version-checked (9.0.0 minimum) so we only check once per host.
         $esxVersionChecked = @{}
 
+        # ESX pre-flight version check across every unique host, before we touch any cluster.
+        # Catches unsupported ESX versions across all clusters up-front so we do not create
+        # clusters 1..N-1 only to fail on cluster N. Authentication failures are tolerated here
+        # (the per-cluster Connect-Vcenter in the deployment loop has the env-var + interactive
+        # retry/fallback logic); only version mismatches fail fast.
+        if ($allEsxHosts.Count -gt 0) {
+            Write-LogMessage -Type INFO -Message "Pre-flight checking ESX version (9.0.0 minimum) across $($allEsxHosts.Count) host(s)..."
+            foreach ($esxHost in $allEsxHosts) {
+                if ($esxVersionChecked[$esxHost]) { continue }
+                if (-not $esxPasswords[$esxHost]) { continue }
+                $preflightConnected = $false
+                try {
+                    Connect-Vcenter -ServerName $esxHost -ServerCredential $esxPasswords[$esxHost] -ServerType "ESX" -SkipRetryPrompt
+                    $preflightConnected = $true
+                    $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
+                    if (-not $esxVerResult.Success) {
+                        Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
+                        throw "Deployment failed. Check logs for details."
+                    }
+                    $esxVersionChecked[$esxHost] = $true
+                } catch {
+                    $errorMessage = $_.Exception.Message
+                    if ($errorMessage -match "Authentication failed|incorrect user name or password") {
+                        Write-LogMessage -Type DEBUG -Message "ESX pre-flight auth failed for host `"$esxHost`"; deferring to per-cluster retry logic."
+                    } else {
+                        throw
+                    }
+                } finally {
+                    if ($preflightConnected) {
+                        Disconnect-Vcenter -ServerName $esxHost -ServerType "ESX" -Silence
+                    }
+                }
+            }
+            $preflightCheckedCount = @($esxVersionChecked.Values | Where-Object { $_ -eq $true }).Count
+            if ($preflightCheckedCount -eq $allEsxHosts.Count) {
+                Write-LogMessage -Type INFO -Message "ESX pre-flight version check passed for all $($allEsxHosts.Count) host(s)."
+            } else {
+                Write-LogMessage -Type INFO -Message "ESX pre-flight version check passed for $preflightCheckedCount of $($allEsxHosts.Count) host(s); remaining host(s) will be version-checked during deployment (auth retry required)."
+            }
+        }
+
         # Process each cluster.
         $clusterIndex = 0
         foreach ($cluster in $clustersToProcess) {
@@ -29215,6 +30620,7 @@ Function Initialize-VcfEdgeAtScale {
             $Script:ArgoCDPhaseStarted = $false
             $Script:HarborPhaseStarted = $false
             $Script:DidMigrateVmk0ToVdsThisRun = $false
+            $supervisorId = $null
             $clusterIndex++
             $currentEdgeSite = $cluster.edgeSite
 
@@ -29234,7 +30640,7 @@ Function Initialize-VcfEdgeAtScale {
             # Extract cluster-specific variables.
             $esxHosts = $cluster.esxHosts
 
-            # Extract networking (networkSegments instead of portGroups). Edge site suffix is applied only to VMkernel port groups (mgmt, vmotion, vsan, vsanwitness) in Set-VirtualDistributedSwitch and Add-VmkernelInterfacesFromNetworkingConfig; FLB/TKGS network segments keep their configured names.
+            # Extract networking (networkSegments instead of portGroups). Edge site suffix is applied only to VMkernel port groups (mgmt, vmotion, vsan, vsanwitness) in Set-VirtualDistributedSwitch and Add-VmkernelInterfacesFromNetworkingConfig; FLB and supervisor network segments keep their configured names.
             $networkSegments = $null
             if ($cluster.networking -and $cluster.networking.networkSegments) {
                 $networkSegments = $cluster.networking.networkSegments
@@ -29596,7 +31002,7 @@ Function Initialize-VcfEdgeAtScale {
 
             # Reconfigure HA only when we moved vmk0 to the VDS this run so vCenter uses the management network for HA heartbeats.
             if ($Script:DidMigrateVmk0ToVdsThisRun) {
-                Write-LogMessage -Type INFO -Message "Reconfiguring $clusterName for HA after moving vmk0 to vDS..."
+                Write-LogMessage -Type DEBUG -Message "Reconfiguring $clusterName for HA after moving vmk0 to vDS..."
                 Invoke-ReconfigureClusterHA -ClusterName $clusterName -DelaySeconds $Script:HaNetworkStabilizationDelaySeconds -HaPolicy $effectiveMultiHostHaPolicy
             } else {
                 Write-LogMessage -Type DEBUG -Message "No vmk0 migration performed this run for cluster `"$clusterName`". Skipping HA reconfiguration (idempotent)."
@@ -29628,7 +31034,7 @@ Function Initialize-VcfEdgeAtScale {
                     Write-LogMessage -Type DEBUG -Message "vSAN health summary unavailable for cluster `"$clusterName`"; treating advCfgSync as in-sync and skipping re-apply."
                 }
                 if ($needRebalance -or $needReapply) {
-                    Write-LogMessage -Type INFO -Message "Ensuring vSAN configuration is applied to all hosts in cluster `"$clusterName`"."
+                    Write-LogMessage -Type DEBUG -Message "Ensuring vSAN configuration is applied to all hosts in cluster `"$clusterName`"."
                     if ($needRebalance) {
                         Enable-VsanAutomaticRebalance -ClusterName $clusterName -AutomaticRebalanceThreshold 30 | Out-Null
                     } else {
@@ -29732,7 +31138,7 @@ Function Initialize-VcfEdgeAtScale {
             # Always enable vSAN performance service for vSAN clusters; then query alarms and fix fixable ones (e.g. advanced config sync). "vSphere HA host status" is auto-remediated by re-applying HA/DRS when detected.
             if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                 Enable-VsanPerformanceService -ClusterName $clusterName
-                Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName $clusterName -HaPolicy $effectiveMultiHostHaPolicy -LabEnvironment $labEnvironment
+                Invoke-VsanClusterAlarmCheckAndRemediate -AcceptBadCheckResults:$AcceptBadCheckResults.IsPresent -ClusterName $clusterName -HaPolicy $effectiveMultiHostHaPolicy -LabEnvironment $labEnvironment
             }
 
             # Verify at least one datastore is compatible with the storage policy before enabling supervisor (avoids "No compatible datastore" for Default Kubernetes Content Library).
@@ -29766,7 +31172,9 @@ Function Initialize-VcfEdgeAtScale {
                 Write-LogMessage -Type INFO -Message "ComputeOnly is set. Pre-supervisor steps complete for cluster `"$clusterName`". Skipping supervisor, Argo CD, Harbor, and other post-supervisor steps."
                 if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                     Invoke-VsanClusterHealthRetestAfterDeployment -ClusterName $clusterName
+                    Write-VsanClusterHealthReport -ClusterName $clusterName
                 }
+                Write-ClusterEsxiNodeHealthReport -ClusterName $clusterName
                 continue
             }
 
@@ -29781,7 +31189,7 @@ Function Initialize-VcfEdgeAtScale {
                 Write-LogMessage -Type DEBUG -Message "Cluster MoRef full value: `"$clusterMoRefFull`", extracted identifier (without 'domain'): `"$clusterMoRefId`""
 
                 $argocdNameSpace = ($argocdNameSpacePrefix + "-" + $clusterMoRefId) -replace "--", "-"
-                Write-LogMessage -Type INFO -Message "Forming ArgoCD namespace name `"$argocdNameSpace`" from prefix `"$argocdNameSpacePrefix`" and cluster MoRef suffix: `"$clusterMoRefId`" to ensure uniqueness."
+                Write-LogMessage -Type DEBUG -Message "Forming ArgoCD namespace name `"$argocdNameSpace`" from prefix `"$argocdNameSpacePrefix`" and cluster MoRef suffix: `"$clusterMoRefId`" to ensure uniqueness."
 
                 Write-LogMessage -Type DEBUG -Message "Checking if the namespace value specified in `"$InfrastructureJson`" is consistent with the namespace value specified in the ArgoCD deployment yaml file."
                 $isValid = Test-YamlPropertyConsistency -yamlFilePath $argoCdDeploymentYamlPath -allowMissingProperties @("metadata.namespace") -expectedValues @($originalArgoCdNameSpace) -validationName "namespace consistency"
@@ -29824,7 +31232,7 @@ Function Initialize-VcfEdgeAtScale {
                     }
                     Write-LogMessage -Type DEBUG -Message "Calling Add-ArgoCDNamespace with namespace: `"$argocdNameSpace`""
                     Add-ArgoCDNamespace -SupervisorId $supervisorId -ArgoCdNamespace $argocdNameSpace -StoragePolicyId $storagePolicyId -VmClasses $argocdVmClass
-                    Install-ArgoCDOperator -ClusterId $clusterId -SupervisorId $supervisorId -Service $argoServiceName -Version $argoServiceVersion
+                    Install-ArgoCDOperator -ClusterId $clusterId -ClusterName $clusterName -SupervisorId $supervisorId -Service $argoServiceName -Version $argoServiceVersion
 
                     # Create an argoCD Instance using the cluster name.
                     $supervisorControlPlaneVmIp = Get-SupervisorControlPlaneIp -ClusterName $clusterName
@@ -29851,9 +31259,16 @@ Function Initialize-VcfEdgeAtScale {
                 $Script:HarborPhaseStarted = $true
                 $harborServiceYamlPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
                 $harborDataValuesTemplatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
+                if ($labEnvironment -and -not $cluster.harborConfiguration) {
+                    $syntheticHarborConfiguration = [PSCustomObject]@{}
+                    $cluster | Add-Member -NotePropertyName harborConfiguration -NotePropertyValue $syntheticHarborConfiguration -Force
+                    Write-LogMessage -Type INFO -Message "Lab mode: clusters[].harborConfiguration was omitted for edge site `"$currentEdgeSite`"; attached an empty object for Harbor deploy (hostname from the Harbor data values template; self-signed TLS when tlsCrt and tlsKey are omitted)."
+                }
                 $harborConfig = $cluster.harborConfiguration
                 $harborTempYamlPath = $null
                 $harborYamlSaveDir = $null
+                $harborUsedLabGeneratedTls = $false
+                $labHarborSelfSignedPaths = $null
                 if ($SaveHarborYaml) {
                     $harborYamlSaveDir = Join-Path -Path $PSScriptRoot -ChildPath "HarborYaml"
                     if (-not (Test-Path -Path $harborYamlSaveDir)) {
@@ -29867,14 +31282,55 @@ Function Initialize-VcfEdgeAtScale {
                     }
                 }
                 try {
+                    $harborInstallSucceeded = $false
                     # Build per-site Harbor data values file from harborConfiguration stanza.
                     # StoragePolicyName is the VM storage policy name; New-HarborDataValuesFile lowercases
                     # and replaces spaces with dashes to match the Kubernetes StorageClass naming convention.
-                    $harborDataValuesParams = @{
-                        EdgeSite               = $currentEdgeSite
-                        HarborTemplateFilePath = $harborDataValuesTemplatePath
-                        Hostname               = $harborConfig.hostname
-                        StoragePolicyName      = $storagePolicyName
+                    $effectiveHarborHostname = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $inputData.common -LabEnvironmentEnabled $labEnvironment
+                    if ([String]::IsNullOrWhiteSpace($effectiveHarborHostname)) {
+                        Write-LogMessage -Type ERROR -Message "Could not resolve Harbor hostname for edge site `"$currentEdgeSite`". Set clusters[].harborConfiguration.hostname or use lab mode with a Harbor data values template that defines hostname."
+                        throw "Deployment failed. Check logs for details."
+                    }
+                    if (-not (Test-JsonPropertyFormat -InputData $effectiveHarborHostname -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname (deploy)")) {
+                        Write-LogMessage -Type ERROR -Message "Resolved Harbor hostname `"$effectiveHarborHostname`" for edge site `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address (deploy-time check)."
+                        throw "Deployment failed. Check logs for details."
+                    }
+                    if ($harborConfig.PSObject.Properties["hostname"]) {
+                        $harborConfig.hostname = $effectiveHarborHostname
+                    } else {
+                        $harborConfig | Add-Member -NotePropertyName hostname -NotePropertyValue $effectiveHarborHostname -Force
+                    }
+
+                    $hasTlsCrtPath = ($null -ne $harborConfig.PSObject.Properties["tlsCrt"]) -and -not [String]::IsNullOrWhiteSpace([string]$harborConfig.tlsCrt)
+                    $hasTlsKeyPath = ($null -ne $harborConfig.PSObject.Properties["tlsKey"]) -and -not [String]::IsNullOrWhiteSpace([string]$harborConfig.tlsKey)
+                    if ($labEnvironment -and -not $hasTlsCrtPath -and -not $hasTlsKeyPath) {
+                        $labHarborSelfSignedPaths = New-LabHarborSelfSignedTlsMaterialFiles -DnsName $effectiveHarborHostname -EdgeSite $currentEdgeSite
+                        $harborDataValuesParams = @{
+                            CaCrtPath              = $labHarborSelfSignedPaths.CaCrtPath
+                            EdgeSite               = $currentEdgeSite
+                            HarborTemplateFilePath = $harborDataValuesTemplatePath
+                            Hostname               = $effectiveHarborHostname
+                            StoragePolicyName      = $storagePolicyName
+                            TlsCrtPath             = $labHarborSelfSignedPaths.TlsCrtPath
+                            TlsKeyPath             = $labHarborSelfSignedPaths.TlsKeyPath
+                        }
+                        if ($harborConfig.PSObject.Properties["caCrt"]) {
+                            $harborConfig.caCrt = $labHarborSelfSignedPaths.CaCrtPath
+                        } else {
+                            $harborConfig | Add-Member -NotePropertyName caCrt -NotePropertyValue $labHarborSelfSignedPaths.CaCrtPath -Force
+                        }
+                        $harborUsedLabGeneratedTls = $true
+                        Write-LogMessage -Type INFO -Message "Lab mode: using generated self-signed TLS for Harbor on edge site `"$currentEdgeSite`" (hostname `"$effectiveHarborHostname`")."
+                    } else {
+                        $harborDataValuesParams = @{
+                            EdgeSite               = $currentEdgeSite
+                            HarborTemplateFilePath = $harborDataValuesTemplatePath
+                            Hostname               = $effectiveHarborHostname
+                            StoragePolicyName      = $storagePolicyName
+                        }
+                        if (-not [String]::IsNullOrWhiteSpace($harborConfig.tlsCrt))              { $harborDataValuesParams["TlsCrtPath"]            = $harborConfig.tlsCrt }
+                        if (-not [String]::IsNullOrWhiteSpace($harborConfig.tlsKey))              { $harborDataValuesParams["TlsKeyPath"]            = $harborConfig.tlsKey }
+                        if (-not [String]::IsNullOrWhiteSpace($harborConfig.caCrt))               { $harborDataValuesParams["CaCrtPath"]             = $harborConfig.caCrt }
                     }
                     if (-not [String]::IsNullOrWhiteSpace($harborConfig.registryVolumeSize))  { $harborDataValuesParams["RegistryVolumeSize"]  = $harborConfig.registryVolumeSize }
                     if (-not [String]::IsNullOrWhiteSpace($harborConfig.jobserviceVolumeSize)) { $harborDataValuesParams["JobserviceVolumeSize"] = $harborConfig.jobserviceVolumeSize }
@@ -29887,9 +31343,6 @@ Function Initialize-VcfEdgeAtScale {
                     if (-not [String]::IsNullOrWhiteSpace($harborConfig.coreSecret))          { $harborDataValuesParams["CoreSecret"]            = $harborConfig.coreSecret }
                     if (-not [String]::IsNullOrWhiteSpace($harborConfig.jobserviceSecret))    { $harborDataValuesParams["JobserviceSecret"]      = $harborConfig.jobserviceSecret }
                     if (-not [String]::IsNullOrWhiteSpace($harborConfig.registrySecret))      { $harborDataValuesParams["RegistrySecret"]        = $harborConfig.registrySecret }
-                    if (-not [String]::IsNullOrWhiteSpace($harborConfig.tlsCrt))              { $harborDataValuesParams["TlsCrtPath"]            = $harborConfig.tlsCrt }
-                    if (-not [String]::IsNullOrWhiteSpace($harborConfig.tlsKey))              { $harborDataValuesParams["TlsKeyPath"]            = $harborConfig.tlsKey }
-                    if (-not [String]::IsNullOrWhiteSpace($harborConfig.caCrt))               { $harborDataValuesParams["CaCrtPath"]             = $harborConfig.caCrt }
 
                     $harborTempYamlPath = New-HarborDataValuesFile @harborDataValuesParams
                     # Read back from file; CRLF normalization is applied again in Install-HarborSupervisorService
@@ -29902,15 +31355,22 @@ Function Initialize-VcfEdgeAtScale {
                     $harborServiceName, $harborServiceVersion = Get-ArgoCDServiceDetail -Path $harborServiceYamlPath
                     Write-LogMessage -Type DEBUG -Message "Harbor service: name=`"$harborServiceName`", version=`"$harborServiceVersion`"."
 
-                    $harborInstallSucceeded = $false
-                    Install-HarborSupervisorService -ClusterId $clusterId -SupervisorId $supervisorId -Service $harborServiceName -Version $harborServiceVersion -YamlServiceConfig $harborYamlContent
+                    Install-HarborSupervisorService -ClusterId $clusterId -ClusterName $clusterName -SupervisorId $supervisorId -Service $harborServiceName -Version $harborServiceVersion -YamlServiceConfig $harborYamlContent
                     $harborInstallSucceeded = $true
                     Write-LogMessage -Type INFO -Message "Harbor Supervisor Service installed successfully for edge site `"$currentEdgeSite`" (hostname: `"$($harborConfig.hostname)`")."
-                    Show-HarborInstanceDetails -ClusterName $clusterName -ContextName $contextName -HarborConfig $harborConfig -InsecureTls:$InsecureTls -SupervisorId $supervisorId -YamlFilePath $harborTempYamlPath
+                    Show-HarborInstanceDetails -ClusterName $clusterName -ContextName $contextName -HarborConfig $harborConfig -InsecureTls:$InsecureTls -LabGeneratedSelfSignedTls:$harborUsedLabGeneratedTls -SupervisorId $supervisorId -YamlFilePath $harborTempYamlPath
                     Add-HarborContainerImageRegistry -ClusterName $clusterName -ContextName $contextName -HarborConfig $harborConfig -InsecureTls:$InsecureTls -SupervisorId $supervisorId -YamlFilePath $harborTempYamlPath
                 } catch {
                     throw
                 } finally {
+                    if ($labHarborSelfSignedPaths) {
+                        foreach ($labTlsPath in @($labHarborSelfSignedPaths.TlsCrtPath, $labHarborSelfSignedPaths.TlsKeyPath, $labHarborSelfSignedPaths.CaCrtPath)) {
+                            if (-not [String]::IsNullOrWhiteSpace($labTlsPath) -and (Test-Path -LiteralPath $labTlsPath)) {
+                                Remove-Item -LiteralPath $labTlsPath -Force -ErrorAction SilentlyContinue
+                                Write-LogMessage -Type DEBUG -Message "Removed lab-generated Harbor TLS temp file: `"$labTlsPath`"."
+                            }
+                        }
+                    }
                     if (-not [String]::IsNullOrWhiteSpace($harborTempYamlPath) -and (Test-Path -Path $harborTempYamlPath)) {
                         if ($harborInstallSucceeded) {
                             if ($harborYamlSaveDir) {
@@ -29922,9 +31382,20 @@ Function Initialize-VcfEdgeAtScale {
                                 Write-LogMessage -Type DEBUG -Message "Cleaned up temporary Harbor data values file: `"$harborTempYamlPath`"."
                             }
                         } else {
-                            # Preserve the file on failure so it can be inspected to diagnose YAML issues.
+                            # On failure, write a redacted copy for diagnostics and remove the original secrets file.
                             # To verify the storage class exists: kubectl get storageclass (in supervisor context).
-                            Write-LogMessage -Type WARNING -Message "Temporary Harbor data values file preserved for diagnostics: `"$harborTempYamlPath`". This file contains Harbor passwords and secrets in plain text. Delete it immediately after resolving the issue."
+                            try {
+                                $harborRedactedPath = [System.IO.Path]::ChangeExtension($harborTempYamlPath, ".redacted.yml")
+                                $harborRawYaml = Get-Content -Path $harborTempYamlPath -Raw -Encoding UTF8 -ErrorAction Stop
+                                $harborRedactedYaml = $harborRawYaml -replace '(?m)^(\s*(?:harborAdminPassword|secretKey|password|secret|tls\.key|ca\.key):\s+)\S.*$', '$1[REDACTED]'
+                                Set-Content -Path $harborRedactedPath -Value $harborRedactedYaml -Encoding UTF8 -ErrorAction SilentlyContinue
+                                Write-LogMessage -Type WARNING -Message "Harbor deployment failed. A redacted copy of the data values file is preserved for diagnostics: `"$harborRedactedPath`"."
+                            } catch {
+                                Write-LogMessage -Type WARNING -Message "Harbor deployment failed. Could not write redacted diagnostics file: $($_.Exception.Message)."
+                            } finally {
+                                Remove-Item -Path $harborTempYamlPath -Force -ErrorAction SilentlyContinue
+                                Write-LogMessage -Type DEBUG -Message "Removed secrets Harbor data values file: `"$harborTempYamlPath`"."
+                            }
                         }
                     }
                 }
@@ -29933,8 +31404,13 @@ Function Initialize-VcfEdgeAtScale {
             }
 
             Write-LogMessage -Type INFO -Message "Completed deployment for cluster with edgeSite: $currentEdgeSite"
+            Write-ClusterEsxiNodeHealthReport -ClusterName $clusterName
+            if (-not [String]::IsNullOrWhiteSpace($supervisorId)) {
+                Write-SupervisorHealthReport -ClusterName $clusterName -SupervisorId $supervisorId
+            }
             if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                 Invoke-VsanClusterHealthRetestAfterDeployment -ClusterName $clusterName
+                Write-VsanClusterHealthReport -ClusterName $clusterName
             }
             # Note: We do NOT disconnect from vCenter between clusters when they share the same vCenter FQDN
             # (all clusters use $Script:vCenterName from common.vCenterName). Disconnection only occurs in the
@@ -29976,7 +31452,7 @@ Function Initialize-VcfEdgeAtScale {
                     } elseif ($Script:ArgoCDPhaseStarted -and -not [String]::IsNullOrWhiteSpace($argocdNameSpace)) {
                         Write-LogMessage -Type INFO -Message "ArgoCD deployment failure for edgeSite `"$currentEdgeSite`"; rollback decision required (ArgoCD-only: remove namespace, supervisor left intact for idempotent retry)."
                         try {
-                            Invoke-ArgoCDOnlyRollback -ArgoCDNamespace $argocdNameSpace -ClusterName $clusterName
+                            Invoke-ArgoCDOnlyRollback -ArgoCDNamespace $argocdNameSpace -ClusterName $clusterName -SupervisorId $supervisorId
                         } catch {
                             if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
                                 Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
@@ -29987,7 +31463,7 @@ Function Initialize-VcfEdgeAtScale {
                     } else {
                         Write-LogMessage -Type INFO -Message "Supervisor deployment failure for edgeSite `"$currentEdgeSite`"; running supervisor-only rollback (compute/vSAN/VDS left intact)."
                         try {
-                            Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1)
+                            Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1) -SupervisorId $supervisorId
                         } catch {
                             if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
                                 Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
@@ -30000,7 +31476,7 @@ Function Initialize-VcfEdgeAtScale {
                     # Supervisor creation failed (e.g. API error or timeout; user may have already deactivated in Get-OrCreateSupervisor). If RollbackAttempted was set there, we skip this block via the check above.
                     Write-LogMessage -Type INFO -Message "Supervisor creation failed for edgeSite `"$currentEdgeSite`" (compute passed); running supervisor-only rollback (compute/vSAN/VDS left intact)."
                     try {
-                        Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1)
+                        Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1) -SupervisorId $supervisorId
                     } catch {
                         if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
                             Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
@@ -30015,6 +31491,8 @@ Function Initialize-VcfEdgeAtScale {
                         if ($rollbackDecision -eq "DoNotRollback") {
                             throw $Script:RollbackSkippedContinueToNextSiteMessage
                         }
+                        $deploymentFailureMessage = $_.Exception.Message
+                        $vsanRollbackCompleted = $false
                         try {
                             $rollbackParams = @{ ClusterName = $clusterName; StoragePolicyType = $storagePolicyType; SkipClusterRemoval = $true; SuppressPrompt = $true }
                             if ($storagePolicyTagCatalog) {
@@ -30058,10 +31536,12 @@ Function Initialize-VcfEdgeAtScale {
                                 throw "Rollback incomplete: supervisor is active on cluster `"$clusterName`" from a prior deployment. Run -CleanUp Supervisor first, then -CleanUp Compute."
                             }
                             $vdsRemovalSucceeded = $true
+                            Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
                             try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName } catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" during rollback: $($_.Exception.Message)." }
                             try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" } catch { $vdsRemovalSucceeded = $false }
                             try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" } catch { $vdsRemovalSucceeded = $false }
                             if ($vdsRemovalSucceeded) {
+                                Write-LogMessage -Type INFO -CompletePending -Message "Done"
                                 try {
                                     Remove-ClusterSafely -ClusterName $clusterName
                                 } catch {
@@ -30080,16 +31560,22 @@ Function Initialize-VcfEdgeAtScale {
                                 }
                             } else {
                                 $Script:RollbackFailed = $true
+                                Write-LogMessage -Type WARNING -CompletePending -Message "Partial (see warnings above)"
                                 Write-LogMessage -Type ERROR -Message "VDS removal failed during vSAN rollback; could not remove cluster. Remove VMkernel adapters and VDS manually, then remove the cluster. Script will exit with failure."
                                 throw "Deployment failed. VDS could not be removed during rollback (port groups in use). Remove VMkernel adapters and VMs off the VDS port groups, then remove the VDS and cluster manually. Check logs for details."
                             }
                             Write-LogMessage -Type INFO -Message "Complete rollback finished for edgeSite `"$currentEdgeSite`" (VDS and cluster removed)."
+                            $vsanRollbackCompleted = $true
                         } catch {
                             if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
                                 Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
                                 continue
                             }
                             throw
+                        }
+                        # Rollback succeeded; throw a clean message describing what failed and what to fix.
+                        if ($vsanRollbackCompleted) {
+                            throw "Deployment failed for edgeSite `"$currentEdgeSite`" (rollback completed). $deploymentFailureMessage"
                         }
                     } elseif ($storagePolicyType -eq "VMFS") {
                         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "deployment failure (edgeSite `"$currentEdgeSite`"); compute rollback" -SingleSite:($clustersToProcess.Count -eq 1)
@@ -30123,10 +31609,12 @@ Function Initialize-VcfEdgeAtScale {
                             throw "Rollback incomplete: supervisor is active on cluster `"$clusterName`" from a prior deployment. Run -CleanUp Supervisor first, then -CleanUp Compute."
                         }
                         $vdsRemovalSucceeded = $true
+                        Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
                         try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName } catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" during rollback: $($_.Exception.Message)." }
                         try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" } catch { $vdsRemovalSucceeded = $false }
                         try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" } catch { $vdsRemovalSucceeded = $false }
                         if ($vdsRemovalSucceeded) {
+                            Write-LogMessage -Type INFO -CompletePending -Message "Done"
                             try {
                                 Remove-VmfsDatastoreForCluster -ClusterName $clusterName -DatastoreName $datastoreName
                             } catch {
@@ -30134,6 +31622,7 @@ Function Initialize-VcfEdgeAtScale {
                             }
                             try { Remove-ClusterSafely -ClusterName $clusterName } catch { Write-LogMessage -Type WARNING -Message "Could not remove cluster during rollback: $($_.Exception.Message)." }
                         } else {
+                            Write-LogMessage -Type WARNING -CompletePending -Message "Partial (see warnings above)"
                             Write-LogMessage -Type WARNING -Message "VDS removal failed during rollback; skipping VMFS datastore and cluster removal. Move VMkernel adapters and VMs off the VDS port groups, then remove the VDS, datastore, and cluster manually if desired."
                         }
                         Write-LogMessage -Type INFO -Message "Compute rollback completed for edgeSite `"$currentEdgeSite`"."
@@ -30902,7 +32391,6 @@ Function ConvertTo-YamlValue {
         return $Value.ToString()
     }
 }
-
 Function Get-NetworkSegmentDetailsFromInputData {
     <#
         .SYNOPSIS
@@ -30956,7 +32444,6 @@ Function Get-NetworkSegmentDetailsFromInputData {
 
     return $networkSegmentDetails
 }
-
 Function Get-DuplicateNetworkSegmentGroups {
     <#
         .SYNOPSIS
@@ -30984,7 +32471,6 @@ Function Get-DuplicateNetworkSegmentGroups {
     $groupedNames = $NetworkSegmentDetails | Group-Object -Property Name
     return $groupedNames | Where-Object { $_.Count -gt 1 }
 }
-
 Function Test-NetworkSegmentNameUniqueness {
 
     <#
@@ -31080,7 +32566,6 @@ Function Test-NetworkSegmentNameUniqueness {
 
     return $validationResult
 }
-
 Function Invoke-HarborEnvVarPreflight {
 
     <#
@@ -31167,6 +32652,574 @@ Function Invoke-HarborEnvVarPreflight {
 
 #region Exported — entry points, templates, configuration help
 
+Function Test-VcfEdgeAtScaleDeploymentRootInitialized {
+
+    <#
+        .SYNOPSIS
+        Returns whether a directory matches a completed Initialize layout (folders, JSON, shipped YAML).
+
+        .NOTES
+        Private helper; not exported. Used by Invoke-VcfEdgeAtScaleModuleInitialize only.
+
+        .DESCRIPTION
+        True when Docs, Logs, ServicesYaml exist, root infrastructure.json and supervisor.json exist, and all
+        VcfEdgeAtScaleServiceYamlTemplateFileNames files exist under ServicesYaml.
+
+        .PARAMETER DeploymentRoot
+        Resolved full path to the deployment base directory.
+
+        .OUTPUTS
+        [Boolean]
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DeploymentRoot
+    )
+
+    foreach ($dirName in @("Docs", "Logs", "ServicesYaml")) {
+        $childPath = Join-Path -Path $DeploymentRoot -ChildPath $dirName
+        if (-not (Test-Path -LiteralPath $childPath -PathType Container)) {
+            return $false
+        }
+    }
+    $infrastructurePath = Join-Path -Path $DeploymentRoot -ChildPath "infrastructure.json"
+    $supervisorPath = Join-Path -Path $DeploymentRoot -ChildPath "supervisor.json"
+    if (-not (Test-Path -LiteralPath $infrastructurePath -PathType Leaf)) {
+        return $false
+    }
+    if (-not (Test-Path -LiteralPath $supervisorPath -PathType Leaf)) {
+        return $false
+    }
+    $servicesYamlDir = Join-Path -Path $DeploymentRoot -ChildPath "ServicesYaml"
+    foreach ($yamlBaseName in $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames) {
+        $yamlPath = Join-Path -Path $servicesYamlDir -ChildPath $yamlBaseName
+        if (-not (Test-Path -LiteralPath $yamlPath -PathType Leaf)) {
+            return $false
+        }
+    }
+    return $true
+}
+
+Function Invoke-VcfEdgeAtScaleModuleInitialize {
+
+    <#
+        .SYNOPSIS
+            Interactively creates the on-disk layout for VcfEdgeAtScale configuration, logs, YAML, and documentation.
+
+        .DESCRIPTION
+            Prompts for a base directory (default joins the user home directory with VCFEdgeAtScale), creates Docs,
+            Logs, and ServicesYaml when missing, and copies bundled Supervisor service YAML templates and documentation files from the
+            Templates directory (including EXAMPLE.rtf and README.rtf) with overwrite prompts (default N). Missing
+            documentation sources under Templates are skipped with a warning (initialize does not fail for those; the
+            summary block at the end lists what succeeded). Missing
+            Supervisor service YAML or infrastructure/supervisor JSON templates still fails with guidance to reinstall the
+            module or copy files from the GitHub repository. Works for a new or existing configuration directory. When -TemplatesOnly is set, only YAML and Docs files are refreshed; root
+            infrastructure.json and supervisor.json are not created or replaced. Otherwise seeds those JSON files when absent,
+            and when they already exist offers optional replacement from module templates (infrastructure.json paths under
+            ServicesYaml are updated when written from the template). Persists VcfEdgeatScaleRootDirectory via
+            [System.Environment]::SetEnvironmentVariable (User scope; cross-platform) so new sessions inherit it automatically.
+            When VcfEdgeatScaleRootDirectory points at an existing initialized layout, asks whether to initialize a different directory instead of re-prompting for the base path.
+
+        .PARAMETER TemplatesOnly
+            When set, copies only ServicesYaml and Docs templates; does not create or replace infrastructure.json or supervisor.json at the base directory.
+
+        .NOTES
+            Private to the module. Invoked from Start-VcfEdgeAtScale -Initialize only. Requires an interactive host for Read-Host.
+            User-visible status uses Write-Host (not Write-Output) because Start-VcfEdgeAtScale assigns this function's output to $null, which would otherwise hide success-stream output.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$TemplatesOnly
+    )
+
+    $templatesPath = Get-ModuleTemplatesPath
+    $templateRestoreHint = "Reinstall the VcfEdgeAtScale module (for example Install-Module VcfEdgeAtScale -Force) or copy missing files from https://github.com/vmware/powershell-module-for-vcf-edge-at-scale (see the VcfEdgeAtScale/Templates folder in that repository)."
+    $defaultBaseDirectory = Join-Path -Path $HOME -ChildPath "VCFEdgeAtScale"
+
+    Write-Host ""
+    Write-Host "VcfEdgeAtScale initialize" -ForegroundColor Cyan
+    if ($TemplatesOnly) {
+        Write-Host "  Mode: templates only — refresh ServicesYaml and Docs; root JSON is not modified." -ForegroundColor Gray
+    } else {
+        Write-Host "  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace." -ForegroundColor Gray
+    }
+
+    $baseDirectory = $null
+    $envRootResolved = $null
+    $envRootRaw = $env:VcfEdgeatScaleRootDirectory
+    if (-not [String]::IsNullOrWhiteSpace($envRootRaw)) {
+        $trimmedEnvRoot = $envRootRaw.Trim()
+        if (-not (Test-Path -LiteralPath $trimmedEnvRoot)) {
+            Write-Host ""
+            Write-Host "  Note: `$env:VcfEdgeatScaleRootDirectory pointed at a path that does not exist:" -ForegroundColor Yellow
+            Write-Host "    $trimmedEnvRoot" -ForegroundColor White
+            $env:VcfEdgeatScaleRootDirectory = $null
+            try {
+                [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", $null, [System.EnvironmentVariableTarget]::User)
+                Write-Host "  Stale value cleared from session and user environment. Choose a folder below." -ForegroundColor Green
+            } catch {
+                $env:VcfEdgeatScaleRootDirectory = $null
+                Write-Host "  Stale value cleared from session. User-level clear failed: $($_.Exception.Message)" -ForegroundColor Yellow
+            }
+        } elseif (-not (Test-Path -LiteralPath $trimmedEnvRoot -PathType Container)) {
+            Write-Host ""
+            Write-Host "  Note: `$env:VcfEdgeatScaleRootDirectory points at a path that exists but is not a folder:" -ForegroundColor Yellow
+            Write-Host "    $trimmedEnvRoot" -ForegroundColor White
+            Write-Host "  Choose a deployment root folder below (default: $defaultBaseDirectory)." -ForegroundColor Gray
+        } else {
+            try {
+                $envRootResolved = (Resolve-Path -LiteralPath $trimmedEnvRoot -ErrorAction Stop).Path
+            } catch {
+                $envRootResolved = $null
+            }
+            if ($envRootResolved -and (Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot $envRootResolved)) {
+                Write-Host ""
+                Write-Host "  Detected: `$env:VcfEdgeatScaleRootDirectory` is set in this session." -ForegroundColor Green
+                Write-Host "    Value: $envRootRaw" -ForegroundColor White
+                Write-Host "  That path resolves to a full Initialize layout (Docs, Logs, ServicesYaml, root JSON, shipped YAML under ServicesYaml):" -ForegroundColor Green
+                Write-Host "    $envRootResolved" -ForegroundColor White
+                try {
+                    $useDifferentDirectoryResponse = Read-Host "Initialize a different directory instead? (y/N)"
+                } catch {
+                    throw "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
+                }
+                switch -Regex ($useDifferentDirectoryResponse.Trim()) {
+                    "^(?i)(y|yes)$" {
+                        Write-Host "  Choose a new base path below (default remains Join-Path `$HOME 'VCFEdgeAtScale')." -ForegroundColor Gray
+                    }
+                    default {
+                        $baseDirectory = $envRootResolved
+                    }
+                }
+            } elseif ($envRootResolved) {
+                Write-Host ""
+                Write-Host "  Note: VcfEdgeatScaleRootDirectory is set, but this folder is not a complete initialized layout:" -ForegroundColor Yellow
+                Write-Host "  $envRootResolved" -ForegroundColor Yellow
+                Write-Host "  You will be prompted for the base directory below (default: $defaultBaseDirectory)." -ForegroundColor Gray
+            }
+        }
+    }
+
+    if ($null -eq $baseDirectory) {
+        Write-Host ""
+        Write-Host -NoNewline "  Default base directory:" -ForegroundColor White
+        Write-Host "  $defaultBaseDirectory`n" -ForegroundColor Cyan
+        try {
+            $userBaseResponse = Read-Host "Press Enter to use the default, or type a full directory path"
+        } catch {
+            throw "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
+        }
+
+        switch ([String]::IsNullOrWhiteSpace($userBaseResponse)) {
+            $true { $baseDirectory = $defaultBaseDirectory }
+            default { $baseDirectory = $userBaseResponse.Trim() }
+        }
+    }
+
+    if ([String]::IsNullOrWhiteSpace($baseDirectory)) {
+        throw "Base directory cannot be empty after input."
+    }
+
+    $baseDirectoryExistedBefore = Test-Path -LiteralPath $baseDirectory -PathType Container
+    $baseDirectoryWasCreated = $false
+    if (-not $baseDirectoryExistedBefore) {
+        try {
+            $null = New-Item -ItemType Directory -Path $baseDirectory -Force -ErrorAction Stop
+            $baseDirectoryWasCreated = $true
+        } catch {
+            throw "Failed to create base directory `"$baseDirectory`": $($_.Exception.Message)"
+        }
+    }
+
+    try {
+        $resolvedBaseDirectory = (Resolve-Path -LiteralPath $baseDirectory).Path
+    } catch {
+        throw "Could not resolve the base directory path after create. Path: $baseDirectory. $($_.Exception.Message)"
+    }
+    $subdirectories = @("Docs", "Logs", "ServicesYaml")
+    $subdirectoriesCreated = [System.Collections.Generic.List[String]]::new()
+    foreach ($subdirectoryName in $subdirectories) {
+        $childPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $subdirectoryName
+        if (-not (Test-Path -LiteralPath $childPath -PathType Container)) {
+            try {
+                $null = New-Item -ItemType Directory -Path $childPath -Force -ErrorAction Stop
+                $null = $subdirectoriesCreated.Add($subdirectoryName)
+            } catch {
+                throw "Failed to create directory `"$childPath`": $($_.Exception.Message)"
+            }
+        }
+    }
+
+    $servicesYamlDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath "ServicesYaml"
+    $docsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath "Docs"
+
+    Write-Host ""
+    Write-Host "  Supervisor service YAML (ServicesYaml)" -ForegroundColor Magenta
+    foreach ($templateFileName in $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames) {
+        $fromPath = Join-Path -Path $templatesPath -ChildPath $templateFileName
+        if (-not (Test-Path -LiteralPath $fromPath -PathType Leaf)) {
+            throw "Required module template is missing: $fromPath. $templateRestoreHint"
+        }
+        $toPath = Join-Path -Path $servicesYamlDirectory -ChildPath $templateFileName
+        $shouldCopyServiceYaml = $true
+        if (Test-Path -LiteralPath $toPath -PathType Leaf) {
+            try {
+                $overwriteAnswer = Read-Host "File `"$toPath`" already exists. Overwrite? (y/N)"
+            } catch {
+                throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
+            }
+            switch ($overwriteAnswer) {
+                "y" { }
+                "Y" { }
+                default {
+                    $shouldCopyServiceYaml = $false
+                }
+            }
+        }
+        if (-not $shouldCopyServiceYaml) {
+            Write-Host "    Skipped (keep existing): $templateFileName" -ForegroundColor Yellow
+            continue
+        }
+        try {
+            Copy-Item -LiteralPath $fromPath -Destination $toPath -Force -ErrorAction Stop
+        } catch {
+            throw "Failed to copy `"$templateFileName`" to `"$toPath`": $($_.Exception.Message)"
+        }
+        Write-Host "    Copied: $templateFileName" -ForegroundColor Green
+    }
+
+    $rtfDocumentationPairs = @(
+        @{ DestinationFileName = "EXAMPLE.rtf"; SourcePath = (Join-Path -Path $templatesPath -ChildPath "EXAMPLE.rtf") },
+        @{ DestinationFileName = "README.rtf"; SourcePath = (Join-Path -Path $templatesPath -ChildPath "README.rtf") }
+    )
+
+    Write-Host ""
+    Write-Host "  Documentation (Docs)" -ForegroundColor Magenta
+
+    # RTF files may be customized by the user; prompt before overwriting.
+    foreach ($documentationPair in $rtfDocumentationPairs) {
+        if (-not (Test-Path -LiteralPath $documentationPair.SourcePath -PathType Leaf)) {
+            Write-Warning "Optional documentation file '$($documentationPair.DestinationFileName)' is not in the module Templates folder (source not found at $($documentationPair.SourcePath)). Skipping this copy; Initialize continues. $templateRestoreHint"
+            continue
+        }
+        $destinationDocumentationPath = Join-Path -Path $docsDirectory -ChildPath $documentationPair.DestinationFileName
+        $shouldCopyDocumentation = $true
+        if (Test-Path -LiteralPath $destinationDocumentationPath -PathType Leaf) {
+            try {
+                $overwriteDocumentationAnswer = Read-Host "File `"$destinationDocumentationPath`" already exists. Overwrite? (y/N)"
+            } catch {
+                throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
+            }
+            switch ($overwriteDocumentationAnswer) {
+                "y" { }
+                "Y" { }
+                default {
+                    $shouldCopyDocumentation = $false
+                }
+            }
+        }
+        if (-not $shouldCopyDocumentation) {
+            Write-Host "    Skipped (keep existing): $($documentationPair.DestinationFileName)" -ForegroundColor Yellow
+            continue
+        }
+        try {
+            Copy-Item -LiteralPath $documentationPair.SourcePath -Destination $destinationDocumentationPath -Force -ErrorAction Stop
+        } catch {
+            Write-Warning "Skipping documentation copy '$($documentationPair.DestinationFileName)' after error: $($_.Exception.Message) $templateRestoreHint"
+            continue
+        }
+        Write-Host "    Copied: $($documentationPair.DestinationFileName)" -ForegroundColor Green
+    }
+
+    # Help JSON files are not user-edited; auto-refresh silently when the module version changes.
+    $helpJsonFileNames = @("infrastructure-config-help.json", "supervisor-config-help.json")
+    foreach ($helpFileName in $helpJsonFileNames) {
+        $helpTemplatePath = Join-Path -Path $templatesPath -ChildPath $helpFileName
+        $helpDocsPath = Join-Path -Path $docsDirectory -ChildPath $helpFileName
+        Update-HelpJsonIfStale -DocsPath $helpDocsPath -TemplatePath $helpTemplatePath
+        if (Test-Path -LiteralPath $helpDocsPath -PathType Leaf) {
+            Write-Host "    Help JSON current: $helpFileName" -ForegroundColor Green
+        }
+    }
+
+    $infrastructureDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "infrastructure.json"
+    $supervisorDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "supervisor.json"
+    $infrastructureTemplatePath = Join-Path -Path $templatesPath -ChildPath "infrastructure.json"
+    $supervisorTemplatePath = Join-Path -Path $templatesPath -ChildPath "supervisor.json"
+
+    if (-not $TemplatesOnly) {
+        Write-Host ""
+        Write-Host "  Root JSON files" -ForegroundColor Magenta
+        $shouldWriteInfrastructureFromTemplate = $false
+        if (-not (Test-Path -LiteralPath $infrastructureDestinationPath -PathType Leaf)) {
+            $shouldWriteInfrastructureFromTemplate = $true
+        } else {
+            Write-Host "    infrastructure.json already exists at $infrastructureDestinationPath." -ForegroundColor White
+            try {
+                $refreshInfrastructureAnswer = Read-Host "Replace infrastructure.json from the module template (common.supervisorServices.parentDirectory -> this ServicesYaml; Harbor TLS paths unchanged)? (y/N)"
+            } catch {
+                throw "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
+            }
+            switch ($refreshInfrastructureAnswer) {
+                "y" { $shouldWriteInfrastructureFromTemplate = $true }
+                "Y" { $shouldWriteInfrastructureFromTemplate = $true }
+                default {
+                    Write-Host "    Kept existing infrastructure.json." -ForegroundColor Yellow
+                }
+            }
+        }
+        if ($shouldWriteInfrastructureFromTemplate) {
+            if (-not (Test-Path -LiteralPath $infrastructureTemplatePath -PathType Leaf)) {
+                throw "Cannot create infrastructure.json from module template: file not found at $infrastructureTemplatePath. $templateRestoreHint"
+            }
+            $infrastructureTemplateText = Get-Content -LiteralPath $infrastructureTemplatePath -Raw -ErrorAction Stop
+            # Set only common.supervisorServices.parentDirectory to ServicesYaml. Do not overwrite
+            # clusters[].harborConfiguration.parentDirectory (TLS PEM directory). Avoid ConvertTo-Json so template
+            # formatting (for example nicList) stays as shipped.
+            $escapedParentDirectoryForJson = $servicesYamlDirectory.Replace('\', '\\').Replace('"', '\"')
+            $supervisorParentPattern = '(?s)("common"\s*:\s*\{.*?"supervisorServices"\s*:\s*\{.*?"parentDirectory"\s*:\s*")([^"]*)(")'
+            $supervisorParentMatch = [regex]::Match($infrastructureTemplateText, $supervisorParentPattern)
+            if (-not $supervisorParentMatch.Success) {
+                throw "Module template infrastructure.json must include common.supervisorServices.parentDirectory for Initialize. $templateRestoreHint"
+            }
+            $infrastructureJsonText = $infrastructureTemplateText.Substring(0, $supervisorParentMatch.Index) + $supervisorParentMatch.Groups[1].Value + $escapedParentDirectoryForJson + $supervisorParentMatch.Groups[3].Value + $infrastructureTemplateText.Substring($supervisorParentMatch.Index + $supervisorParentMatch.Length)
+            try {
+                $null = $infrastructureJsonText | ConvertFrom-Json -ErrorAction Stop
+            } catch {
+                throw "After setting common.supervisorServices.parentDirectory, infrastructure JSON did not parse: $($_.Exception.Message)"
+            }
+            try {
+                Set-Content -LiteralPath $infrastructureDestinationPath -Value $infrastructureJsonText -Encoding utf8 -ErrorAction Stop
+            } catch {
+                throw "Failed to write infrastructure JSON to `"$infrastructureDestinationPath`": $($_.Exception.Message)"
+            }
+            Write-Host "    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged)." -ForegroundColor Green
+        }
+
+        $shouldWriteSupervisorFromTemplate = $false
+        if (-not (Test-Path -LiteralPath $supervisorDestinationPath -PathType Leaf)) {
+            $shouldWriteSupervisorFromTemplate = $true
+        } else {
+            Write-Host "    supervisor.json already exists at $supervisorDestinationPath." -ForegroundColor White
+            try {
+                $refreshSupervisorAnswer = Read-Host "Replace supervisor.json from the module template? (y/N)"
+            } catch {
+                throw "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
+            }
+            switch ($refreshSupervisorAnswer) {
+                "y" { $shouldWriteSupervisorFromTemplate = $true }
+                "Y" { $shouldWriteSupervisorFromTemplate = $true }
+                default {
+                    Write-Host "    Kept existing supervisor.json." -ForegroundColor Yellow
+                }
+            }
+        }
+        if ($shouldWriteSupervisorFromTemplate) {
+            if (-not (Test-Path -LiteralPath $supervisorTemplatePath -PathType Leaf)) {
+                throw "Cannot copy supervisor.json from module template: file not found at $supervisorTemplatePath. $templateRestoreHint"
+            }
+            try {
+                Copy-Item -LiteralPath $supervisorTemplatePath -Destination $supervisorDestinationPath -Force -ErrorAction Stop
+            } catch {
+                throw "Failed to copy supervisor.json to `"$supervisorDestinationPath`": $($_.Exception.Message) $templateRestoreHint"
+            }
+            Write-Host "    Copied supervisor.json to deployment root." -ForegroundColor Green
+        }
+    } else {
+        Write-Host ""
+        Write-Host "  Templates-only mode: skipped root infrastructure.json and supervisor.json." -ForegroundColor Gray
+    }
+
+    # Set for the current session and persist for all future sessions via the user-level environment.
+    # [System.Environment]::SetEnvironmentVariable works on Windows, macOS, and Linux.
+    $env:VcfEdgeatScaleRootDirectory = $resolvedBaseDirectory
+    $persistedEnvSucceeded = $false
+    try {
+        [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
+        $persistedEnvSucceeded = $true
+    } catch {
+        Write-Warning "Could not persist VcfEdgeatScaleRootDirectory to the user environment: $($_.Exception.Message)"
+    }
+
+    Write-Host ""
+    Write-Host "=== Initialize summary ===" -ForegroundColor Cyan
+    Write-Host "  Deployment root: $resolvedBaseDirectory" -ForegroundColor White
+    if ($baseDirectoryWasCreated) {
+        Write-Host "  Base directory: created (it did not exist before)." -ForegroundColor Green
+    } else {
+        Write-Host "  Base directory: already existed; files kept unless you chose overwrite." -ForegroundColor Gray
+    }
+    if ($subdirectoriesCreated.Count -gt 0) {
+        Write-Host "  Subdirectories created: $($subdirectoriesCreated -join ', ')." -ForegroundColor Green
+    } else {
+        Write-Host "  Subdirectories Docs, Logs, ServicesYaml: already present." -ForegroundColor Gray
+    }
+    Write-Host "  See sections above for YAML, Docs, and JSON actions." -ForegroundColor Gray
+    Write-Host "  Optional Docs sources may show WARNING if your module install is missing RTF/help files." -ForegroundColor Gray
+    if (-not $TemplatesOnly) {
+        Write-Host "  Root JSON: created or refreshed per your answers above." -ForegroundColor Gray
+    } else {
+        Write-Host "  Root JSON was not modified (templates-only mode)." -ForegroundColor Gray
+    }
+    if ($persistedEnvSucceeded) {
+        Write-Host "  VcfEdgeatScaleRootDirectory -> $resolvedBaseDirectory (session + user environment persisted)." -ForegroundColor Green
+    } else {
+        Write-Host "  VcfEdgeatScaleRootDirectory -> $resolvedBaseDirectory (current session only; user-level persist failed — see warning above)." -ForegroundColor Yellow
+        Write-Host '  To set manually: [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", "<path>", [System.EnvironmentVariableTarget]::User)' -ForegroundColor Cyan
+    }
+
+    return $resolvedBaseDirectory
+}
+
+Function Invoke-VcfEdgeAtScaleCollectLogs {
+
+    <#
+        .SYNOPSIS
+        Interactively builds a support archive of deployment JSON, Logs, and ServicesYaml.
+
+        .DESCRIPTION
+        Prompts whether to use infrastructure.json and supervisor.json under the deployment root (from
+        VcfEdgeatScaleRootDirectory or a typed path), or custom paths. Copies those files plus the contents of
+        Logs and ServicesYaml under the deployment root into a zip under the user home directory.
+
+        .OUTPUTS
+        [String] Full path to the created zip file.
+
+        .NOTES
+        Private to the module. Invoked from Start-VcfEdgeAtScale -CollectLogs only. Uses Write-Host so output is visible when the caller assigns the result to $null.
+    #>
+
+    [CmdletBinding()]
+    Param ()
+
+    $deploymentRootRaw = $env:VcfEdgeatScaleRootDirectory
+    if ([String]::IsNullOrWhiteSpace($deploymentRootRaw)) {
+        Write-Host "VcfEdgeatScaleRootDirectory is not set."
+        try {
+            $deploymentRootRaw = Read-Host "Enter deployment root (folder that contains Logs and ServicesYaml)"
+        } catch {
+            throw "CollectLogs requires an interactive session or set VcfEdgeatScaleRootDirectory. $($_.Exception.Message)"
+        }
+    }
+    if ([String]::IsNullOrWhiteSpace($deploymentRootRaw)) {
+        throw "A deployment root directory is required for CollectLogs."
+    }
+    try {
+        $deploymentRoot = (Resolve-Path -LiteralPath $deploymentRootRaw.Trim()).Path
+    } catch {
+        throw "Could not resolve deployment root: $deploymentRootRaw. $($_.Exception.Message)"
+    }
+
+    $defaultInfrastructurePath = Join-Path -Path $deploymentRoot -ChildPath "infrastructure.json"
+    $defaultSupervisorPath = Join-Path -Path $deploymentRoot -ChildPath "supervisor.json"
+
+    Write-Host ""
+    Write-Host "Default JSON files under deployment root:"
+    Write-Host "  $defaultInfrastructurePath"
+    Write-Host "  $defaultSupervisorPath"
+    try {
+        $useDefaultsResponse = Read-Host "Use these two files in the zip? (Y/n)"
+    } catch {
+        throw "CollectLogs requires Read-Host. $($_.Exception.Message)"
+    }
+
+    $infrastructureSourcePath = $null
+    $supervisorSourcePath = $null
+    switch -Regex ($useDefaultsResponse.Trim()) {
+        "^(?i)(n|no)$" {
+            try {
+                $infrastructureSourcePath = Read-Host "Full path to infrastructure.json to include"
+                $supervisorSourcePath = Read-Host "Full path to supervisor.json to include"
+            } catch {
+                throw "CollectLogs requires Read-Host for custom paths. $($_.Exception.Message)"
+            }
+        }
+        default {
+            $infrastructureSourcePath = $defaultInfrastructurePath
+            $supervisorSourcePath = $defaultSupervisorPath
+        }
+    }
+
+    if ([String]::IsNullOrWhiteSpace($infrastructureSourcePath) -or [String]::IsNullOrWhiteSpace($supervisorSourcePath)) {
+        throw "Both infrastructure.json and supervisor.json paths are required."
+    }
+    try {
+        $infrastructureSourcePath = (Resolve-Path -LiteralPath $infrastructureSourcePath.Trim()).Path
+        $supervisorSourcePath = (Resolve-Path -LiteralPath $supervisorSourcePath.Trim()).Path
+    } catch {
+        throw "Could not resolve JSON path: $($_.Exception.Message)"
+    }
+    if (-not (Test-Path -LiteralPath $infrastructureSourcePath -PathType Leaf)) {
+        throw "infrastructure file not found: $infrastructureSourcePath"
+    }
+    if (-not (Test-Path -LiteralPath $supervisorSourcePath -PathType Leaf)) {
+        throw "supervisor file not found: $supervisorSourcePath"
+    }
+
+    $logsSourcePath = Join-Path -Path $deploymentRoot -ChildPath "Logs"
+    $servicesYamlSourcePath = Join-Path -Path $deploymentRoot -ChildPath "ServicesYaml"
+
+    $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $zipFileName = "VcfEdgeatScale-logs-$stamp.zip"
+    $zipDestinationPath = Join-Path -Path $HOME -ChildPath $zipFileName
+    $stagingParent = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "VcfEdgeAtScale-collect-$stamp"
+    $stagingRoot = Join-Path -Path $stagingParent -ChildPath "archive"
+
+    try {
+        $null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction Stop
+        $stagingLogs = Join-Path -Path $stagingRoot -ChildPath "Logs"
+        $stagingServicesYaml = Join-Path -Path $stagingRoot -ChildPath "ServicesYaml"
+        $null = New-Item -ItemType Directory -Path $stagingLogs -Force -ErrorAction Stop
+        $null = New-Item -ItemType Directory -Path $stagingServicesYaml -Force -ErrorAction Stop
+
+        Copy-Item -LiteralPath $infrastructureSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath "infrastructure.json") -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $supervisorSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath "supervisor.json") -Force -ErrorAction Stop
+
+        if (Test-Path -LiteralPath $logsSourcePath -PathType Container) {
+            $logChildren = @(Get-ChildItem -LiteralPath $logsSourcePath -Force -ErrorAction SilentlyContinue)
+            foreach ($logItem in $logChildren) {
+                $logDest = Join-Path -Path $stagingLogs -ChildPath $logItem.Name
+                Copy-Item -LiteralPath $logItem.FullName -Destination $logDest -Recurse -Force -ErrorAction Stop
+            }
+        } else {
+            Write-Warning "Logs folder not found or not a directory: $logsSourcePath. The archive includes an empty Logs folder."
+        }
+
+        if (Test-Path -LiteralPath $servicesYamlSourcePath -PathType Container) {
+            $yamlChildren = @(Get-ChildItem -LiteralPath $servicesYamlSourcePath -Force -ErrorAction SilentlyContinue)
+            foreach ($yamlItem in $yamlChildren) {
+                $yamlDest = Join-Path -Path $stagingServicesYaml -ChildPath $yamlItem.Name
+                Copy-Item -LiteralPath $yamlItem.FullName -Destination $yamlDest -Recurse -Force -ErrorAction Stop
+            }
+        } else {
+            Write-Warning "ServicesYaml folder not found or not a directory: $servicesYamlSourcePath. The archive includes an empty ServicesYaml folder."
+        }
+
+        if (Test-Path -LiteralPath $zipDestinationPath -PathType Leaf) {
+            Remove-Item -LiteralPath $zipDestinationPath -Force -ErrorAction Stop
+        }
+
+        $compressItems = @(
+            (Join-Path -Path $stagingRoot -ChildPath "infrastructure.json"),
+            (Join-Path -Path $stagingRoot -ChildPath "supervisor.json"),
+            $stagingLogs,
+            $stagingServicesYaml
+        )
+        Compress-Archive -Path $compressItems -DestinationPath $zipDestinationPath -Force -ErrorAction Stop
+
+        Write-Host ""
+        Write-Host "CollectLogs finished. Archive saved to:"
+        Write-Host "  $zipDestinationPath"
+    } finally {
+        if (Test-Path -LiteralPath $stagingParent) {
+            Remove-Item -LiteralPath $stagingParent -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    return $zipDestinationPath
+}
+
 Function Start-VcfEdgeAtScale {
 
     <#
@@ -31184,10 +33237,18 @@ Function Start-VcfEdgeAtScale {
         - vSphere Supervisor Deployment
         - ArgoCD installation and configuration for GitOps workflows
 
+        For normal runs (not -Version or -Initialize), the environment variable VcfEdgeatScaleRootDirectory must
+        point at your configuration base directory. Defaults for -InfrastructureJson and -SupervisorJson join that
+        directory with infrastructure.json and supervisor.json when you omit those parameters. Logs are written
+        under Join-Path(VcfEdgeatScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
+        refresh the recommended layout from module Templates (new or existing base directory; use
+        -Initialize -InitializeTemplatesOnly to refresh only ServicesYaml and Docs without changing root JSON).
+        Use Start-VcfEdgeAtScale -CollectLogs to zip infrastructure.json, supervisor.json, Logs, and ServicesYaml for support (interactive prompts).
+
     .PARAMETER InfrastructureJson
         Path to the infrastructure configuration JSON file.
 
-        Default: "infrastructure.json"
+        When omitted, the path is Join-Path($env:VcfEdgeatScaleRootDirectory, "infrastructure.json").
 
         Supervisor service YAML files and Harbor TLS PEM files are referenced by
         supervisorServices.parentDirectory plus file name properties (and harborConfiguration.parentDirectory
@@ -31197,7 +33258,7 @@ Function Start-VcfEdgeAtScale {
     .PARAMETER SupervisorJson
         Path to the Supervisor Cluster configuration JSON file.
 
-        Default: "supervisor.json"
+        When omitted, the path is Join-Path($env:VcfEdgeatScaleRootDirectory, "supervisor.json").
 
     .PARAMETER LogLevel
         Sets the minimum log level for console output.
@@ -31222,6 +33283,9 @@ Function Start-VcfEdgeAtScale {
     .PARAMETER CleanUp
         Optional. When specified, the script authenticates to vCenter, performs cleanup per scope, then exits without deploying. Must be one of: Supervisor, Compute, All, ArgoCD, Harbor. Supervisor = disable supervisor only (compute remains). Compute = remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed. All = disable supervisor first, then remove compute. ArgoCD = remove only the ArgoCD supervisor namespace for each cluster. Harbor = remove only the Harbor Supervisor Service from the supervisor for each cluster. Confirmation requires typing exactly "delete <scope> for <edgeSite>" unless -Force is used with common.labenvironment true in infrastructure JSON.
 
+    .PARAMETER CollectLogs
+        Interactive support bundle. Prompts whether to use infrastructure.json and supervisor.json under the deployment root (from VcfEdgeatScaleRootDirectory, or a prompted path if unset), or custom full paths. Includes those files plus the Logs and ServicesYaml folders under that deployment root in Join-Path($HOME, "VcfEdgeatScale-logs-<timestamp>.zip"). Does not deploy. Do not combine with -Initialize, -InitializeTemplatesOnly, or -Version.
+
     .PARAMETER ComputeOnly
         When specified, the script runs all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM compliance/remediation) then exits without enabling the supervisor or deploying Argo CD or Harbor. Use to prepare compute and storage only. Does not conflict with -CleanUp (deployment scope vs cleanup scope). Harbor $env: preflight is not run: clusters may still define harborConfiguration (for example for a later full deploy) without setting HARBOR_ADMIN_PASSWORD and other variables referenced there.
 
@@ -31230,6 +33294,21 @@ Function Start-VcfEdgeAtScale {
 
     .PARAMETER Force
         When common.labenvironment is true in infrastructure JSON and -Force is set, bypasses the cleanup confirmation prompt (user does not need to type "delete <scope> for <edgeSite>"). Has no effect when labEnvironment is false; a warning is displayed if -Force is used in that case.
+
+    .PARAMETER Initialize
+        Interactive setup: prompts for a base directory (default ~/VCFEdgeAtScale), creates Docs, Logs, and ServicesYaml
+        when missing, copies module YAML and documentation into ServicesYaml and Docs (overwrite prompts; default N).
+        Seeds or optionally replaces infrastructure.json and supervisor.json from Templates (see -InitializeTemplatesOnly).
+        When VcfEdgeatScaleRootDirectory resolves to a fully initialized layout (Docs, Logs, ServicesYaml, root JSON, all
+        shipped YAML files under ServicesYaml), asks whether to initialize a different directory; answering N reuses that path without re-typing it.
+        Section output uses console colors. Sets VcfEdgeatScaleRootDirectory for the current session and persists it via
+        [System.Environment]::SetEnvironmentVariable (User scope; cross-platform) so new sessions inherit it automatically.
+        Prints a fallback manual command if the persist step fails. Other switches are ignored except -LogLevel and -InitializeTemplatesOnly.
+
+    .PARAMETER InitializeTemplatesOnly
+        Use only with -Initialize. Refreshes Supervisor service YAML and Docs files from Templates without creating or
+        replacing infrastructure.json or supervisor.json in the base directory. Use on an existing configuration root
+        to update shipped YAML or help copies without touching JSON.
 
     .PARAMETER RollbackOnFailure
         Boolean. When $true: always rollback on failure (no prompt; for autonomous runs). When $false: never rollback; leave site in current state and continue to next site if any. When omitted: prompt with Yes/No/Always. Use $true or $false to bypass the prompt for unattended execution.
@@ -31246,9 +33325,24 @@ Function Start-VcfEdgeAtScale {
         When specified, the completed Harbor data values YAML file is moved into a "HarborYaml" subdirectory under the module directory instead of being deleted. The directory is created automatically if it does not exist; if it cannot be created, deployment exits with an error before Harbor installation begins. The saved file matches the final rendered values used for installation; the deployment log includes a redacted copy. When omitted, the temporary file is deleted after successful installation.
 
     .EXAMPLE
+        Start-VcfEdgeAtScale -Initialize
+
+        Runs interactive setup to create the configuration directory layout, copy templates, and print VcfEdgeatScaleRootDirectory profile instructions.
+
+    .EXAMPLE
+        Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly
+
+        Refreshes YAML and Docs from the module into an existing (or new) base directory without changing root JSON files.
+
+    .EXAMPLE
+        Start-VcfEdgeAtScale -CollectLogs
+
+        Prompts for JSON sources and zips deployment files, Logs, and ServicesYaml to the user home directory.
+
+    .EXAMPLE
         Start-VcfEdgeAtScale
 
-        Executes the deployment using default configuration files for all clusters.
+        Executes the deployment using infrastructure.json and supervisor.json under $env:VcfEdgeatScaleRootDirectory when those parameters are omitted.
 
     .EXAMPLE
         Start-VcfEdgeAtScale -InfrastructureJson "config/site-a-infrastructure.json" -SupervisorJson "config/site-a-supervisor.json"
@@ -31306,15 +33400,18 @@ Function Start-VcfEdgeAtScale {
     Param (
         [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
         [Parameter(Mandatory = $false)] [String]$CleanUp,
+        [Parameter(Mandatory = $false)] [Switch]$CollectLogs,
         [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
         [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(Mandatory = $false)] [Switch]$Force,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson = "infrastructure.json",
+        [Parameter(Mandatory = $false)] [Switch]$Initialize,
+        [Parameter(Mandatory = $false)] [Switch]$InitializeTemplatesOnly,
+        [Parameter(Mandatory = $false)] [String]$InfrastructureJson,
         [Parameter(Mandatory = $false)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO",
         [Parameter(Mandatory = $false)] [Nullable[bool]]$RollbackOnFailure,
         [Parameter(Mandatory = $false)] [Switch]$SaveHarborYaml,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson = "supervisor.json",
+        [Parameter(Mandatory = $false)] [String]$SupervisorJson,
         [Parameter(Mandatory = $false)] [Switch]$ValidateOnly,
         [Parameter(Mandatory = $false)] [Switch]$Version
     )
@@ -31322,11 +33419,82 @@ Function Start-VcfEdgeAtScale {
     # Initialize configured log level from parameter (normalize to uppercase). Set before -Version so Write-LogMessage honors the threshold.
     $Script:ConfiguredLogLevel = $LogLevel.ToUpper()
 
-    # Create the log file before -Version or deployment so file logging and log level filtering behave consistently.
-    New-LogFile
+    if ($Initialize -and $CollectLogs) {
+        throw "Do not combine -Initialize with -CollectLogs."
+    }
+    if ($CollectLogs -and $InitializeTemplatesOnly) {
+        throw "Do not combine -CollectLogs with -InitializeTemplatesOnly."
+    }
+    if ($CollectLogs -and $Version) {
+        throw "Do not combine -CollectLogs with -Version."
+    }
 
-    # Handle version flag (logging initialized; VCF.PowerCLI minimum is not required for version display).
+    if ($InitializeTemplatesOnly -and -not $Initialize) {
+        throw "InitializeTemplatesOnly must be used with -Initialize. Example: Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly"
+    }
+
+    if ($Initialize) {
+        $deploymentParameterNames = @(
+            "AcceptBadCheckResults",
+            "CleanUp",
+            "CollectLogs",
+            "ComputeOnly",
+            "DelayBeforeAddingNextHostSeconds",
+            "EdgeSite",
+            "Force",
+            "InfrastructureJson",
+            "RollbackOnFailure",
+            "SaveHarborYaml",
+            "SupervisorJson",
+            "ValidateOnly",
+            "Version"
+        )
+        $ignoredParameterNames = @()
+        foreach ($boundParameterName in $PSBoundParameters.Keys) {
+            if ($deploymentParameterNames -contains $boundParameterName) {
+                $ignoredParameterNames += $boundParameterName
+            }
+        }
+        if ($ignoredParameterNames.Count -gt 0) {
+            Write-Output "Note: -Initialize runs alone; ignoring these parameters for this run: $($ignoredParameterNames -join ', ')."
+        }
+        $null = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
+        return
+    }
+
+    if ($CollectLogs) {
+        $deploymentParameterNamesForCollectLogs = @(
+            "AcceptBadCheckResults",
+            "CleanUp",
+            "ComputeOnly",
+            "DelayBeforeAddingNextHostSeconds",
+            "EdgeSite",
+            "Force",
+            "InfrastructureJson",
+            "Initialize",
+            "InitializeTemplatesOnly",
+            "LogLevel",
+            "RollbackOnFailure",
+            "SaveHarborYaml",
+            "SupervisorJson",
+            "ValidateOnly",
+            "Version"
+        )
+        $ignoredParameterNamesForCollectLogs = @()
+        foreach ($boundParameterName in $PSBoundParameters.Keys) {
+            if ($deploymentParameterNamesForCollectLogs -contains $boundParameterName) {
+                $ignoredParameterNamesForCollectLogs += $boundParameterName
+            }
+        }
+        if ($ignoredParameterNamesForCollectLogs.Count -gt 0) {
+            Write-Host "Note: -CollectLogs runs alone; ignoring these parameters for this run: $($ignoredParameterNamesForCollectLogs -join ', ')."
+        }
+        $null = Invoke-VcfEdgeAtScaleCollectLogs
+        return
+    }
+
     if ($Version) {
+        New-LogFile
         $versionToDisplay = $null
 
         # Try to get version from loaded module first.
@@ -31373,6 +33541,38 @@ Function Start-VcfEdgeAtScale {
         return
     }
 
+    $vcfEdgeRootRaw = $env:VcfEdgeatScaleRootDirectory
+    if ([String]::IsNullOrWhiteSpace($vcfEdgeRootRaw)) {
+        $exampleVcfEdgeRootDirectory = Join-Path -Path $HOME -ChildPath "VCFEdgeAtScale"
+        Write-Warning (
+            "VcfEdgeatScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
+            "The following is an example only (your default Initialize path is Join-Path `$HOME 'VCFEdgeAtScale'; use the directory you chose at Initialize if different): " +
+            "`$env:VcfEdgeatScaleRootDirectory = `"$exampleVcfEdgeRootDirectory`""
+        )
+        return
+    }
+
+    try {
+        $vcfEdgeRootDirectory = (Resolve-Path -LiteralPath $vcfEdgeRootRaw.Trim()).Path
+    } catch {
+        throw "VcfEdgeatScaleRootDirectory is set but the path could not be resolved. Ensure the directory exists. Value: $vcfEdgeRootRaw. $($_.Exception.Message)"
+    }
+
+    if (-not $PSBoundParameters.ContainsKey("InfrastructureJson") -or [String]::IsNullOrWhiteSpace($InfrastructureJson)) {
+        $InfrastructureJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "infrastructure.json"
+    }
+    if (-not $PSBoundParameters.ContainsKey("SupervisorJson") -or [String]::IsNullOrWhiteSpace($SupervisorJson)) {
+        $SupervisorJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "supervisor.json"
+    }
+    if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
+        throw "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeatScaleRootDirectory."
+    }
+    if ([String]::IsNullOrWhiteSpace($SupervisorJson)) {
+        throw "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeatScaleRootDirectory."
+    }
+
+    New-LogFile -BaseDirectory $vcfEdgeRootDirectory -Directory "Logs"
+
     $savedProgressPreference = $Global:ProgressPreference
     try {
         $Global:ProgressPreference = "Continue"
@@ -31384,9 +33584,23 @@ Function Start-VcfEdgeAtScale {
             $Script:RollbackOnFailurePreference = $null
         }
         $Script:RollbackAlwaysFromPrompt = $false
+        $Script:CleanUpOnly = $false
 
         # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
         Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
+
+        # Silently refresh help JSON files in Docs if the module has been upgraded since they were last copied.
+        try {
+            $helpTemplatesPath = Get-ModuleTemplatesPath
+            $helpDocsDirectory = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "Docs"
+            foreach ($helpFileName in @("infrastructure-config-help.json", "supervisor-config-help.json")) {
+                Update-HelpJsonIfStale `
+                    -DocsPath (Join-Path -Path $helpDocsDirectory -ChildPath $helpFileName) `
+                    -TemplatePath (Join-Path -Path $helpTemplatesPath -ChildPath $helpFileName)
+            }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Help JSON auto-refresh skipped: $($_.Exception.Message)"
+        }
 
         # Log the configured log level.
         Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
@@ -31668,10 +33882,15 @@ Function Start-VcfEdgeAtScale {
         }
     }
 
-        # Initialize the edge deployment workflow.
+        # Initialize the edge deployment workflow. Forward explicit parameters (do not rely on
+        # PowerShell dynamic scoping for AcceptBadCheckResults / DelayBeforeAddingNextHostSeconds).
         $initParams = @{
-            InfrastructureJson = $InfrastructureJson
-            SupervisorJson     = $SupervisorJson
+            InfrastructureJson               = $InfrastructureJson
+            SupervisorJson                   = $SupervisorJson
+            DelayBeforeAddingNextHostSeconds = $DelayBeforeAddingNextHostSeconds
+        }
+        if ($AcceptBadCheckResults) {
+            $initParams.AcceptBadCheckResults = $true
         }
         if ($EdgeSite) {
             $initParams.EdgeSite = $EdgeSite
@@ -31693,7 +33912,6 @@ Function Start-VcfEdgeAtScale {
         $Global:ProgressPreference = $savedProgressPreference
     }
 }
-
 Function Show-VcfEdgeAtScaleVersion {
 
     <#
@@ -31706,7 +33924,7 @@ Function Show-VcfEdgeAtScaleVersion {
     .EXAMPLE
         Show-VcfEdgeAtScaleVersion
 
-        Displays: "VcfEdgeAtScale version: 1.0.0.2"
+        Displays the current module version, e.g. "VcfEdgeAtScale version: 1.0.3.1000".
     #>
 
     [CmdletBinding()]
@@ -31721,9 +33939,8 @@ Function Get-ModuleTemplatesPath {
         Resolves the full path to the module's Templates directory.
 
         .DESCRIPTION
-        Returns the path to the VcfEdgeAtScale Templates directory containing
-        infrastructure.json, supervisor.json, argocd-deployment.yml, 1.1.0-25100889.yml, and
-        harbor-data-values-v2.14.2.yml. Uses
+        Returns the path to the VcfEdgeAtScale Templates directory containing bundled JSON, YAML, RTF
+        (EXAMPLE.rtf, README.rtf), and *-config-help.json files used by deployment and Start-VcfEdgeAtScale -Initialize. Uses
         Module.ModuleBase when available, then PSScriptRoot (with VcfEdgeAtScale subdirectory
         fallback for development), then Get-Module -ListAvailable. Throws if the Templates directory
         does not exist.
@@ -31736,7 +33953,7 @@ Function Get-ModuleTemplatesPath {
         $jsonPath = Join-Path $templatesPath "infrastructure.json"
 
         .NOTES
-        Used by Copy-VcfEdgeAtScaleTemplates. Requires Write-LogMessage for error logging.
+        Used by Invoke-VcfEdgeAtScaleModuleInitialize. Requires Write-LogMessage for error logging.
     #>
 
     Param ()
@@ -31772,207 +33989,6 @@ Function Get-ModuleTemplatesPath {
     }
 
     return $templatesPath
-}
-Function Copy-VcfEdgeAtScaleTemplates {
-
-    <#
-    .SYNOPSIS
-        Copies supervisor deployment template files to a specified location.
-
-    .DESCRIPTION
-        Copy-VcfEdgeAtScaleTemplates copies all eight required template files from the module's Templates
-        directory to a specified destination: infrastructure.json, supervisor.json, infrastructure-config-help.json,
-        supervisor-config-help.json, argocd-deployment.yml, 1.1.0-25100889.yml, harbor-data-values-v2.14.2.yml, and
-        legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml. If any of these files are missing from
-        the source directory, the function will throw an error.
-
-        The template files are included with the module installation and contain example configurations
-        that users can modify for their environment.
-
-    .PARAMETER DestinationPath
-        The destination directory where the template files will be copied. If not specified, files are
-        copied to the current working directory.
-
-        Default: Current working directory ($PWD)
-
-    .PARAMETER WhatIf
-        Shows what would happen if the function runs. The function is executed but no changes are made.
-
-    .EXAMPLE
-        Copy-VcfEdgeAtScaleTemplates
-
-        Copies all eight template files (including infrastructure-config-help.json and supervisor-config-help.json) to the current working directory.
-
-    .EXAMPLE
-        Copy-VcfEdgeAtScaleTemplates -DestinationPath "./config"
-
-        Copies all template files to the ./config subdirectory.
-
-    .EXAMPLE
-        Copy-VcfEdgeAtScaleTemplates -WhatIf
-
-        Shows what files would be copied without actually copying them.
-
-    .NOTES
-        Template files are located in the module's Templates subdirectory. You can also access them directly
-        using the module path:
-
-        $modulePath = (Get-Module -Name VcfEdgeAtScale -ListAvailable).ModuleBase
-        $templatePath = Join-Path $modulePath "Templates"
-
-        The template files contain example values that must be modified for your specific environment.
-    #>
-
-    [CmdletBinding(SupportsShouldProcess = $true)]
-    Param (
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$DestinationPath = $PWD
-    )
-
-    Write-LogMessage -Type DEBUG -Message "Entered Copy-VcfEdgeAtScaleTemplates function..."
-
-    # Validate destination path
-    if ([string]::IsNullOrWhiteSpace($DestinationPath)) {
-        Write-LogMessage -Type ERROR -Message "Destination path cannot be null, empty, or contain only whitespace characters."
-        throw "Deployment failed. Check logs for details."
-    }
-
-    # Validate path format (basic validation for invalid characters)
-    if ($DestinationPath -match '[<>"|?*]') {
-        Write-LogMessage -Type ERROR -Message "Destination path contains invalid characters: $($matches[0])"
-        throw "Deployment failed. Check logs for details."
-    }
-
-    # Validate that the destination path is valid using Test-Path.
-
-    # Check if parent directory exists (if path has a parent) or if the path itself is valid
-    $parentPath = Split-Path -Path $DestinationPath -Parent -ErrorAction SilentlyContinue
-    if ($parentPath -and $parentPath -ne $DestinationPath) {
-        if (-not (Test-Path -Path $parentPath -ErrorAction SilentlyContinue)) {
-            Write-LogMessage -Type ERROR -Message "Destination path parent directory does not exist: $parentPath"
-            throw "Deployment failed. Check logs for details."
-        }
-    }
-
-    # Define the eight required template files (JSON/YAML used by deployment plus *-config-help.json for offline reference; Show-* helpers read from the module Templates path).
-    $requiredTemplateFiles = @(
-        "1.1.0-25100889.yml",
-        "argocd-deployment.yml",
-        "harbor-data-values-v2.14.2.yml",
-        "infrastructure-config-help.json",
-        "infrastructure.json",
-        "legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml",
-        "supervisor-config-help.json",
-        "supervisor.json"
-    )
-
-    $templatesPath = Get-ModuleTemplatesPath
-
-    # Validate that all required template files exist before attempting to copy.
-
-    $missingFiles = @()
-    foreach ($fileName in $requiredTemplateFiles) {
-        $sourceFile = Join-Path $templatesPath $fileName
-        if (-not (Test-Path $sourceFile)) {
-            $missingFiles += $fileName
-        }
-    }
-
-    if ($missingFiles.Count -gt 0) {
-        Write-LogMessage -Type ERROR -Message "Required template files not found in source directory: $($missingFiles -join ', ')"
-        throw "Deployment failed. Check logs for details."
-    }
-
-    # Ensure destination directory exists.
-
-    if (-not (Test-Path $DestinationPath)) {
-        if ($PSCmdlet.ShouldProcess($DestinationPath, "Create directory")) {
-            try {
-                New-Item -ItemType Directory -Path $DestinationPath -Force | Out-Null
-                Write-LogMessage -Type DEBUG -Message "Created destination directory: $DestinationPath"
-            } catch {
-                Write-LogMessage -Type ERROR -Message "Failed to create destination directory '$DestinationPath': $($_.Exception.Message)"
-                throw "Deployment failed. Check logs for details."
-            }
-        }
-    }
-
-    $copiedCount = 0
-    $skippedCount = 0
-
-    foreach ($fileName in $requiredTemplateFiles) {
-        $sourceFile = Join-Path $templatesPath $fileName
-        $destFile = Join-Path $DestinationPath $fileName
-
-        # Check if destination file already exists and prompt for confirmation.
-
-        if (Test-Path $destFile) {
-            # Skip prompt if WhatIf is enabled.
-
-            if ($WhatIfPreference) {
-                Write-LogMessage -Type INFO -Message "Would overwrite existing file: $destFile"
-            } elseif ($PSCmdlet.ShouldProcess($destFile, "Overwrite existing file")) {
-                try {
-                    $overwrite = Read-Host "File `"$destFile`" already exists. Overwrite? (Y/N)"
-                    if ($overwrite -ne "Y" -and $overwrite -ne "y") {
-                        Write-LogMessage -Type INFO -Message "Skipping $fileName - file already exists and user chose not to overwrite."
-                        $skippedCount++
-                        continue
-                    }
-                } catch {
-                    Write-LogMessage -Type WARNING -Message "User cancelled file overwrite prompt for $fileName."
-                    $skippedCount++
-                    continue
-                }
-            } else {
-                # ShouldProcess returned false (user declined via Confirm prompt)
-                Write-LogMessage -Type INFO -Message "Skipping $fileName - user declined to overwrite existing file."
-                $skippedCount++
-                continue
-            }
-        }
-
-        if ($PSCmdlet.ShouldProcess($destFile, "Copy template file")) {
-            if ($WhatIfPreference) {
-                Write-LogMessage -Type INFO -Message "Would copy $fileName to $DestinationPath"
-                $copiedCount++
-            } else {
-                try {
-                    Copy-Item -Path $sourceFile -Destination $destFile -Force
-                    Write-LogMessage -Type INFO -Message "Copied $fileName to $DestinationPath"
-                    $copiedCount++
-                } catch {
-                    Write-LogMessage -Type ERROR -Message "Failed to copy $fileName to '$DestinationPath': $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
-                }
-            }
-        } else {
-            Write-LogMessage -Type INFO -Message "Would copy $fileName to $DestinationPath"
-            $copiedCount++
-        }
-    }
-
-    # Build and display summary message.
-
-    if ($WhatIfPreference) {
-        $summaryMessage = "What if: Performing the operation `"Copy template files`" on target `"$DestinationPath`". "
-        $summaryMessage += "Would copy $copiedCount file(s)"
-        if ($skippedCount -gt 0) {
-            $summaryMessage += ", would skip $skippedCount file(s) (already exist)"
-        }
-        Write-LogMessage -Type INFO -Message $summaryMessage
-    } elseif ($copiedCount -gt 0) {
-        $summaryMessage = "Template files copied successfully to: $DestinationPath ($copiedCount file(s) copied"
-        if ($skippedCount -gt 0) {
-            $summaryMessage += ", $skippedCount file(s) skipped)"
-        } else {
-            $summaryMessage += ")"
-        }
-        Write-LogMessage -Type INFO -Message $summaryMessage
-    } elseif ($skippedCount -gt 0) {
-        Write-LogMessage -Type INFO -Message "All template files were skipped ($skippedCount file(s) already exist)"
-    } else {
-        Write-LogMessage -Type INFO -Message "No template files were copied or skipped"
-    }
 }
 Function Format-ConfigurationTable {
 
@@ -32033,20 +34049,124 @@ Function Format-ConfigurationTable {
         $allItems | Format-Table -Property 'Key', 'Required', 'Notes' -AutoSize -Wrap
     }
 }
+Function Get-ModulePublicVersion {
+
+    <#
+        .SYNOPSIS
+        Returns the 3-part public release version from the module version string.
+
+        .DESCRIPTION
+        The module uses a 4-part version scheme: Major.Minor.Patch.Build (e.g. 1.0.3.1000).
+        The 3-part public release is Major.Minor.Patch (e.g. 1.0.3), which is what the
+        help JSON files store in their moduleVersion field and what the PowerShell Gallery
+        displays as the package version. Build numbers (the 4th part) are internal pre-release
+        identifiers; stripping them allows upgrading from 1.0.3.1000 to 1.0.3.1001 without
+        triggering a help-file re-copy, and maps cleanly to the Gallery's 3-part SemVer expectation.
+
+        .OUTPUTS
+        String. The 3-part public version (e.g. "1.0.3"), or the full version string if it
+        has fewer than 4 parts.
+
+        .NOTES
+        Reads $Script:ModuleVersion. Does not throw; returns the raw value on any parse error.
+    #>
+
+    $parts = $Script:ModuleVersion -split '\.'
+    if ($parts.Count -ge 4) {
+        # Strip the 4th (build) segment; return Major.Minor.Patch.
+        return ($parts[0..2] -join '.')
+    }
+    return $Script:ModuleVersion
+}
+Function Update-HelpJsonIfStale {
+    <#
+        .SYNOPSIS
+        Silently copies a help JSON file from the module Templates directory to the user's Docs directory when the version differs or the file is missing.
+
+        .DESCRIPTION
+        Reads the moduleVersion field from both the Templates (source-of-truth) and Docs (user) copies of a help JSON file.
+        Help JSON files store the 3-part public release version (e.g. "1.0.3"), not the full 4-part module version.
+        This means build-number upgrades (e.g. 1.0.3.1000 to 1.0.3.1001) do not trigger a re-copy; only a new
+        public release (e.g. 1.0.4) does. If the Docs copy is absent or has a different moduleVersion than the
+        Templates copy, the Templates copy is silently written over the Docs copy. Does not throw on failure; logs a Warning instead.
+
+        .PARAMETER DocsPath
+        Full path to the destination file in the user's Docs directory.
+
+        .PARAMETER TemplatePath
+        Full path to the source file in the module Templates directory.
+
+        .NOTES
+        Help JSON files are not user-edited, so silent replacement is safe. Called from Invoke-VcfEdgeAtScaleModuleInitialize and Start-VcfEdgeAtScale.
+    #>
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DocsPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplatePath
+    )
+
+    if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
+        Write-Warning "Help JSON template not found at '$TemplatePath'. Skipping auto-refresh for '$DocsPath'."
+        return
+    }
+
+    # Read the template version as the authoritative source.
+    $templateVersion = $null
+    try {
+        $templateJson = Get-Content -Path $TemplatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $templateVersion = if ($templateJson -is [Array]) { $null } else { $templateJson.moduleVersion }
+    } catch {
+        Write-Warning "Could not read template help JSON at '$TemplatePath': $($_.Exception.Message). Skipping auto-refresh."
+        return
+    }
+
+    # If the template has no moduleVersion field it cannot be compared reliably; always copy so
+    # the Docs directory is refreshed rather than silently left with a potentially stale version.
+    # Use the module's own public version as the display label in that case.
+    $versionLabel = if ([String]::IsNullOrWhiteSpace($templateVersion)) {
+        Write-LogMessage -Type DEBUG -Message "Help JSON template at '$TemplatePath' has no moduleVersion field; forcing copy to Docs."
+        Get-ModulePublicVersion
+    } else {
+        $templateVersion
+    }
+
+    # Determine whether the Docs copy is current.
+    $needsCopy = $true
+    if (-not [String]::IsNullOrWhiteSpace($templateVersion) -and (Test-Path -LiteralPath $DocsPath -PathType Leaf)) {
+        try {
+            $docsJson = Get-Content -Path $DocsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $docsVersion = if ($docsJson -is [Array]) { $null } else { $docsJson.moduleVersion }
+            if ($docsVersion -eq $templateVersion) {
+                $needsCopy = $false
+            }
+        } catch {
+            # Unreadable Docs copy; replace it.
+            $needsCopy = $true
+        }
+    }
+
+    if (-not $needsCopy) {
+        Write-LogMessage -Type DEBUG -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' is current (v$versionLabel). No update needed."
+        return
+    }
+
+    try {
+        Copy-Item -LiteralPath $TemplatePath -Destination $DocsPath -Force -ErrorAction Stop
+        Write-LogMessage -Type INFO -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' updated to module v$versionLabel."
+    } catch {
+        Write-Warning "Could not update help JSON at '$DocsPath': $($_.Exception.Message)."
+    }
+}
 
 Function Get-ConfigurationHelpData {
     <#
         .SYNOPSIS
-        Loads and validates a configuration help JSON file from the module Templates directory.
+        Loads and validates a configuration help JSON file from the deployment Docs directory or module Templates directory.
 
         .DESCRIPTION
-        Resolves the module Templates path, loads the specified help JSON file (e.g. infrastructure-config-help.json,
-        supervisor-config-help.json), validates array structure and required fields (Key, Required, Notes), optionally
-        filters by Key wildcard, and returns an array of PSCustomObject. Returns $null on any failure (path, file missing,
-        invalid JSON, validation). Used by Show-InfrastructureJsonConfigurationHelp and Show-SupervisorJsonConfigurationHelp.
+        When $env:VcfEdgeatScaleRootDirectory is set and Join-Path(Docs, HelpFileName) exists under that root, that file is loaded first so operators can refresh help JSON beside their deployment files. Otherwise the module Templates path is used. The function validates array structure and required fields (Key, Required, Notes), optionally filters by Key wildcard, and returns an array of PSCustomObject. Returns $null on any failure (path, file missing, invalid JSON, validation). Used by Show-InfrastructureJsonConfigurationHelp and Show-SupervisorJsonConfigurationHelp.
 
         .PARAMETER HelpFileName
-        Name of the help JSON file in the Templates directory (e.g. "infrastructure-config-help.json", "supervisor-config-help.json").
+        Name of the help JSON file (e.g. "infrastructure-config-help.json", "supervisor-config-help.json").
 
         .PARAMETER Filter
         Optional wildcard filter applied to Key. Filter is wrapped with * on both sides (e.g. "argoCD" matches *argoCD*).
@@ -32069,7 +34189,41 @@ Function Get-ConfigurationHelpData {
         return $null
     }
 
-    $helpJsonPath = Join-Path $templatesPath $HelpFileName
+    $templateHelpJsonPath = Join-Path $templatesPath $HelpFileName
+    $helpJsonPath = $null
+    $vcfEdgeRootForHelp = $env:VcfEdgeatScaleRootDirectory
+    if (-not [String]::IsNullOrWhiteSpace($vcfEdgeRootForHelp)) {
+        $docsHelpCandidatePath = Join-Path -Path $vcfEdgeRootForHelp.Trim() -ChildPath (Join-Path -Path "Docs" -ChildPath $HelpFileName)
+        if (Test-Path -LiteralPath $docsHelpCandidatePath -PathType Leaf) {
+            try {
+                $resolvedDocsPath = (Resolve-Path -LiteralPath $docsHelpCandidatePath).Path
+            } catch {
+                $resolvedDocsPath = $docsHelpCandidatePath
+            }
+
+            # Check whether the Docs copy is current; if version differs, fall through to Templates.
+            # Compare against the 3-part public version (strips the 4th build segment) so that
+            # build upgrades (e.g. 1.0.3.1000 → 1.0.3.1001) do not invalidate the Docs copy.
+            $docsVersionMatches = $false
+            try {
+                $docsRaw = Get-Content -Path $resolvedDocsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $docsVersion = if ($docsRaw -is [Array]) { $null } else { $docsRaw.moduleVersion }
+                $docsVersionMatches = ($docsVersion -eq (Get-ModulePublicVersion))
+            } catch {
+                $docsVersionMatches = $false
+            }
+
+            if ($docsVersionMatches) {
+                $helpJsonPath = $resolvedDocsPath
+            } else {
+                Write-LogMessage -Type INFO -Message "Help file '$HelpFileName' in Docs is from a different module version; using bundled Templates copy."
+            }
+        }
+    }
+
+    if ([String]::IsNullOrWhiteSpace($helpJsonPath)) {
+        $helpJsonPath = $templateHelpJsonPath
+    }
     if (-not (Test-Path $helpJsonPath)) {
         Write-Warning "Configuration help file not found at: $helpJsonPath. Please verify the module installation."
         return $null
@@ -32093,19 +34247,22 @@ Function Get-ConfigurationHelpData {
         return $null
     }
 
-    if ($jsonData -isnot [Array]) {
-        Write-Warning "Configuration help file at '$helpJsonPath' must contain an array of configuration elements."
+    # Support both legacy bare-array format and wrapped { moduleVersion, entries } format.
+    $entriesArray = if ($jsonData -is [Array]) { $jsonData } else { $jsonData.entries }
+
+    if ($null -eq $entriesArray -or $entriesArray -isnot [Array]) {
+        Write-Warning "Configuration help file at '$helpJsonPath' must contain an array of configuration elements (or an object with an 'entries' array)."
         return $null
     }
 
-    if ($jsonData.Count -eq 0) {
+    if ($entriesArray.Count -eq 0) {
         Write-Warning "Configuration help file at '$helpJsonPath' contains no configuration elements."
         return $null
     }
 
     $requiredFields = @('Key', 'Required', 'Notes')
     $config = @()
-    foreach ($entry in $jsonData) {
+    foreach ($entry in $entriesArray) {
         $missingFields = @()
         foreach ($field in $requiredFields) {
             if (-not $entry.PSObject.Properties[$field] -or [string]::IsNullOrWhiteSpace($entry.$field)) {
@@ -32300,7 +34457,7 @@ Function Show-SupervisorJsonConfigurationHelp {
 
         .PARAMETER Filter
         Filters the configuration elements by Key using wildcard matching. The filter is automatically wrapped with wildcards (*) on both sides.
-        For example, '-Filter tkgs' will match all keys containing 'tkgs'.
+        For example, '-Filter mgmt' will match all keys containing 'mgmt'.
 
         .EXAMPLE
         Show-SupervisorJsonConfigurationHelp
@@ -32328,9 +34485,9 @@ Function Show-SupervisorJsonConfigurationHelp {
         Opens an interactive grid view window with sorting and filtering capabilities (Windows PowerShell only).
 
         .EXAMPLE
-        Show-SupervisorJsonConfigurationHelp -Filter tkgs
+        Show-SupervisorJsonConfigurationHelp -Filter mgmt
 
-        Displays only configuration elements containing 'tkgs' in their Key.
+        Displays only configuration elements containing 'mgmt' in their Key.
 
         .OUTPUTS
         None. This function displays formatted output to the console or opens a grid view window.
@@ -32352,4 +34509,4 @@ Function Show-SupervisorJsonConfigurationHelp {
 #endregion
 
 # Export the public functions.
-Export-ModuleMember -Function 'Start-VcfEdgeAtScale', 'Copy-VcfEdgeAtScaleTemplates', 'Show-InfrastructureJsonConfigurationHelp', 'Show-SupervisorJsonConfigurationHelp'
+Export-ModuleMember -Function 'Start-VcfEdgeAtScale', 'Show-InfrastructureJsonConfigurationHelp', 'Show-SupervisorJsonConfigurationHelp'

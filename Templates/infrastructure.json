@@ -65,7 +65,7 @@
             "gateway": "10.30.12.1/24"
           },
           {
-            "name": "tkgsmgmtnetwork",
+            "name": "mgmtnetwork",
             "vlanId": "303",
             "gateway": "10.30.13.1/24"
           }
@@ -122,7 +122,7 @@
             "gateway": "10.40.12.1/24"
           },
           {
-            "name": "tkgsmgmtnetwork-2",
+            "name": "mgmtnetwork-2",
             "vlanId": "403",
             "gateway": "10.40.13.1/24"
           }

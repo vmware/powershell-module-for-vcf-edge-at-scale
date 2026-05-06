@@ -1,11 +1,9 @@
 # Usage Examples
 
-**Prerequisites:** PowerShell 7.4+, VCF PowerCLI 9.0+,  kubectl, VCF CLI (`vcf`), per [README.md](README.md).
+## Show parameters for Start-VcfEdgeAtScale
 
-## Show help for all public functions - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -?
+```Powershell
+PS C:\Users\Administrator>  Start-VcfEdgeAtScale -?
 
 NAME
     Start-VcfEdgeAtScale
@@ -15,10 +13,10 @@ SYNOPSIS
 
 
 SYNTAX
-    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-ComputeOnly]
-    [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [[-InfrastructureJson] <String>]
-    [[-LogLevel] <String>] [[-RollbackOnFailure] <Nullable`1>] [[-SupervisorJson] <String>] [-ValidateOnly] [-Version]
-    [<CommonParameters>]
+    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-CollectLogs] [-ComputeOnly]
+    [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [-Initialize]
+    [-InitializeTemplatesOnly] [[-InfrastructureJson] <String>] [[-LogLevel] <String>] [[-RollbackOnFailure]
+    <Nullable`1>] [-SaveHarborYaml] [[-SupervisorJson] <String>] [-ValidateOnly] [-Version] [<CommonParameters>]
 
 
 DESCRIPTION
@@ -32,6 +30,15 @@ DESCRIPTION
     - vSphere Supervisor Deployment
     - ArgoCD installation and configuration for GitOps workflows
 
+    For normal runs (not -Version or -Initialize), the environment variable VcfEdgeatScaleRootDirectory must
+    point at your configuration base directory. Defaults for -InfrastructureJson and -SupervisorJson join that
+    directory with infrastructure.json and supervisor.json when you omit those parameters. Logs are written
+    under Join-Path(VcfEdgeatScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
+    refresh the recommended layout from module Templates (new or existing base directory; use
+    -Initialize -InitializeTemplatesOnly to refresh only ServicesYaml and Docs without changing root JSON).
+    Use Start-VcfEdgeAtScale -CollectLogs to zip infrastructure.json, supervisor.json, Logs, and ServicesYaml for
+    support (interactive prompts).
+
 
 RELATED LINKS
 
@@ -40,61 +47,353 @@ REMARKS
     For more information, type: "Get-Help Start-VcfEdgeAtScale -Detailed"
     For technical information, type: "Get-Help Start-VcfEdgeAtScale -Full"
 
-PS C:\Users\Administrator> show-SupervisorJsonConfigurationHelp -?
+```
 
-NAME
-    Show-SupervisorJsonConfigurationHelp
+## Show Supervisor Configuration Options
 
-SYNOPSIS
-    Displays a reference table for configuring supervisor.json file.
-
-
-SYNTAX
-    Show-SupervisorJsonConfigurationHelp [[-Filter] <String>] [[-Format] <String>] [[-WidthThreshold] <Int32>]
-    [<CommonParameters>]
+```Powershell
+PS C:\Users\Administrator> Show-SupervisorJsonConfigurationHelp
 
 
-DESCRIPTION
-    This helper function displays a reference table of configuration keys for the supervisor.json file,
-    with Required (Yes/No/Conditional) and Notes for each key.
+[INFO] ========================================================================================================================
+[INFO] Supervisor.json Configuration Reference
+[INFO] ========================================================================================================================
+
+Key                                                                                               Required Notes
+---                                                                                               -------- -----
+commonSupervisorSpec.controlPlaneVMCount                                                          Yes      1 or 3. Shallow validation requires the key; values follow platform rules.
+commonSupervisorSpec.controlPlaneSize                                                             Yes      TINY, SMALL, MEDIUM, or LARGE.
+commonSupervisorSpec.flbAvailability                                                              Yes      SINGLE_NODE or ACTIVE_PASSIVE.
+commonSupervisorSpec.flbSize                                                                      Yes      SMALL, MEDIUM, LARGE, or X-LARGE.
+commonSupervisorSpec.flbNetworkType                                                               Yes      Use DVPG.
+commonSupervisorSpec.networkSearchDomains                                                         Yes      Array of DNS search domains.
+commonSupervisorSpec.networkNtpServers                                                            Yes      Array of NTP servers.
+commonSupervisorSpec.dnsServers                                                                   Yes      Array of DNS servers.
+siteSpec                                                                                          Yes      Array of site-specific supervisor configurations. Each entry is linked to infrastructure.json clusters[]
+                                                                                                           via edgeSite.
+siteSpec[].edgeSite                                                                               Yes      Must match infrastructure.json clusters[].edgeSite.
+siteSpec[].foundationLoadBalancerComponents.flbName                                               Yes      FLB name for this site.
+siteSpec[].foundationLoadBalancerComponents.flbVipStartIP                                         Yes      Start IP for FLB virtual IP range.
+siteSpec[].foundationLoadBalancerComponents.flbVipIPCount                                         Yes      Count of VIPs from flbVipStartIP.
+siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName                   Yes      Must match infra networkSegments[].name; gateway from infra unless flbNetworkGateway is set.
+siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp    Yes      Start IP for FLB management network.
+siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount         Yes      IP count for FLB management.
+siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkGateway                No       Override gateway (otherwise from infra by name).
+siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName                Yes      Must match infra segment name; gateway from infra unless flbNetworkGateway is set.
+siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp Yes      Start IP for FLB virtual server network.
+siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount      Yes      IP count for the FLB virtual-server network range; required by shallow validation (e.g. match segment
+                                                                                                           size).
+siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkGateway             No       Override gateway (otherwise from infra by name).
+siteSpec[].mgmtNetworkSpec.mgmtNetworkName                                                        Yes      Must match infra segment name.
+siteSpec[].mgmtNetworkSpec.mgmtNetworkStartingIp                                                  Yes      Start IP for VKS management network.
+siteSpec[].mgmtNetworkSpec.mgmtNetworkIPCount                                                     Yes      IP count for VKS management.
+siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkName                                      Yes      Must match infra segment name.
+siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp                                Yes      Start IP for workload VIP range.
+siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount                                   Yes      IP count for workload VIP range.
+siteSpec[].primaryWorkloadNetwork.workloadServiceStartIp                                          Yes      Start IP for workload service range.
+siteSpec[].primaryWorkloadNetwork.workloadServiceCount                                            Yes      Count (e.g. 256 or 512); must occupy full CIDR. Shallow validation requires this key.
+```
+
+## Show Infrastructure Configuration Options
+
+```Powershell
+PS C:\Users\Administrator> Show-InfrastructureJsonConfigurationHelp
 
 
-RELATED LINKS
+[INFO] ========================================================================================================================
+[INFO] Infrastructure.json Configuration Reference
+[INFO] ========================================================================================================================
 
-REMARKS
-    To see the examples, type: "Get-Help Show-SupervisorJsonConfigurationHelp -Examples"
-    For more information, type: "Get-Help Show-SupervisorJsonConfigurationHelp -Detailed"
-    For technical information, type: "Get-Help Show-SupervisorJsonConfigurationHelp -Full"
+Key                                                          Required    Notes
+---                                                          --------    -----
+common.vCenterName                                           Yes         vCenter FQDN, 9.0 or later. Script needs HTTPS access.
+common.vCenterUser                                           Yes         vCenter login (e.g. administrator@vsphere.local); SSO supported.
+common.datacenterName                                        Yes         Existing vSphere datacenter; clusters are created under it.
+common.contextName                                           Yes         VCF context name used by VCF CLI for ArgoCD.
+common.nicList                                               Conditional Array of NICs for the VDS (e.g. [{"name":"vmnic1"},{"name":"vmnic2"}]). Number of uplinks = length of nicList. Required at common or per
+                                                                         cluster (clusters[].nicList); cluster overrides common. Must have 2 or 4 NICs.
+common.vSanWitnessVmName                                     No          vSAN witness VM name or FQDN; used by vSAN-OSA/ESA. Overridable per cluster.
+common.haPolicy                                              No          vSAN-OSA/ESA multi-host only: reservationBased (default when key omitted; percentage admission), slotBased (host failures tolerated = 1),
+                                                                         or disabled (HA on, admission off). When the key exists, value must be exactly one of those three strings. Overridable per cluster.
+common.esxUser                                               No          ESX login. Omit to use default root.
+common.esxUniquePasswordPerHost                              No          Boolean. Default false when not defined (one password for all hosts). true = prompt per host.
+common.nonInteractivePassword                                No          Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars.
+common.labenvironment                                        No          Boolean lab mode (property name is case-insensitive in JSON; templates use labenvironment). Relaxes some gates; Harbor TLS may be omitted
+                                                                         when true.
+common.clusterNamePrefix                                     No          Prefix for cluster names. Omit for default cluster; format {prefix}-{edgeSite}.
+common.datastoreNamePrefix                                   No          Prefix for datastore names. Omit for default datastore; format {prefix}-{edgeSite}.
+common.supervisorNamePrefix                                  No          Prefix for supervisor names. Omit for default supervisor; format {prefix}-{edgeSite}.
+common.vdsNamePrefix                                         No          Prefix for VDS names. Omit for default VDS; format {prefix}-{edgeSite}.
+common.supervisorContentLibraryDatastore                     No          When the key is present, datastore for supervisor content library (must already exist); script runs Initialize-SupervisorContentLibrary.
+                                                                         When the key is omitted (removed) entirely, the content library workflow is skipped.
+common.supervisorContentLibrarySubscriptionUrl               No          When supervisorContentLibraryDatastore key is present, subscription URL for the content library. If omitted, default is
+                                                                         https://wp-content.vmware.com/supervisor/v1/latest/lib.json.
+common.vLcmImageName                                         No          vLCM image name in vCenter Image Catalog; omit to choose at run time.
+common.vSanvMotionVmKernelMtuValue                           No          Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and vSAN
+                                                                         Witness (vmk3) are always 1500. Must be 1500-9190 (numbers only; validated at JSON load). Use 1500 when the physical path does not support
+                                                                         jumbo frames.
+common.vmkernelMtu                                           No          Optional. Legacy. MTU (1500-9190) for VDS and vMotion/vSAN VMkernels when common.vSanvMotionVmKernelMtuValue is not set. Mgmt and vSAN
+                                                                         Witness are always 1500.
+common.supervisorServices.parentDirectory                    Conditional Directory containing Argo CD and Harbor YAML files when using *YamlFileName keys (escape backslashes on Windows). Not required if every
+                                                                         Argo- or Harbor-enabled cluster resolves YAML via legacy *YamlPath properties at common or cluster level. When set with a file name, paths
+                                                                         are Join-Path(parentDirectory, *YamlFileName).
+common.supervisorServices.argoCdOperatorYamlFileName         Conditional File name only (e.g. 1.1.0-25100889.yml) under parentDirectory for the Argo CD operator package. Use with parentDirectory, or use
+                                                                         common.supervisorServices.argoCdOperatorYamlPath instead. Ignored when disableArgoCD is true.
+common.supervisorServices.argoCdDeploymentYamlFileName       Conditional File name only under parentDirectory for the Argo CD instance YAML; namespace in file must match nameSpacePrefix. Use with
+                                                                         parentDirectory, or use common.supervisorServices.argoCdDeploymentYamlPath instead. Ignored when disableArgoCD is true.
+common.supervisorServices.disableArgoCD                      No          Boolean. When true, skips ArgoCD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins.
+                                                                         Default: false.
+common.supervisorServices.disableHarbor                      No          Boolean. When true, skips Harbor deployment (service registration, data values generation, installation) for all clusters. Cluster-level
+                                                                         override wins. Default: false.
+common.supervisorServices.harborDataTemplateYamlFileName     Conditional File name only (e.g. harbor-data-values-v2.14.2.yml) under parentDirectory for the Harbor data values template. The script creates a
+                                                                         per-site copy at runtime; the original is never modified. Use with parentDirectory, or use
+                                                                         common.supervisorServices.harborDataTemplateYamlPath instead. Not required when disableHarbor is true for all clusters.
+common.supervisorServices.harborServiceYamlFileName          Conditional File name only for the Harbor Supervisor Service Carvel package YAML (e.g. legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml) under
+                                                                         parentDirectory. Use with parentDirectory, or use common.supervisorServices.harborServiceYamlPath instead. Not required when disableHarbor
+                                                                         is true for all clusters.
+common.supervisorServices.argoCdOperatorYamlPath             Conditional Legacy full or infrastructure-relative path to the Argo CD operator package YAML. Used when parentDirectory and argoCdOperatorYamlFileName
+                                                                         do not both resolve (cluster overrides common). Ignored when disableArgoCD is true.
+common.supervisorServices.argoCdDeploymentYamlPath           Conditional Legacy full or infrastructure-relative path to the Argo CD instance YAML. Used when parentDirectory and argoCdDeploymentYamlFileName do
+                                                                         not both resolve (cluster overrides common). Ignored when disableArgoCD is true.
+common.supervisorServices.harborDataTemplateYamlPath         Conditional Legacy full or infrastructure-relative path to the Harbor data values template YAML. Used when parentDirectory and
+                                                                         harborDataTemplateYamlFileName do not both resolve (cluster overrides common). Not required when disableHarbor is true for all clusters.
+common.supervisorServices.harborServiceYamlPath              Conditional Legacy full or infrastructure-relative path to the Harbor Supervisor Service Carvel package YAML. Used when parentDirectory and
+                                                                         harborServiceYamlFileName do not both resolve (cluster overrides common). Not required when disableHarbor is true for all clusters.
+clusters                                                     Yes         Array of cluster configurations. Each cluster is identified by edgeSite and contains ESX hosts, supervisor services, storage policy, and
+                                                                         networking.
+clusters[].edgeSite                                          Yes         Unique site ID; must match one siteSpec[].edgeSite in supervisor.json.
+clusters[].esxHosts                                          Yes         Array of ESX FQDNs or IPs; script needs HTTPS access to each host.
+clusters[].networking                                        Yes         Container for networkSegments and (for vSAN) networkingVmKernelInterfaces. Required by shallow validation.
+clusters[].storagePolicy                                     Yes         Container for storage type and tag catalog. Required by shallow validation.
+clusters[].nicList                                           Conditional Optional override for this cluster. When present (2 or 4 NICs), overrides common.nicList. At least one of common.nicList or
+                                                                         clusters[].nicList must be defined per cluster.
+clusters[].vSanWitnessVmName                                 Conditional vSAN witness VM name or FQDN for this cluster. Overrides common.vSanWitnessVmName. Required (at cluster or common level) for vSAN-OSA and
+                                                                         vSAN-ESA; not used for VMFS.
+clusters[].haPolicy                                          No          Overrides common.haPolicy for this cluster. Same allowed values and vSAN-only scope as common.haPolicy. When the key exists, value must be
+                                                                         reservationBased, slotBased, or disabled.
+clusters[].supervisorServices.parentDirectory                No          Override directory for this cluster’s supervisorServices YAML files. When set, used instead of common.supervisorServices.parentDirectory
+                                                                         for Join-Path with *YamlFileName keys. Omit to use common parentDirectory or legacy *YamlPath resolution.
+clusters[].supervisorServices.argoCdOperatorYamlFileName     Conditional Overrides common.supervisorServices.argoCdOperatorYamlFileName for this cluster when defined. Use with parentDirectory, or use
+                                                                         clusters[].supervisorServices.argoCdOperatorYamlPath instead. Ignored when disableArgoCD is true.
+clusters[].supervisorServices.argoCdDeploymentYamlFileName   Conditional Overrides common.supervisorServices.argoCdDeploymentYamlFileName for this cluster when defined. Use with parentDirectory, or use
+                                                                         clusters[].supervisorServices.argoCdDeploymentYamlPath instead. Ignored when disableArgoCD is true.
+clusters[].supervisorServices.harborDataTemplateYamlFileName Conditional Overrides common.supervisorServices.harborDataTemplateYamlFileName for this cluster when defined. Use with parentDirectory, or use
+                                                                         clusters[].supervisorServices.harborDataTemplateYamlPath instead. Ignored when disableHarbor is true.
+clusters[].supervisorServices.harborServiceYamlFileName      Conditional Overrides common.supervisorServices.harborServiceYamlFileName for this cluster when defined. Use with parentDirectory, or use
+                                                                         clusters[].supervisorServices.harborServiceYamlPath instead. Ignored when disableHarbor is true.
+clusters[].supervisorServices.argoCdOperatorYamlPath         Conditional Per-cluster legacy path to the Argo CD operator YAML; overrides common when set. Used when parentDirectory and argoCdOperatorYamlFileName
+                                                                         do not both resolve. Ignored when disableArgoCD is true.
+clusters[].supervisorServices.argoCdDeploymentYamlPath       Conditional Per-cluster legacy path to the Argo CD instance YAML; overrides common when set. Ignored when disableArgoCD is true.
+clusters[].supervisorServices.harborDataTemplateYamlPath     Conditional Per-cluster legacy path to the Harbor data values template YAML; overrides common when set. Ignored when disableHarbor is true.
+clusters[].supervisorServices.harborServiceYamlPath          Conditional Per-cluster legacy path to the Harbor Carvel package YAML; overrides common when set. Ignored when disableHarbor is true.
+clusters[].supervisorServices.disableArgoCD                  No          Boolean. Overrides common.supervisorServices.disableArgoCD for this cluster only. When true, skips ArgoCD deployment for this cluster.
+                                                                         Default: false.
+clusters[].supervisorServices.disableHarbor                  No          Boolean. Overrides common.supervisorServices.disableHarbor for this cluster only. When true, skips Harbor deployment for this cluster.
+                                                                         Default: false.
+clusters[].supervisorServices.nameSpacePrefix                No          ArgoCD namespace prefix. Omit for default argocd; script appends cluster MoRef for uniqueness.
+clusters[].supervisorServices.vmClass                        No          Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter.
+clusters[].harborConfiguration.hostname                      Conditional Required unless disableHarbor is true. DNS-compatible FQDN or IP for the Harbor registry (e.g. harbor.site1.example.com). Sets the
+                                                                         hostname key in the Harbor data values YAML.
+clusters[].harborConfiguration.harborAdminPassword           No          Override for the Harbor admin password. Prefix with $env: to resolve from an environment variable at runtime. If the variable is unset,
+                                                                         the script prompts interactively (masked input) during pre-flight.
+clusters[].harborConfiguration.secretKey                     No          AES-128 encryption key; must be exactly 16 characters. Plain-text values of the wrong length are rejected at pre-flight. Supports $env:
+                                                                         resolution with interactive fallback prompt when unset.
+clusters[].harborConfiguration.databasePassword              No          Override for the internal PostgreSQL password. Supports $env: resolution with interactive fallback prompt when unset.
+clusters[].harborConfiguration.coreSecret                    No          Override for the core inter-service secret. Supports $env: resolution with interactive fallback prompt when unset.
+clusters[].harborConfiguration.jobserviceSecret              No          Override for the jobservice inter-service secret. Supports $env: resolution with interactive fallback prompt when unset.
+clusters[].harborConfiguration.registrySecret                No          Override for the registry upload-state secret. Supports $env: resolution with interactive fallback prompt when unset.
+clusters[].harborConfiguration.parentDirectory               Conditional When tlsCrt, tlsKey, or caCrt are set: optional directory containing those PEM files as file names (or relative fragments under this
+                                                                         directory). When omitted, tlsCrt, tlsKey, and caCrt are full or infrastructure-relative paths (legacy).
+clusters[].harborConfiguration.tlsCrt                        Conditional With parentDirectory: TLS certificate file name (e.g. tls.crt.pem). Without parentDirectory: full or infrastructure-relative path to the
+                                                                         PEM file. Required when tlsKey is set; both must be defined together. Contents injected as tls.crt under tlsCertificate in the YAML.
+clusters[].harborConfiguration.tlsKey                        Conditional With parentDirectory: TLS private key file name (e.g. tls.key.pem). Without parentDirectory: full or infrastructure-relative path.
+                                                                         Required when tlsCrt is set; both must be defined together. Contents injected as tls.key under tlsCertificate in the YAML.
+clusters[].harborConfiguration.caCrt                         No          With parentDirectory: CA certificate file name. Without parentDirectory: full or infrastructure-relative path. Only valid when both tlsCrt
+                                                                         and tlsKey are defined. Contents injected as ca.crt under tlsCertificate in the YAML. Also used when registering Harbor as a Supervisor
+                                                                         container image registry.
+clusters[].harborConfiguration.registryVolumeSize            No          Override for persistence.persistentVolumeClaim.registry.size. Format: positive integer followed by Gi (e.g. 10Gi). Omit to use the
+                                                                         template default.
+clusters[].harborConfiguration.jobserviceVolumeSize          No          Override for persistence.persistentVolumeClaim.jobservice.jobLog.size. Format: <N>Gi. Omit to use the template default.
+clusters[].harborConfiguration.databaseVolumeSize            No          Override for persistence.persistentVolumeClaim.database.size. Format: <N>Gi. Omit to use the template default.
+clusters[].harborConfiguration.redisVolumeSize               No          Override for persistence.persistentVolumeClaim.redis.size. Format: <N>Gi. Omit to use the template default.
+clusters[].harborConfiguration.trivyVolumeSize               No          Override for persistence.persistentVolumeClaim.trivy.size. Format: <N>Gi. Omit to use the template default.
+clusters[].storagePolicy.storagePolicyTagCatalog             No          Tag catalog for storage policy. Omit for default {storageType}-Storage-TagCatalog.
+clusters[].storagePolicy.storageType                         Yes         Storage type: VMFS, vSAN-ESA, or vSAN-OSA.
+clusters[].storagePolicy.storagePolicyRule                   No          The only valid value is Fully initialized. Do not change otherwise the script will error.
+clusters[].networking.networkSegments                        Yes         Array of segments; names must match supervisor.json network references.
+clusters[].networking.networkSegments[].name                 Yes         Segment name; lower-case, RFC1123; must match supervisor.json.
+clusters[].networking.networkSegments[].vlanId               Yes         VLAN ID (0-4095); unique within this cluster.
+clusters[].networking.networkSegments[].gateway              Yes         Gateway in CIDR (e.g. 10.30.10.1/24); mapped into supervisor by segment name.
+clusters[].networking.networkingVmKernelInterfaces           Conditional Required for vSAN-ESA and vSAN-OSA only (not VMFS). At least two entries: vMotion, vSAN (required). Optional third: vSAN Witness. Shallow
+                                                                         / deeper checks validate the child keys below.
+clusters[].networking.networkingVmKernelInterfaces[].service Conditional One of: vMotion, vSAN, vSAN Witness (exact strings). vMotion and vSAN are required across the array; vSAN Witness is optional.
+clusters[].networking.networkingVmKernelInterfaces[].vlanId  Conditional VLAN ID 0-4095; must match a segment used for that traffic class.
+clusters[].networking.networkingVmKernelInterfaces[].netmask Conditional IPv4 netmask for the VMkernel (e.g. 255.255.255.0).
+clusters[].networking.networkingVmKernelInterfaces[].ipList  Conditional Array of exactly two unique IPv4 addresses (order aligns with esxHosts order).
+clusters[].networking.networkingVmKernelInterfaces[].gateway Conditional Optional. Used on the vSAN Witness entry only: IPv4 gateway applied via esxcli after the VMkernel exists.
 
-PS C:\Users\Administrator> Show-InfrastructureJsonConfigurationHelp -?
-
-NAME
-    Show-InfrastructureJsonConfigurationHelp
-
-SYNOPSIS
-    Displays a reference table for configuring infrastructure.json file.
-
-
-SYNTAX
-    Show-InfrastructureJsonConfigurationHelp [[-Filter] <String>] [[-Format] <String>] [[-WidthThreshold] <Int32>]
-    [<CommonParameters>]
-
-
-DESCRIPTION
-    This helper function displays a reference table of configuration keys for the infrastructure.json file,
-    with Required (Yes/No/Conditional) and Notes for each key.
-
-
-RELATED LINKS
-
-REMARKS
-    To see the examples, type: "Get-Help Show-InfrastructureJsonConfigurationHelp -Examples"
-    For more information, type: "Get-Help Show-InfrastructureJsonConfigurationHelp -Detailed"
-    For technical information, type: "Get-Help Show-InfrastructureJsonConfigurationHelp -Full"
 
 ```
 
-## Example of ValidateOnly (JSON) - 2026-03-04
+## Example of initializing the script's configuration directory
+
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Initialize
+
+VcfEdgeAtScale initialize
+  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace.
+
+  Default base directory:  C:\Users\Administrator\VCFEdgeAtScale
+
+Press Enter to use the default, or type a full directory path:
+
+  Supervisor service YAML (ServicesYaml)
+    Copied: 1.1.0-25100889.yml
+    Copied: argocd-deployment.yml
+    Copied: harbor-data-values-v2.14.2.yml
+    Copied: legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+
+  Documentation (Docs)
+    Copied: EXAMPLE.rtf
+    Copied: README.rtf
+    Copied: infrastructure-config-help.json
+    Copied: supervisor-config-help.json
+
+  Root JSON files
+    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).
+    Copied supervisor.json to deployment root.
+
+=== Initialize summary ===
+  Deployment root: C:\Users\Administrator\VCFEdgeAtScale
+  Base directory: created (it did not exist before).
+  Subdirectories created: Docs, Logs, ServicesYaml.
+  See sections above for YAML, Docs, and JSON actions.
+  Optional Docs sources may show WARNING if your module install is missing RTF/help files.
+  Root JSON: created or refreshed per your answers above.
+  VcfEdgeatScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
+```
+
+## Example of single edge side deployment (four vNICs, vSAN-OSA, two VKS networks)
+
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite vsan-edge1
+
+[INFO] Checking for required JSON properties for edgeSite(s) "vsan-edge1"...
+[INFO] Validating property formats and values for edgeSite(s) "vsan-edge1"...
+[INFO] Processing 1 edge site(s): vsan-edge1...
+[INFO] Beginning workflow for edgeSite: "vsan-edge1".
+[INFO] Performing vCenter reachability check (TCP 443)...
+[INFO] Reachability: vCenter OK.
+[INFO] Performing ESX reachability check (TCP 443) for 2 host(s)...
+[INFO] Reachability: all targets OK (vCenter and 2 ESX host(s)).
+[INFO] Pre-flight checking ESX version (9.0.0 minimum) across 2 host(s)...
+[INFO] ESX pre-flight version check passed for all 2 host(s).
+[INFO] No cluster named "cluster-vsan-edge1" was found on vCenter "vcenter202.vcfedge.demo". Proceeding with cluster creation.
+[INFO] Using vLCM image from configuration: "VCF91".
+
+DisplayName BaseImage
+----------- ---------
+VCF91       9.1.0.0.25370933
+
+[INFO] Creating the cluster "cluster-vsan-edge1" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Adding ESX host "automation-esx02.vcfedge.demo" to cluster "cluster-vsan-edge1"... Success
+[INFO] Adding ESX host "automation-esx03.vcfedge.demo" to cluster "cluster-vsan-edge1"... Success
+[INFO] Creating VDS "VDS-vsan-edge1-sw1" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Creating VDS "VDS-vsan-edge1-sw2" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Migrating management (vmk0) to VDS "VDS-vsan-edge1-sw1" for 2 host(s)... Done
+[INFO] Creating port group "managementnetwork" on VDS "VDS-vsan-edge1-sw1" with VLAN ID 401... Success
+[INFO] Creating port group "guestnetwork" on VDS "VDS-vsan-edge1-sw1" with VLAN ID 402... Success
+[INFO] VDS "VDS-vsan-edge1-sw1": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
+[INFO] VDS "VDS-vsan-edge1-sw2": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
+[INFO] Creating port group "vmotion-vsan-edge1" on VDS "VDS-vsan-edge1-sw2" with VLAN ID 404... Success
+[INFO] Creating port group "vsan-vsan-edge1" on VDS "VDS-vsan-edge1-sw2" with VLAN ID 405... Success
+[INFO] Created VMkernel for "vMotion" on host "automation-esx02.vcfedge.demo" (port group "vmotion-vsan-edge1", IP 10.40.14.12, MTU 9000).
+[INFO] Created VMkernel for "vMotion" on host "automation-esx03.vcfedge.demo" (port group "vmotion-vsan-edge1", IP 10.40.14.13, MTU 9000).
+[INFO] Created VMkernel for "vSAN" on host "automation-esx02.vcfedge.demo" (port group "vsan-vsan-edge1", IP 10.40.15.12, MTU 9000).
+[INFO] Created VMkernel for "vSAN" on host "automation-esx03.vcfedge.demo" (port group "vsan-vsan-edge1", IP 10.40.15.13, MTU 9000).
+[INFO] Successfully created tag catalog "vSAN-OSA-Storage-TagCatalog" on "vcenter202.vcfedge.demo".
+[INFO] Successfully created tag name "supervisor-vsan-edge1" on "vSAN-OSA-Storage-TagCatalog".
+[INFO] Retrieving vSAN OSA eligible disks for cluster "cluster-vsan-edge1" from all hosts...
+[INFO] Found 4 eligible disk(s) for cluster "cluster-vsan-edge1".
+
+vSAN OSA disks claimed for cluster "cluster-vsan-edge1" (cache/capacity per host):
+
+Id VMHostName                    CanonicalName       CapacityGB Model                     IsSsd DefaultRole
+-- ----------                    -------------       ---------- -----                     ----- -----------
+ 1 automation-esx02.vcfedge.demo mpx.vmhba0:C0:T2:L0     600.00 VMware   Virtual disk      True Capacity
+ 2 automation-esx02.vcfedge.demo mpx.vmhba0:C0:T1:L0      80.00 VMware   Virtual disk      True Cache
+ 3 automation-esx03.vcfedge.demo mpx.vmhba0:C0:T2:L0     600.00 VMware   Virtual disk      True Capacity
+ 4 automation-esx03.vcfedge.demo mpx.vmhba0:C0:T1:L0      80.00 VMware   Virtual disk      True Cache
+
+[INFO] vSAN OSA disk group assignment completed for 2 host(s) (default cache/capacity).
+[INFO] Creating vSAN OSA disk group on host "automation-esx02.vcfedge.demo" (1 cache, 1 capacity disk(s)).
+[INFO] Successfully created vSAN OSA disk group on host "automation-esx02.vcfedge.demo".
+[INFO] Creating vSAN OSA disk group on host "automation-esx03.vcfedge.demo" (1 cache, 1 capacity disk(s)).
+[INFO] Successfully created vSAN OSA disk group on host "automation-esx03.vcfedge.demo".
+[INFO] Successfully configured vSAN OSA disk groups for all hosts in cluster "cluster-vsan-edge1".
+[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-vsan-edge1"... Success
+[INFO] Configuring vSAN witness for cluster "cluster-vsan-edge1" (witness host: "10.191.174.197").
+[INFO] Checking whether witness host "10.191.174.197" already has a vSAN OSA disk group...
+[INFO] Witness host "10.191.174.197" already has a vSAN OSA disk group. Skipping disk group creation.
+[INFO] Configuring vSAN witness host for cluster "cluster-vsan-edge1"...
+[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
+[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.197" for cluster "cluster-vsan-edge1"...
+[INFO] Successfully configured witness host "10.191.174.197" for cluster "cluster-vsan-edge1".
+[INFO] vSAN cluster health is green for cluster "cluster-vsan-edge1". Proceeding.
+[INFO] Successfully tagged vSAN OSA datastore "datastore-vsan-edge1" with tag "supervisor-vsan-edge1" (catalog "vSAN-OSA-Storage-TagCatalog").
+[INFO] Running vLCM cluster compliance check for cluster "cluster-vsan-edge1".
+[INFO] Cluster "cluster-vsan-edge1" is compliant to the vLCM image. No remediation required.
+[INFO] Retrieving supervisor ID for "supervisor-vsan-edge1" on vCenter "vcenter202.vcfedge.demo"...
+[INFO] Beginning Supervisor deployment to cluster "cluster-vsan-edge1"...
+[INFO] Supervisor configuration parsed successfully for edgeSite: vsan-edge1.
+[INFO] Configuration validation passed.
+[INFO] Supervisor services on cluster "cluster-vsan-edge1" were successfully configured in 1430 seconds.
+[INFO] Supervisor deployment completed successfully. Supervisor ID: 0612c330-c930-4187-9a58-655191f7a94e
+[INFO] Checking for available supervisor upgrade versions...
+[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.1.0.0-25234335 is up to date.
+[INFO] Using all available VM classes for ArgoCD namespace.
+[INFO] The ArgoCD namespace "argocd-c3942" was created successfully with 29 VM classes assigned: best-effort-medium, best-effort-large, guaranteed-4xlarge, 6cpu-guaranteed-24576mb-guaranteed, guaranteed-large, best-effort-4xlarge, guaranteed-8xlarge, best-effort-xsmall, best-effort-xlarge, guaranteed-xlarge, best-effort-small, guaranteed-small, 2cpu-besteffort-8192mb-besteffort, 4cpu-besteffort-16384mb-besteffort, guaranteed-2xlarge, best-effort-2xlarge, guaranteed-medium, 2cpu-besteffort-3072mb-besteffort, 32cpu-besteffort-131072mb-besteffort, 1cpu-besteffort-2048mb-besteffort, 16cpu-besteffort-131072mb-besteffort, 4cpu-besteffort-12288mb-besteffort, 4cpu-besteffort-21504mb-besteffort, guaranteed-xsmall, 8cpu-besteffort-98304mb-besteffort, 8cpu-besteffort-32768mb-besteffort, 32cpu-besteffort-262144mb-besteffort, 4cpu-besteffort-4096mb-besteffort, best-effort-8xlarge
+[INFO] The ArgoCD operator has been successfully installed on vCenter "vcenter202.vcfedge.demo". (Took 45 seconds).
+[INFO] Creating VCF context "vcf-context-01" with endpoint "10.40.11.181"...
+[INFO] VCF context "vcf-context-01" created successfully.
+[INFO] Switching to VCF context "vcf-context-01:argocd-c3942"...
+[INFO] VCF context "vcf-context-01" activated successfully.
+[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
+[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
+[INFO] All 5 ArgoCD pods are ready.
+
+---------------------------------------
+[INFO] To login to ArgoCD:
+[INFO]    Go to https://10.40.12.203/
+[INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx
+[INFO]    To update your password run: "argocd.exe account update-password --server 10.40.12.203 --account admin --insecure"
+
+---------------------------------------
+[INFO] Created temporary Harbor data values file for edge site "vsan-edge1" (hostname: "harbor-site1.example.com", storageClass: "supervisor-vsan-edge1")
+[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
+[INFO] Harbor service install request submitted. Waiting for configuration to complete.
+[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "0612c330-c930-4187-9a58-655191f7a94e".
+[INFO] Harbor Supervisor Service installed successfully for edge site "vsan-edge1" (hostname: "harbor-site1.example.com").
+
+---------------------------------------
+[INFO] Harbor is deployed for cluster "cluster-vsan-edge1" — connection details:
+[INFO]   Username : admin
+[INFO]   Password : xxxxxxxxxxxxxxxxx
+[INFO]   Namespace: svc-harbor-4laok
+[INFO]   URL      : https://10.40.12.204
+[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.40.12.204 (Harbor load balancer external IP).
+
+---------------------------------------
+[INFO] Registering Harbor as container image registry "harbor" on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (endpoint: "10.40.12.204")...
+[INFO] Harbor container image registry "harbor" registered on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (id: "2669572d-5cc2-4d78-b84d-19848e34e0bf", endpoint: "10.40.12.204").
+[INFO] Completed deployment for cluster with edgeSite: vsan-edge1
+[INFO] ESXi node health for cluster "cluster-vsan-edge1" (2 host(s)): all Connected/PoweredOn.
+[INFO] Supervisor health for cluster "cluster-vsan-edge1" (supervisor "0612c330-c930-4187-9a58-655191f7a94e"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions.
+[INFO] Running on-demand vSAN health test for cluster "cluster-vsan-edge1" (vSAN Health RETEST equivalent after deployment; VMCreateTimeoutSeconds=120).
+[INFO] On-demand vSAN health test completed for cluster "cluster-vsan-edge1". Refresh vSAN Health in vCenter to review current status.
+```
+
+## Example of ValidateOnly (JSON)
 
 ```powershell
  PS C:\Users\Administrator> Start-VcfEdgeAtScale -ValidateOnly
@@ -109,1573 +408,131 @@ PS C:\Users\Administrator> Start-VcfEdgeAtScale -ValidateOnly -EdgeSite ESA
 [INFO] ValidateOnly: validation passed. Exiting without deployment.
 ```
 
-## Show infrastructure config options - 2026-03-04
+## Example of single site deployment (four NICs, VMFS datastore, four VKS networks)
 
-```powershell
-PS C:\Users\Administrator> Show-InfrastructureJsonConfigurationHelp
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2
 
-
-[INFO] ========================================================================================================================
-[INFO] Infrastructure.json Configuration Reference
-[INFO] ========================================================================================================================
-
-
-
-Key                                                    Required    Notes
----                                                    --------    -----
-common.vCenterName                                     Yes         vCenter FQDN, 9.0 or later. Script needs HTTPS access.
-common.vCenterUser                                     Yes         vCenter login (e.g. administrator@vsphere.local); SSO supported.
-common.vSanWitnessVmName                               No          vSAN witness VM name or FQDN; used by vSAN-OSA/ESA.
-common.esxUser                                         No          ESX login. Omit to use default root.
-common.esxUniquePasswordPerHost                        No          Boolean. Default false when not defined (one password for all hosts). true = prompt per host.
-common.nonInteractivePassword                          No          Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars.
-common.labEnvironment                                  No          Boolean. When true, some vSAN health checks are relaxed. With -Force, bypasses cleanup confirmation.
-common.datacenterName                                  Yes         Existing vSphere datacenter; clusters are created under it.
-common.clusterNamePrefix                               No          Prefix for cluster names. Omit for default cluster; format {prefix}-{edgeSite}.
-common.datastoreNamePrefix                             No          Prefix for datastore names. Omit for default datastore; format {prefix}-{edgeSite}.
-common.supervisorNamePrefix                            No          Prefix for supervisor names. Omit for default supervisor; format {prefix}-{edgeSite}.
-common.vdsNamePrefix                                   No          Prefix for VDS names. Omit for default VDS; format {prefix}-{edgeSite}.
-common.supervisorContentLibraryDatastore               No          When the key is present, datastore for supervisor content library (must already exist); script runs
-                                                                   Initialize-SupervisorContentLibrary. When the key is omitted (removed) entirely, the content library workflow is skipped.
-common.supervisorContentLibrarySubscriptionUrl         No          When supervisorContentLibraryDatastore key is present, subscription URL for the content library. If omitted, default is
-                                                                   https://wp-content.vmware.com/supervisor/v1/latest/lib.json.
-common.vLcmImageName                                   No          vLCM image name in vCenter Image Catalog; omit to choose at run time.
-common.vSanvMotionVmKernelMtuValue                     No          Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and
-                                                                   vSAN Witness (vmk3) are always 1500. Must be 1500-9190 (numbers only; validated at JSON load). Use 1500 when the physical path does
-                                                                   not support jumbo frames.
-common.vmkernelMtu                                     No          Optional. Legacy. MTU (1500-9190) for VDS and vMotion/vSAN VMkernels when common.vSanvMotionVmKernelMtuValue is not set. Mgmt and
-                                                                   vSAN Witness are always 1500.
-common.nicList                                         Conditional Array of NICs for the VDS (e.g. [{"name":"vmnic1"},{"name":"vmnic2"}]). Number of uplinks = length of nicList. Required at common or
-                                                                   per cluster (clusters[].nicList); cluster overrides common. Must have 2 or 4 NICs.
-common.contextName                                     Yes         VCF context name used by VCF CLI for ArgoCD.
-clusters                                               Yes         Array of cluster configurations. Each cluster is identified by edgeSite and contains ESX hosts, supervisor services, storage policy,
-                                                                   and networking.
-clusters[].edgeSite                                    Yes         Unique site ID; must match one tkgsSiteSpec[].edgeSite in supervisor.json.
-clusters[].nicList                                     Conditional Optional override for this cluster. When present (2 or 4 NICs), overrides common.nicList. At least one of common.nicList or
-                                                                   clusters[].nicList must be defined per cluster.
-clusters[].esxHosts                                    Yes         Array of ESX FQDNs or IPs; script needs HTTPS access to each host.
-clusters[].supervisorServices.argoCdOperatorYamlPath   Yes         Path to ArgoCD operator YAML (escape backslashes on Windows).
-clusters[].supervisorServices.argoCdDeploymentYamlPath Yes         Path to ArgoCD instance YAML; namespace in file must match nameSpacePrefix.
-clusters[].supervisorServices.nameSpacePrefix          No          ArgoCD namespace prefix. Omit for default argocd; script appends cluster MoRef for uniqueness.
-clusters[].supervisorServices.vmClass                  No          Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter.
-clusters[].storagePolicy.storagePolicyTagCatalog       No          Tag catalog for storage policy. Omit for default {storageType}-Storage-TagCatalog.
-clusters[].storagePolicy.storageType                   Yes         Storage type: VMFS, vSAN-ESA, or vSAN-OSA.
-clusters[].storagePolicy.storagePolicyRule             No          The only valid value is Fully initialized. Do not change otherwise the script will error.
-clusters[].networking.networkSegments                  Yes         Array of segments; names must match supervisor.json network references.
-clusters[].networking.networkSegments[].name           Yes         Segment name; lower-case, RFC1123; must match supervisor.json.
-clusters[].networking.networkSegments[].vlanId         Yes         VLAN ID (0-4095); unique within this cluster.
-clusters[].networking.networkSegments[].gateway        Yes         Gateway in CIDR (e.g. 10.30.10.1/24); mapped into supervisor by segment name.
-clusters[].networking.networkingVmKernelInterfaces     Conditional Required for vSAN-ESA and vSAN-OSA only (not VMFS). At least two entries: vMotion, vSAN (required). Optional third: vSAN Witness.
-                                                                   When vSAN Witness is omitted, mgmt (vmk0) is tagged with vSAN witness traffic; when present, a dedicated witness VMkernel (vmk3) is
-                                                                   created. Each entry: service, vlanId (0-4095), netmask (valid IPv4 netmask), ipList (exactly two unique IPv4s, one per host). Only
-                                                                   the vSAN Witness entry requires gateway.
-```
-
-## Show Supervisor Configuration Options - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Show-SupervisorJsonConfigurationHelp
-
-
-[INFO] ========================================================================================================================
-[INFO] Supervisor.json Configuration Reference
-[INFO] ========================================================================================================================
-
-
-
-Key                                                                                                   Required Notes
----                                                                                                   -------- -----
-commonSupervisorSpec.controlPlaneVMCount                                                              No       1 or 3.
-commonSupervisorSpec.controlPlaneSize                                                                 No       TINY, SMALL, MEDIUM, or LARGE.
-commonSupervisorSpec.flbAvailability                                                                  No       SINGLE_NODE or ACTIVE_PASSIVE.
-commonSupervisorSpec.flbSize                                                                          No       SMALL, MEDIUM, LARGE, or X-LARGE.
-commonSupervisorSpec.flbNetworkType                                                                   No       Use DVPG.
-commonSupervisorSpec.networkSearchDomains                                                             Yes      Array of DNS search domains.
-commonSupervisorSpec.networkNtpServers                                                                Yes      Array of NTP servers.
-commonSupervisorSpec.dnsServers                                                                       Yes      Array of DNS servers.
-tkgsSiteSpec                                                                                          Yes      Array of site-specific supervisor configurations. Each entry is linked to
-                                                                                                               infrastructure.json clusters[] via edgeSite.
-tkgsSiteSpec[].edgeSite                                                                               Yes      Must match infrastructure.json clusters[].edgeSite.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbName                                               No       FLB name for this site.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipStartIP                                         Yes      Start IP for FLB virtual IP range.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVipIPCount                                         Yes      Count of VIPs from flbVipStartIP.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName                   No       Must match infra networkSegments[].name; gateway from infra.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp    Yes      Start IP for FLB management network.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount         Yes      IP count for FLB management.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkGateway                No       Override gateway (otherwise from infra by name).
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName                No       Match infra segment name; gateway from infra.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp Yes      Start IP for FLB virtual server network.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount      No       IP count; default may be used.
-tkgsSiteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkGateway             No       Override gateway (otherwise from infra by name).
-tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkName                                                No       Must match infra segment name.
-tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkStartingIp                                          Yes      Start IP for VKS management network.
-tkgsSiteSpec[].tkgsMgmtNetworkSpec.tkgsMgmtNetworkIPCount                                             Yes      IP count for VKS management.
-tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkName                              No       Must match infra segment name.
-tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkStartingIp                        Yes      Start IP for workload VIP range.
-tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsPrimaryWorkloadNetworkIPCount                           Yes      IP count for workload VIP range.
-tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceStartIp                                  Yes      Start IP for workload service range.
-tkgsSiteSpec[].tkgsPrimaryWorkloadNetwork.tkgsWorkloadServiceCount                                    No       Count (e.g. 256 or 512); must occupy full CIDR.
-```
-
-## Example deploying all sites in a JSON (two NICs, one vDS) - 2026-03-04
-
-```powershell
-
-PS C:\Users\Administrator> Start-VcfEdgeAtScale
-
-[INFO] Checking for required JSON properties for all sites...
-[INFO] Validating property formats and values for all sites...
-[INFO] Processing all 3 edge site(s)...
-[INFO] Beginning workflow for 3 edge site(s), starting with edgeSite: "ESA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 5 ESX host(s)).
-[INFO] No cluster named "cluster-ESA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
+[INFO] Checking for required JSON properties for edgeSite(s) "localdisk-edge2"...
+[INFO] Validating property formats and values for edgeSite(s) "localdisk-edge2"...
+[INFO] Processing 1 edge site(s): localdisk-edge2...
+[INFO] Beginning workflow for edgeSite: "localdisk-edge2".
+[INFO] Performing vCenter reachability check (TCP 443)...
+[INFO] Reachability: vCenter OK.
+[INFO] Performing ESX reachability check (TCP 443) for 1 host(s)...
+[INFO] Reachability: all targets OK (vCenter and 1 ESX host(s)).
+[INFO] Pre-flight checking ESX version (9.0.0 minimum) across 1 host(s)...
+[INFO] ESX pre-flight version check passed for all 1 host(s).
+[INFO] Datastore "datastore-localdisk-edge2" not found on ESX host "automation-esx01.vcfedge.demo".
+[INFO] Selected largest available drive for VMFS (CapacityGB=600, CanonicalName=mpx.vmhba0:C0:T2:L0).
+[INFO] No cluster named "cluster-localdisk-edge2" was found on vCenter "vcenter202.vcfedge.demo". Proceeding with cluster creation.
+[INFO] Using vLCM image from configuration: "VCF91".
 
 DisplayName BaseImage
 ----------- ---------
-ESX902-ESA  9.0.2.0.25148076
+VCF91       9.1.0.0.25370933
 
-[INFO] Creating the cluster "cluster-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.173" to cluster "cluster-ESA"... Success
-[INFO] Adding ESX host "10.191.171.174" to cluster "cluster-ESA"... Success
-[INFO] Creating VDS "VDS-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-ESA" on VDS "VDS-ESA" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.173".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.173".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.174".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.174".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Creating port group "primaryworkloadnetwork" on VDS "VDS-ESA" with VLAN ID 300... Success
-[INFO] Creating port group "flbmanagementnetwork" on VDS "VDS-ESA" with VLAN ID 301... Success
-[INFO] Creating port group "virtualservernetwork" on VDS "VDS-ESA" with VLAN ID 302... Success
-[INFO] Creating port group "tkgsmgmtnetwork" on VDS "VDS-ESA" with VLAN ID 303... Success
-[INFO] VDS "VDS-ESA": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-ESA" on VDS "VDS-ESA" with VLAN ID 304... Success
-[INFO] Creating port group "vsan-ESA" on VDS "VDS-ESA" with VLAN ID 305... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.173" (port group "vmotion-ESA", IP 10.30.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.174" (port group "vmotion-ESA", IP 10.30.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.173" (port group "vsan-ESA", IP 10.30.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.174" (port group "vsan-ESA", IP 10.30.15.13, MTU 9000).
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.173". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.174". Skipping witness traffic add.
-[INFO] Successfully created tag catalog "vSAN-ESA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-ESA" on "vSAN-ESA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-ESA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-ESA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Retrieving vSAN ESA eligible disks for cluster "cluster-ESA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-ESA".
-
-vSAN ESA disks claimed for cluster "cluster-ESA":
-
-Id VMHostName     CanonicalName                        CapacityGB Model
--- ----------     -------------                        ---------- -----
- 1 10.191.171.173 eui.1a11431c54cffe8b000c296603ea3add     500.00 VMware Virtual NVMe Disk
- 2 10.191.171.173 eui.ba33eac3dc25680b000c29634aad5191      80.00 VMware Virtual NVMe Disk
- 3 10.191.171.174 eui.fa196b4e38295c1d000c2965528e53f8     500.00 VMware Virtual NVMe Disk
- 4 10.191.171.174 eui.7734d14c0f1daf33000c296f08ecf6e9      80.00 VMware Virtual NVMe Disk
-
-[INFO] vSAN ESA storage pool: all 4 eligible disk(s) will be added.
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.173"... Success
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.174"... Success
-[INFO] Successfully configured vSAN ESA datastore for all hosts in cluster "cluster-ESA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-ESA"... Success
-[INFO] Configuring vSAN witness host for cluster "cluster-ESA".
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.196" for cluster "cluster-ESA"...
-[INFO] Successfully configured witness host "10.191.174.196" for cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-ESA" (after witness).
-[INFO] Enabled vSAN health Alarms on cluster "cluster-ESA".
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-ESA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-ESA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-ESA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-ESA". Proceeding.
-[INFO] Successfully tagged vSAN ESA datastore "datastore-ESA" with tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-ESA" already contains tag "supervisor-ESA" from catalog "vSAN-ESA-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-ESA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-ESA".
-[INFO] Forming ArgoCD namespace name "argocd-c1157" from prefix "argocd" and cluster MoRef suffix: "-c1157" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-ESA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-ESA"...
-[INFO]   Supervisor "supervisor-ESA" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-ESA" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-ESA"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork with 7 IPs
-[INFO]     Starting IP: 10.30.13.100, Gateway: 10.30.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.30.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site1, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: ESA.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork
-[INFO] Workload Network: primaryworkloadnetwork
-[INFO] Load Balancer: flb-site1
+[INFO] Creating the cluster "cluster-localdisk-edge2" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Adding ESX host "automation-esx01.vcfedge.demo" to cluster "cluster-localdisk-edge2"... Success
+[INFO] Creating VDS "VDS-localdisk-edge2-sw1" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Creating VDS "VDS-localdisk-edge2-sw2" on vCenter "vcenter202.vcfedge.demo"...  Success
+[INFO] Migrating management (vmk0) to VDS "VDS-localdisk-edge2-sw1" for 1 host(s)... Done
+[INFO] Creating port group "primaryworkloadnetwork-3" on VDS "VDS-localdisk-edge2-sw1" with VLAN ID 500... Success
+[INFO] Creating port group "flbmanagementnetwork-3" on VDS "VDS-localdisk-edge2-sw1" with VLAN ID 501... Success
+[INFO] Creating port group "virtualservernetwork-3" on VDS "VDS-localdisk-edge2-sw1" with VLAN ID 502... Success
+[INFO] Creating port group "mgmtnetwork-3" on VDS "VDS-localdisk-edge2-sw1" with VLAN ID 503... Success
+[INFO] VDS "VDS-localdisk-edge2-sw1": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
+[INFO] VDS "VDS-localdisk-edge2-sw2": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
+[INFO] Tag catalog "VMFS-Storage-TagCatalog" already exists on vCenter "vcenter202.vcfedge.demo". Skipping tag catalog creation.
+[INFO] Tag name "supervisor-localdisk-edge2" already exists on "VMFS-Storage-TagCatalog". Skipping tag creation.
+[INFO] Cluster "cluster-localdisk-edge2" has one host; HA enabled (admission control disabled), DRS enabled.
+[INFO] Creating the new datastore "datastore-localdisk-edge2" on ESX host "automation-esx01.vcfedge.demo"...  Success
+[INFO] Successfully tagged datastore "datastore-localdisk-edge2" with tag "supervisor-localdisk-edge2".
+[INFO] Running vLCM cluster compliance check for cluster "cluster-localdisk-edge2".
+[INFO] Cluster "cluster-localdisk-edge2" is compliant to the vLCM image. No remediation required.
+[INFO] Retrieving supervisor ID for "supervisor-localdisk-edge2" on vCenter "vcenter202.vcfedge.demo"...
+[INFO] Beginning Supervisor deployment to cluster "cluster-localdisk-edge2"...
+[INFO] Supervisor configuration parsed successfully for edgeSite: localdisk-edge2.
 [INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-ESA" (ID: domain-c1157)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: f4b0be4c-775d-40be-8b74-82089b15510f
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-ESA" were successfully configured in 1665 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1665 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: f4b0be4c-775d-40be-8b74-82089b15510f
+[INFO] Supervisor services on cluster "cluster-localdisk-edge2" were successfully configured in 1365 seconds.
+[INFO] Supervisor deployment completed successfully. Supervisor ID: d6ed32b3-bef9-4578-af54-397b79d758ce
 [INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] Configuring VM classes: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] The ArgoCD namespace "argocd-c1157" was created successfully.
-[INFO] VM classes assigned: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 205 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.30.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpc2lhuh.yml" to namespace "argocd-c1157"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1157" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1157" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1157" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-2tznh" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-6dbfbd4788-ljq4t" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-66f5cf65cf-rnthz" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-6dc9c95578-55bkz" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1157" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.30.12.204/
-[INFO] Login as user "admin" using temporary password: FKJxVIDZZnRSNJan
-[INFO] To update your password run: "argocd.exe account update-password --server 10.30.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: ESA
-
-[INFO] Starting deployment for edgeSite: "OSA" (site 2 of 3).
-
-[INFO] No cluster named "cluster-OSA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-OSA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.201" to cluster "cluster-OSA"... Success
-[INFO] Adding ESX host "10.191.171.171" to cluster "cluster-OSA"... Success
-[INFO] Creating VDS "VDS-OSA" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-OSA" on VDS "VDS-OSA" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA" on host "10.191.171.201".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA" port group "mgmt-OSA" on host "10.191.171.201".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.201".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA" on host "10.191.171.201".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA" on host "10.191.171.171".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA" port group "mgmt-OSA" on host "10.191.171.171".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.171".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA" on host "10.191.171.171".
-[INFO] Creating port group "primaryworkloadnetwork-2" on VDS "VDS-OSA" with VLAN ID 400... Success
-[INFO] Creating port group "flbmanagementnetwork-2" on VDS "VDS-OSA" with VLAN ID 401... Success
-[INFO] Creating port group "virtualservernetwork-2" on VDS "VDS-OSA" with VLAN ID 402... Success
-[INFO] Creating port group "tkgsmgmtnetwork-2" on VDS "VDS-OSA" with VLAN ID 403... Success
-[INFO] VDS "VDS-OSA": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-OSA" on VDS "VDS-OSA" with VLAN ID 404... Success
-[INFO] Creating port group "vsan-OSA" on VDS "VDS-OSA" with VLAN ID 405... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.201" (port group "vmotion-OSA", IP 10.40.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.171" (port group "vmotion-OSA", IP 10.40.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.201" (port group "vsan-OSA", IP 10.40.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.171" (port group "vsan-OSA", IP 10.40.15.13, MTU 9000).
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.201". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.171". Skipping witness traffic add.
-[INFO] Successfully created tag catalog "vSAN-OSA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-OSA" on "vSAN-OSA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-OSA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-OSA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Retrieving vSAN OSA eligible disks for cluster "cluster-OSA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-OSA".
-
-vSAN OSA disks claimed for cluster "cluster-OSA" (cache/capacity per host):
-
-Id VMHostName     CanonicalName                        CapacityGB Model                         IsSsd DefaultRole
--- ----------     -------------                        ---------- -----                         ----- -----------
- 1 10.191.171.201 eui.e66a4e2eb30856f8000c29699a742394      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 2 10.191.171.201 eui.d3ee04ac6896d25b000c296fa2e103bd     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
- 3 10.191.171.171 eui.cfdfa098b55ca99f000c2967f13d0e89      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 4 10.191.171.171 eui.1034ab032139f5ac000c29641fd53e42     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
-
-[INFO] vSAN OSA disk group assignment completed for 2 host(s) (default cache/capacity).
-[INFO] Creating vSAN OSA disk group on host "10.191.171.171" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.171".
-[INFO] Creating vSAN OSA disk group on host "10.191.171.201" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.201".
-[INFO] Successfully configured vSAN OSA disk groups for all hosts in cluster "cluster-OSA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-OSA"... Success
-[INFO] Configuring vSAN witness for cluster "cluster-OSA" (witness host: "10.191.174.197").
-[INFO] Checking whether witness host "10.191.174.197" already has a vSAN OSA disk group...
-[INFO] Witness host "10.191.174.197" already has a vSAN OSA disk group. Skipping disk group creation.
-[INFO] Configuring vSAN witness host for cluster "cluster-OSA"...
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.197" for cluster "cluster-OSA"...
-[INFO] Successfully configured witness host "10.191.174.197" for cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-OSA" (after witness).
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-OSA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-OSA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-OSA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-OSA". Proceeding.
-[INFO] Enabled vSAN performance service on cluster "cluster-OSA".
-[INFO] Successfully tagged vSAN OSA datastore "datastore-OSA" with tag "supervisor-OSA" (catalog "vSAN-OSA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-OSA" already contains tag "supervisor-OSA" from catalog "vSAN-OSA-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-OSA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-OSA".
-[WARNING] vSAN cluster "cluster-OSA" has alarm (not auto-remediated): "vSAN performance service alarm 'Stats primary election'" (status: red). Resolve manually if needed.
-[INFO] Forming ArgoCD namespace name "argocd-c1202" from prefix "argocd" and cluster MoRef suffix: "-c1202" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-OSA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-OSA"...
-[INFO]   Supervisor "supervisor-OSA" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-OSA" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-OSA"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork-2 with 7 IPs
-[INFO]     Starting IP: 10.40.13.100, Gateway: 10.40.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork-2 with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.40.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site2, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: OSA.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork-2
-[INFO] Workload Network: primaryworkloadnetwork-2
-[INFO] Load Balancer: flb-site2
-[INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork-2
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-OSA" (ID: domain-c1202)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: ab09ea39-6989-4ad4-819c-d5f2b76b3107
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-OSA" were successfully configured in 1560 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1560 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: ab09ea39-6989-4ad4-819c-d5f2b76b3107
-[INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge
-[INFO] Configuring VM classes: best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge
-[INFO] The ArgoCD namespace "argocd-c1202" was created successfully.
-[INFO] VM classes assigned: best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 185 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.40.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpmk5blj.yml" to namespace "argocd-c1202"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1202" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1202" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1202" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-5hb4j" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-5cfc9447db-5bqfs" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-fdf6b696f-9j85v" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-844c94d7f5-8spj9" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1202" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.40.12.204/
-[INFO] Login as user "admin" using temporary password: uFVLRVOVNs8i7wQj
-[INFO] To update your password run: "argocd.exe account update-password --server 10.40.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: OSA
-
-[INFO] Starting deployment for edgeSite: "VMFS" (site 3 of 3).
-
-[INFO] Datastore "datastore-VMFS" not found on ESX host "10.191.171.172".
-[INFO] Selected largest available drive for VMFS (CapacityGB=500, CanonicalName=eui.b7a6f4385485d169000c2960802a75c4).
-[INFO] No cluster named "cluster-VMFS" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-VMFS" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.172" to cluster "cluster-VMFS"... Success
-[INFO] Creating VDS "VDS-VMFS" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-VMFS" on VDS "VDS-VMFS" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-VMFS" on host "10.191.171.172".
-[INFO] Migrated management (vmk0) to VDS "VDS-VMFS" port group "mgmt-VMFS" on host "10.191.171.172".
-[INFO] Removed standard switch "vSwitch0" from host "10.191.171.172".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-VMFS" on host "10.191.171.172".
-[INFO] Creating port group "primaryworkloadnetwork-3" on VDS "VDS-VMFS" with VLAN ID 500... Success
-[INFO] Creating port group "flbmanagementnetwork-3" on VDS "VDS-VMFS" with VLAN ID 501... Success
-[INFO] Creating port group "virtualservernetwork-3" on VDS "VDS-VMFS" with VLAN ID 502... Success
-[INFO] Creating port group "tkgsmgmtnetwork-3" on VDS "VDS-VMFS" with VLAN ID 503... Success
-[INFO] VDS "VDS-VMFS": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Tag catalog "VMFS-Storage-TagCatalog" already exists on vCenter "10.191.174.202". Skipping tag catalog creation.
-[INFO] Tag name "supervisor-VMFS" already exists on "VMFS-Storage-TagCatalog". Skipping tag creation.
-[INFO] Reconfiguring cluster-VMFS for HA after moving vmk0 to vDS...
-[INFO] Cluster "cluster-VMFS" has one host; HA enabled (admission control disabled), DRS enabled.
-[INFO] Creating the new datastore "datastore-VMFS" on ESX host "10.191.171.172"...  Success
-[INFO] Successfully tagged datastore "datastore-VMFS" with tag "supervisor-VMFS".
-[INFO] Storage policy "supervisor-VMFS" already contains tag "supervisor-VMFS" from catalog "VMFS-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-VMFS" is not compliant to the vLCM image (Status: NonCompliant; NonCompliantHosts: 1 - 10.191.171.172). Remediating...
-[INFO] vLCM remediation completed for cluster "cluster-VMFS".
-[INFO] Forming ArgoCD namespace name "argocd-c1246" from prefix "argocd" and cluster MoRef suffix: "-c1246" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-VMFS" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-VMFS"...
-[INFO]   Supervisor "supervisor-VMFS" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-VMFS" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-VMFS"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork-3 with 7 IPs
-[INFO]     Starting IP: 10.50.13.100, Gateway: 10.50.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork-3 with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.50.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork-3, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork-3, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site3, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: VMFS.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork-3
-[INFO] Workload Network: primaryworkloadnetwork-3
-[INFO] Load Balancer: flb-site3
-[INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork-3
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-VMFS" (ID: domain-c1246)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: e00bbdaf-d198-4b43-97e4-ada47ad8a104
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-VMFS" were successfully configured in 1470 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1470 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: e00bbdaf-d198-4b43-97e4-ada47ad8a104
-[INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge
-[INFO] Configuring VM classes: guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge
-[INFO] The ArgoCD namespace "argocd-c1246" was created successfully.
-[INFO] VM classes assigned: guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 40 seconds).
+[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.1.0.0-25234335 is up to date.
+[INFO] Using all available VM classes for ArgoCD namespace.
+[INFO] The ArgoCD namespace "argocd-c4000" was created successfully with 29 VM classes assigned: guaranteed-xlarge, best-effort-small, guaranteed-small, 2cpu-besteffort-8192mb-besteffort, 4cpu-besteffort-16384mb-besteffort, guaranteed-2xlarge, best-effort-2xlarge, guaranteed-medium, 2cpu-besteffort-3072mb-besteffort, 32cpu-besteffort-131072mb-besteffort, 1cpu-besteffort-2048mb-besteffort, 16cpu-besteffort-131072mb-besteffort, 4cpu-besteffort-12288mb-besteffort, 4cpu-besteffort-21504mb-besteffort, guaranteed-xsmall, 8cpu-besteffort-98304mb-besteffort, 8cpu-besteffort-32768mb-besteffort, 32cpu-besteffort-262144mb-besteffort, 4cpu-besteffort-4096mb-besteffort, best-effort-8xlarge, best-effort-medium, best-effort-large, guaranteed-4xlarge, 6cpu-guaranteed-24576mb-guaranteed, guaranteed-large, best-effort-4xlarge, guaranteed-8xlarge, best-effort-xsmall, best-effort-xlarge
+[INFO] The ArgoCD operator has been successfully installed on vCenter "vcenter202.vcfedge.demo". (Took 45 seconds).
 [INFO] Creating VCF context "vcf-context-01" with endpoint "10.50.13.101"...
 [INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
+[INFO] Switching to VCF context "vcf-context-01:argocd-c4000"...
+[INFO] VCF context "vcf-context-01" activated successfully.
 [INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
 [INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmp2e3jwe.yml" to namespace "argocd-c1246"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1246" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1246" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1246" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-sptp2" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-78d5999986-jksj9" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-7877d65757-xsjh8" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-5d6d4f5b95-thzzl" is now in status Running.
 [INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1246" is now available with all pods ready.
+
+---------------------------------------
 [INFO] To login to ArgoCD:
-[INFO] Go to https://10.50.12.204/
-[INFO] Login as user "admin" using temporary password: Ek1wKB3EU8yM7h3s
-[INFO] To update your password run: "argocd.exe account update-password --server 10.50.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: VMFS
+[INFO]    Go to https://10.50.12.203/
+[INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx
+[INFO]    To update your password run: "argocd.exe account update-password --server 10.50.12.203 --account admin --insecure"
+
+---------------------------------------
+[INFO] Created temporary Harbor data values file for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com", storageClass: "supervisor-localdisk-edge2")
+[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
+[INFO] Harbor service install request submitted. Waiting for configuration to complete.
+[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce".
+[INFO] Harbor Supervisor Service installed successfully for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com").
+
+---------------------------------------
+[INFO] Harbor is deployed for cluster "cluster-localdisk-edge2" — connection details:
+[INFO]   Username : admin
+[INFO]   Password : xxxxxxxxxxxxxx
+[INFO]   Namespace: svc-harbor-ecpka
+[INFO]   URL      : https://10.50.12.204
+[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.50.12.204 (Harbor load balancer external IP).
+
+---------------------------------------
+[INFO] Registering Harbor as container image registry "harbor" on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (endpoint: "10.50.12.204")...
+[INFO] Harbor container image registry "harbor" registered on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (id: "d7970dd5-28c4-48f3-857e-6ff48dbeb9be", endpoint: "10.50.12.204").
+[INFO] Completed deployment for cluster with edgeSite: localdisk-edge2
+[INFO] ESXi node health for cluster "cluster-localdisk-edge2" (1 host(s)): all Connected/PoweredOn.
+[INFO] Supervisor health for cluster "cluster-localdisk-edge2" (supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions.
 ```
 
-## Validate idempotency of one deployment against fully deployed site - 2026-03-04
+## Example cleaning up ArgoCD
 
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -edgesite ESA
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup argocd
 
-[INFO] Checking for required JSON properties for edgeSite(s) "ESA"...
-[INFO] Validating property formats and values for edgeSite(s) "ESA"...
-[INFO] Processing 1 edge site(s): ESA...
-[INFO] Beginning workflow for edgeSite: "ESA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 2 ESX host(s)).
-[INFO] The cluster "cluster-ESA" in datacenter "UnitTest" is already present. Skipping cluster creation.
-[INFO] Host "10.191.171.173" is already in cluster "cluster-ESA". Skipping host add.
-[INFO] Host "10.191.171.174" is already in cluster "cluster-ESA". Skipping host add.
-[INFO] VDS "VDS-ESA" is already present. Skipping creation.
-[INFO] The ESX host "10.191.171.173" is already attached to VDS "VDS-ESA". Skipping attachment.
-[INFO] The ESX host "10.191.171.174" is already attached to VDS "VDS-ESA". Skipping attachment.
-[INFO] Host "10.191.171.173" management (vmk0) is already on VDS "VDS-ESA". Skipping migration.
-[INFO] Host "10.191.171.174" management (vmk0) is already on VDS "VDS-ESA". Skipping migration.
-[INFO] Port group "primaryworkloadnetwork" already exists on VDS "VDS-ESA" with VLAN ID 300. Skipping creation.
-[INFO] Port group "flbmanagementnetwork" already exists on VDS "VDS-ESA" with VLAN ID 301. Skipping creation.
-[INFO] Port group "virtualservernetwork" already exists on VDS "VDS-ESA" with VLAN ID 302. Skipping creation.
-[INFO] Port group "tkgsmgmtnetwork" already exists on VDS "VDS-ESA" with VLAN ID 303. Skipping creation.
-[INFO] Port group "vmotion-ESA" already exists on VDS "VDS-ESA" with VLAN ID 304. Skipping creation.
-[INFO] Port group "vsan-ESA" already exists on VDS "VDS-ESA" with VLAN ID 305. Skipping creation.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.173". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.174". Skipping witness traffic add.
-[INFO] Tag catalog "vSAN-ESA-Storage-TagCatalog" already exists on vCenter "10.191.174.202". Skipping tag catalog creation.
-[INFO] Tag name "supervisor-ESA" already exists on "vSAN-ESA-Storage-TagCatalog". Skipping tag creation.
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] vSAN datastore "datastore-ESA" already exists with capacity 1159.73 GB and is accessible by all cluster hosts. Skipping vSAN steps.
-[INFO] vSAN datastore already exists and witness "10.191.174.196" is already configured for cluster "cluster-ESA". Skipping witness configuration and health check.
-[INFO] vSAN ESA datastore "datastore-ESA" already has tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog") assigned. Skipping tag assignment.
-[INFO] Storage policy "supervisor-ESA" already contains tag "supervisor-ESA" from catalog "vSAN-ESA-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-ESA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-ESA".
-[WARNING] vSAN cluster "cluster-ESA" has alarm (not auto-remediated): "Host memory usage" (status: red). Resolve manually if needed.
-[INFO] Forming ArgoCD namespace name "argocd-c1157" from prefix "argocd" and cluster MoRef suffix: "-c1157" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-ESA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-ESA"...
-[INFO]   Found supervisor "supervisor-ESA" with ID: f4b0be4c-775d-40be-8b74-82089b15510f.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-ESA" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-ESA" reached READY status after 0 seconds
-[INFO] Supervisor instance "supervisor-ESA" reported status ready, after waiting for 0 seconds.
-[INFO] Retrieving supervisor ID for "supervisor-ESA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-ESA"...
-[INFO]   Found supervisor "supervisor-ESA" with ID: f4b0be4c-775d-40be-8b74-82089b15510f.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-ESA" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-ESA" reached READY status after 0 seconds
-[INFO] Using all available VM classes for ArgoCD namespace: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] The ArgoCD namespace "argocd-c1157" already exists on vCenter "10.191.174.202" Skipping namespace creation.
-[INFO] ArgoCD service already exists. Verifying configuration status...
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 0 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.30.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpmpxlyv.yml" to namespace "argocd-c1157"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 unchanged
-[INFO] Verifying kubectl authentication for namespace "argocd-c1157" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1157" after 0 seconds
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-66f5cf65cf-rnthz" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-secret-init-2tznh" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-repo-server-6dc9c95578-55bkz" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-6dbfbd4788-ljq4t" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1157" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.30.12.204/
-[INFO] Login as user "admin" using temporary password: FKJxVIDZZnRSNJan
-[INFO] To update your password run: "argocd.exe account update-password --server 10.30.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: ESA
-```
-
-## Cleanup ArgoCD app (one site, force option (no prompt)) - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite OSA -Cleanup argocd -Force
-
-[INFO] Processing 1 edge site(s): OSA...
-[INFO] Beginning workflow for edgeSite: "OSA".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
+[INFO] Processing 1 edge site(s): localdisk-edge2...
+[INFO] Beginning workflow for edgeSite: "localdisk-edge2".
+[INFO] Performing vCenter reachability check (TCP 443)...
 [INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
 [INFO] CleanUp is set to "ArgoCD". Cleaning up per scope, then exiting without deploying.
-[ADVISORY] Skipping cleanup confirmation (labEnvironment=true and -Force).
-[INFO] ArgoCD namespace "argocd-c1202" deleted successfully for cluster "cluster-OSA".
-[INFO] CleanUp (ArgoCD) completed. Exiting without deployment.
+
+[ADVISORY] The cleanup process will remove only the ArgoCD namespace "argocd-c4000" for cluster "cluster-localdisk-edge2" (edgeSite "localdisk-edge2"). No supervisor deactivation or compute removal. Please backup your data before proceeding.
+To confirm cleanup, type exactly (or copy/paste): delete argocd for localdisk-edge2
+delete argocd for localdisk-edge2
+[INFO] ArgoCD namespace "argocd-c4000" deleted successfully for cluster "cluster-localdisk-edge2".
+[INFO] CleanUp (ArgoCD) completed. Exiting without deployment
 ```
 
-## Example of cleanup of supervisor for one site - 2026-03-05
+## Example cleaning up Supervisor
 
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite OSA -Cleanup supervisor
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor
 
-[INFO] Processing 1 edge site(s): OSA...
-[INFO] Beginning workflow for edgeSite: "OSA".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor
+
+[INFO] Processing 1 edge site(s): localdisk-edge2...
+[INFO] Beginning workflow for edgeSite: "localdisk-edge2".
+[INFO] Performing vCenter reachability check (TCP 443)...
 [INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
 [INFO] CleanUp is set to "Supervisor". Cleaning up per scope, then exiting without deploying.
 
-[ADVISORY] The cleanup process for supervisor will remove all the VMware vSphere Kubernetes Service (VKS) applications in cluster "cluster-OSA". Please backup your data before proceeding.
-To confirm cleanup, type exactly (or copy/paste): delete supervisor for OSA
- delete supervisor for OSA
-[INFO] Deactivating supervisor on cluster "cluster-OSA" (ID: domain-c1202)...
-[INFO] Supervisor deactivation initiated. Polling until fully deactivated (timeout: 3600 seconds)...
-[INFO] Supervisor on cluster "cluster-OSA" is fully deactivated after 660 seconds. You can retry deployment.
-[INFO] Supervisor deactivated on cluster "cluster-OSA". Compute (VDS, vSAN/VMFS, cluster) remains.
+[ADVISORY] The cleanup process for supervisor will remove all the VMware vSphere Kubernetes Service (VKS) applications in cluster "cluster-localdisk-edge2". Please backup your data before proceeding.
+To confirm cleanup, type exactly (or copy/paste): delete supervisor for localdisk-edge2
+ delete supervisor for localdisk-edge2
+[INFO] Deactivating supervisor on cluster "cluster-localdisk-edge2" (ID: domain-c4000)... fully deactivated after 550 seconds. You can retry deployment.
+[INFO] Supervisor deactivated on cluster "cluster-localdisk-edge2". Compute (VDS, vSAN/VMFS, cluster) remains.
 [INFO] CleanUp (Supervisor) completed. Exiting without deployment.
-```
-
-## Example of cleanup of compute for one site - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -edgesite OSA -Cleanup compute
-
-[INFO] Processing 1 edge site(s): OSA...
-[INFO] Beginning workflow for edgeSite: "OSA".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
-[INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
-[INFO] CleanUp is set to "Compute". Cleaning up per scope, then exiting without deploying.
-
-[ADVISORY] The cleanup process will remove all resources on edgeSite "OSA" including cluster "cluster-OSA" and datastore "datastore-OSA". Please backup your data before proceeding.
-To confirm cleanup, type exactly (or copy/paste): delete compute for OSA
- delete compute for OSA
-[INFO] Removing non-management VMkernel interfaces from hosts on VDS "VDS-OSA"... Removed 4 interface(s) from 2 host(s).
-[INFO] Restoring management (vmk0) to standard switch on hosts... Moved management to VSS on 2 host(s).
-[INFO] Starting vSAN deployment rollback for cluster "cluster-OSA" (vSAN-OSA)...
-[INFO] Removing vSAN disk claims from 2 host(s) (OSA disk groups), then vsan cluster leave.
-[INFO] vSAN disk removal completed for 2 host(s).
-[INFO] vSAN cluster leave completed for cluster "cluster-OSA".
-[INFO] Removing storage tag "supervisor-OSA" (catalog "vSAN-OSA-Storage-TagCatalog") from vCenter... Removed
-[INFO] Removing empty tag category "vSAN-OSA-Storage-TagCatalog" from vCenter... Removed
-[INFO] vSAN deployment rollback completed for cluster "cluster-OSA".
-[INFO] Detaching 2 host(s) from VDS "VDS-OSA" (removing pNICs)... Done.
-[INFO] Removing distributed port groups from VDS "VDS-OSA"... Removed 7 port group(s).
-[INFO] Removing Virtual Distributed Switch "VDS-OSA"... Removed
-[INFO] Removing cluster "cluster-OSA" (no running VMs)... Removed
-[INFO] CleanUp (Compute) completed. Exiting without deployment.
-```
-
-## Example of cleanup of one site (all resources) - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite ESA -Cleanup all
-
-[INFO] Processing 1 edge site(s): ESA...
-[INFO] Beginning workflow for edgeSite: "ESA".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
-[INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
-[INFO] CleanUp is set to "All". Cleaning up per scope, then exiting without deploying.
-
-[ADVISORY] The cleanup process will remove all resources on edgeSite "ESA" including cluster "cluster-ESA" and datastore "datastore-ESA". Please backup your data before proceeding.
-To confirm cleanup, type exactly (or copy/paste): delete all for ESA
-delete all for ESA
-[INFO] Deactivating supervisor on cluster "cluster-ESA" before compute cleanup (All).
-[INFO] Deactivating supervisor on cluster "cluster-ESA" (ID: domain-c1157)...
-[INFO] Supervisor deactivation initiated. Polling until fully deactivated (timeout: 3600 seconds)...
-[INFO] Supervisor on cluster "cluster-ESA" is fully deactivated after 1330 seconds. You can retry deployment.
-[INFO] Removing non-management VMkernel interfaces from hosts on VDS "VDS-ESA"... Removed 4 interface(s) from 2 host(s).
-[INFO] Restoring management (vmk0) to standard switch on hosts... Moved management to VSS on 2 host(s).
-[INFO] Starting vSAN deployment rollback for cluster "cluster-ESA" (vSAN-ESA)...
-[INFO] Removing vSAN ESA storage pool disk claims from 2 host(s), then vsan cluster leave.
-[INFO] vSAN disk removal completed for 2 host(s).
-[INFO] vSAN cluster leave completed for cluster "cluster-ESA".
-[INFO] Removing storage tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog") from vCenter... Removed
-[INFO] Removing empty tag category "vSAN-ESA-Storage-TagCatalog" from vCenter... Removed
-[INFO] vSAN deployment rollback completed for cluster "cluster-ESA".
-[INFO] Detaching 2 host(s) from VDS "VDS-ESA" (removing pNICs)... Done.
-[INFO] Removing distributed port groups from VDS "VDS-ESA"... Removed 7 port group(s).
-[INFO] Removing Virtual Distributed Switch "VDS-ESA"... Removed
-[INFO] Removing cluster "cluster-ESA" (no running VMs)... Removed
-[INFO] CleanUp (All) completed. Exiting without deployment.
-```
-
-## Example of deployment of one site (four NICs, two vDSs) - 2026-03-04
-
-```powershell
-PPS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite OSA
-
-[INFO] Checking for required JSON properties for edgeSite(s) "OSA"...
-[INFO] Validating property formats and values for edgeSite(s) "OSA"...
-[INFO] Processing 1 edge site(s): OSA...
-[INFO] Beginning workflow for edgeSite: "OSA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 2 ESX host(s)).
-[INFO] No cluster named "cluster-OSA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-OSA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.201" to cluster "cluster-OSA"... Success
-[INFO] Adding ESX host "10.191.171.171" to cluster "cluster-OSA"... Success
-[INFO] Creating VDS "VDS-OSA-sw1" on vCenter "10.191.174.202"...  Success
-[INFO] Creating VDS "VDS-OSA-sw2" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-OSA" on VDS "VDS-OSA-sw1" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA-sw1" on host "10.191.171.201".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA-sw1" port group "mgmt-OSA" on host "10.191.171.201".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.201".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA-sw1" on host "10.191.171.201".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA-sw1" on host "10.191.171.171".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA-sw1" port group "mgmt-OSA" on host "10.191.171.171".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.171".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA-sw1" on host "10.191.171.171".
-[INFO] Creating port group "primaryworkloadnetwork-2" on VDS "VDS-OSA-sw1" with VLAN ID 400... Success
-[INFO] Creating port group "flbmanagementnetwork-2" on VDS "VDS-OSA-sw1" with VLAN ID 401... Success
-[INFO] Creating port group "virtualservernetwork-2" on VDS "VDS-OSA-sw1" with VLAN ID 402... Success
-[INFO] Creating port group "tkgsmgmtnetwork-2" on VDS "VDS-OSA-sw1" with VLAN ID 403... Success
-[INFO] VDS "VDS-OSA-sw1": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] VDS "VDS-OSA-sw2": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-OSA" on VDS "VDS-OSA-sw2" with VLAN ID 404... Success
-[INFO] Creating port group "vsan-OSA" on VDS "VDS-OSA-sw2" with VLAN ID 405... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.201" (port group "vmotion-OSA", IP 10.40.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.171" (port group "vmotion-OSA", IP 10.40.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.201" (port group "vsan-OSA", IP 10.40.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.171" (port group "vsan-OSA", IP 10.40.15.13, MTU 9000).
-[INFO] Added vSAN witness traffic to vmk0 on host "10.191.171.201".
-[INFO] Added vSAN witness traffic to vmk0 on host "10.191.171.171".
-[INFO] Successfully created tag catalog "vSAN-OSA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-OSA" on "vSAN-OSA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-OSA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-OSA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] Retrieving vSAN OSA eligible disks for cluster "cluster-OSA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-OSA".
-
-vSAN OSA disks claimed for cluster "cluster-OSA" (cache/capacity per host):
-
-Id VMHostName     CanonicalName                        CapacityGB Model                         IsSsd DefaultRole
--- ----------     -------------                        ---------- -----                         ----- -----------
- 1 10.191.171.201 eui.e66a4e2eb30856f8000c29699a742394      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 2 10.191.171.201 eui.d3ee04ac6896d25b000c296fa2e103bd     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
- 3 10.191.171.171 eui.cfdfa098b55ca99f000c2967f13d0e89      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 4 10.191.171.171 eui.1034ab032139f5ac000c29641fd53e42     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
-
-[INFO] vSAN OSA disk group assignment completed for 2 host(s) (default cache/capacity).
-[INFO] Creating vSAN OSA disk group on host "10.191.171.171" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.171".
-[INFO] Creating vSAN OSA disk group on host "10.191.171.201" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.201".
-[INFO] Successfully configured vSAN OSA disk groups for all hosts in cluster "cluster-OSA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-OSA"... Success
-[INFO] Configuring vSAN witness for cluster "cluster-OSA" (witness host: "10.191.174.197").
-[INFO] Checking whether witness host "10.191.174.197" already has a vSAN OSA disk group...
-[INFO] Witness host "10.191.174.197" already has a vSAN OSA disk group. Skipping disk group creation.
-[INFO] Configuring vSAN witness host for cluster "cluster-OSA"...
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.197" for cluster "cluster-OSA"...
-[INFO] Successfully configured witness host "10.191.174.197" for cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-OSA" (after witness).
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-OSA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-OSA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-OSA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-OSA". Proceeding.
-[INFO] Enabled vSAN performance service on cluster "cluster-OSA".
-[INFO] Successfully tagged vSAN OSA datastore "datastore-OSA" with tag "supervisor-OSA" (catalog "vSAN-OSA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-OSA" already contains tag "supervisor-OSA" from catalog "vSAN-OSA-Storage-TagCatalog".
-[INFO] Cluster "cluster-OSA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-OSA".
-[WARNING] vSAN cluster "cluster-OSA" has alarm (not auto-remediated): "vSAN cluster alarm 'vSAN Cluster Configuration Consistency'" (status: yellow). Resolve manually if needed.
-[INFO] vSAN cluster "cluster-OSA" has alarm: "vSAN performance service alarm 'Performance service status'" (status: yellow). Attempting to enable vSAN performance service programmatically.
-[INFO] If the alarm persists, it often clears within a few minutes as the performance service starts. Otherwise enable in vCenter (vSAN Services) or check vSAN Health > Performance service.
-[INFO] Forming ArgoCD namespace name "argocd-c1283" from prefix "argocd" and cluster MoRef suffix: "-c1283" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-OSA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-OSA"...
-[INFO]   Supervisor "supervisor-OSA" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-OSA" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-OSA"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork-2 with 7 IPs
-[INFO]     Starting IP: 10.40.13.100, Gateway: 10.40.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork-2 with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.40.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site2, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: OSA.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork-2
-[INFO] Workload Network: primaryworkloadnetwork-2
-[INFO] Load Balancer: flb-site2
-[INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork-2
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-OSA" (ID: domain-c1283)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: a1452e65-e213-41fc-8653-82cfb13a1fc2
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-OSA" were successfully configured in 1715 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1715 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: a1452e65-e213-41fc-8653-82cfb13a1fc2
-[INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge, guaranteed-small, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-medium, best-effort-2xlarge
-[INFO] Configuring VM classes: guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge, guaranteed-small, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-medium, best-effort-2xlarge
-[INFO] The ArgoCD namespace "argocd-c1283" was created successfully.
-[INFO] VM classes assigned: guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge, guaranteed-small, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-medium, best-effort-2xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 190 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.40.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpftzr1r.yml" to namespace "argocd-c1283"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1283" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1283" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1283" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-6kf5p" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-77b766dbc9-qmjq8" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-5df67f5f67-4pwwd" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1283" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.40.12.204/
-[INFO] Login as user "admin" using temporary password: uFVLRVOVNs8i7wQj
-[INFO] To update your password run: "argocd.exe account update-password --server 10.40.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: OSA
-```
-
-## Example of compute-only one-site deployment (one vDS, two NIC), UN/PW - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite ESA -ComputeOnly
-
-[INFO] Checking for required JSON properties for edgeSite(s) "ESA"...
-[INFO] Validating property formats and values for edgeSite(s) "ESA"...
-[INFO] Processing 1 edge site(s): ESA...
-[INFO] Beginning workflow for edgeSite: "ESA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 2 ESX host(s)).
-
-Enter the password for the user "administrator@vsphere.local" on vCenter "10.191.174.202" : ***************
-
-Enter the password for the user "root" on ESX Host(s): 10.191.171.173, 10.191.171.174 : ****************
-
-[INFO] No cluster named "cluster-ESA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.173" to cluster "cluster-ESA"... Success
-[INFO] Adding ESX host "10.191.171.174" to cluster "cluster-ESA"... Success
-[INFO] Creating VDS "VDS-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-ESA" on VDS "VDS-ESA" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.173".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.173".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.174".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.174".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Creating port group "primaryworkloadnetwork" on VDS "VDS-ESA" with VLAN ID 300... Success
-[INFO] Creating port group "flbmanagementnetwork" on VDS "VDS-ESA" with VLAN ID 301... Success
-[INFO] Creating port group "virtualservernetwork" on VDS "VDS-ESA" with VLAN ID 302... Success
-[INFO] Creating port group "tkgsmgmtnetwork" on VDS "VDS-ESA" with VLAN ID 303... Success
-[INFO] VDS "VDS-ESA": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-ESA" on VDS "VDS-ESA" with VLAN ID 304... Success
-[INFO] Creating port group "vsan-ESA" on VDS "VDS-ESA" with VLAN ID 305... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.173" (port group "vmotion-ESA", IP 10.30.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.174" (port group "vmotion-ESA", IP 10.30.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.173" (port group "vsan-ESA", IP 10.30.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.174" (port group "vsan-ESA", IP 10.30.15.13, MTU 9000).
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.173". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.174". Skipping witness traffic add.
-[INFO] Successfully created tag catalog "vSAN-ESA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-ESA" on "vSAN-ESA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-ESA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-ESA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Retrieving vSAN ESA eligible disks for cluster "cluster-ESA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-ESA".
-
-vSAN ESA disks claimed for cluster "cluster-ESA":
-
-Id VMHostName     CanonicalName                        CapacityGB Model
--- ----------     -------------                        ---------- -----
- 1 10.191.171.173 eui.1a11431c54cffe8b000c296603ea3add     500.00 VMware Virtual NVMe Disk
- 2 10.191.171.173 eui.ba33eac3dc25680b000c29634aad5191      80.00 VMware Virtual NVMe Disk
- 3 10.191.171.174 eui.fa196b4e38295c1d000c2965528e53f8     500.00 VMware Virtual NVMe Disk
- 4 10.191.171.174 eui.7734d14c0f1daf33000c296f08ecf6e9      80.00 VMware Virtual NVMe Disk
-
-[INFO] vSAN ESA storage pool: all 4 eligible disk(s) will be added.
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.173"... Success
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.174"... Success
-[INFO] Successfully configured vSAN ESA datastore for all hosts in cluster "cluster-ESA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-ESA"... Success
-[INFO] Configuring vSAN witness host for cluster "cluster-ESA".
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.196" for cluster "cluster-ESA"...
-[INFO] Successfully configured witness host "10.191.174.196" for cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-ESA" (after witness).
-[INFO] Enabled vSAN health Alarms on cluster "cluster-ESA".
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-ESA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-ESA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-ESA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-ESA". Proceeding.
-[INFO] Successfully tagged vSAN ESA datastore "datastore-ESA" with tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-ESA" already contains tag "supervisor-ESA" from catalog "vSAN-ESA-Storage-TagCatalog". Skipping tag add.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-ESA".
-[INFO] ComputeOnly is set. Pre-supervisor steps complete for cluster "cluster-ESA". Skipping supervisor and post-supervisor steps.
-[INFO] ComputeOnly completed. All pre-supervisor steps finished. Exiting without enabling supervisor.
-```
-
-## Example of deploying two sites (vSAN-OSA, vSAN-ESA) - 2026-03-05
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite "OSA,ESA"
-
-[INFO] Checking for required JSON properties for edgeSite(s) "OSA", "ESA"...
-[INFO] Validating property formats and values for edgeSite(s) "OSA", "ESA"...
-[INFO] Processing 2 edge site(s): OSA, ESA...
-[INFO] Beginning workflow for 2 edge site(s), starting with edgeSite: "OSA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 4 ESX host(s)).
-
-Enter the password for the user "administrator@vsphere.local" on vCenter "10.191.174.202" : *
-PS C:\Users\Administrator> ^C
-PS C:\Users\Administrator> Show-InfrastructureJsonConfigurationHelp^C
-PS C:\Users\Administrator>
->> $env:VCENTER_COMMON_PASSWORD="VMware1!VMware1!"
->> $env:ESX_COMMON_PASSWORD="VMware1!VMware1!"
->>
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite "OSA,ESA"
-
-[INFO] Checking for required JSON properties for edgeSite(s) "OSA", "ESA"...
-[INFO] Validating property formats and values for edgeSite(s) "OSA", "ESA"...
-[INFO] Processing 2 edge site(s): OSA, ESA...
-[INFO] Beginning workflow for 2 edge site(s), starting with edgeSite: "OSA".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 4 ESX host(s)).
-[INFO] No cluster named "cluster-OSA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-OSA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.201" to cluster "cluster-OSA"... Success
-[INFO] Adding ESX host "10.191.171.171" to cluster "cluster-OSA"... Success
-[INFO] Creating VDS "VDS-OSA" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-OSA" on VDS "VDS-OSA" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA" on host "10.191.171.201".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA" port group "mgmt-OSA" on host "10.191.171.201".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.201".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA" on host "10.191.171.201".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-OSA" on host "10.191.171.171".
-[INFO] Migrated management (vmk0) to VDS "VDS-OSA" port group "mgmt-OSA" on host "10.191.171.171".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.171".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-OSA" on host "10.191.171.171".
-[INFO] Creating port group "primaryworkloadnetwork-2" on VDS "VDS-OSA" with VLAN ID 400... Success
-[INFO] Creating port group "flbmanagementnetwork-2" on VDS "VDS-OSA" with VLAN ID 401... Success
-[INFO] Creating port group "virtualservernetwork-2" on VDS "VDS-OSA" with VLAN ID 402... Success
-[INFO] Creating port group "tkgsmgmtnetwork-2" on VDS "VDS-OSA" with VLAN ID 403... Success
-[INFO] VDS "VDS-OSA": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-OSA" on VDS "VDS-OSA" with VLAN ID 404... Success
-[INFO] Creating port group "vsan-OSA" on VDS "VDS-OSA" with VLAN ID 405... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.201" (port group "vmotion-OSA", IP 10.40.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.171" (port group "vmotion-OSA", IP 10.40.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.201" (port group "vsan-OSA", IP 10.40.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.171" (port group "vsan-OSA", IP 10.40.15.13, MTU 9000).
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.201". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.171". Skipping witness traffic add.
-[INFO] Successfully created tag catalog "vSAN-OSA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-OSA" on "vSAN-OSA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-OSA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-OSA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Retrieving vSAN OSA eligible disks for cluster "cluster-OSA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-OSA".
-
-vSAN OSA disks claimed for cluster "cluster-OSA" (cache/capacity per host):
-
-Id VMHostName     CanonicalName                        CapacityGB Model                         IsSsd DefaultRole
--- ----------     -------------                        ---------- -----                         ----- -----------
- 1 10.191.171.201 eui.e66a4e2eb30856f8000c29699a742394      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 2 10.191.171.201 eui.d3ee04ac6896d25b000c296fa2e103bd     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
- 3 10.191.171.171 eui.cfdfa098b55ca99f000c2967f13d0e89      80.00 NVMe VMware Virtual NVMe Disk  True Cache
- 4 10.191.171.171 eui.1034ab032139f5ac000c29641fd53e42     500.00 NVMe VMware Virtual NVMe Disk  True Capacity
-
-[INFO] vSAN OSA disk group assignment completed for 2 host(s) (default cache/capacity).
-[INFO] Creating vSAN OSA disk group on host "10.191.171.171" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.171".
-[INFO] Creating vSAN OSA disk group on host "10.191.171.201" (1 cache, 1 capacity disk(s)).
-[INFO] Successfully created vSAN OSA disk group on host "10.191.171.201".
-[INFO] Successfully configured vSAN OSA disk groups for all hosts in cluster "cluster-OSA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-OSA"... Success
-[INFO] Configuring vSAN witness for cluster "cluster-OSA" (witness host: "10.191.174.197").
-[INFO] Checking whether witness host "10.191.174.197" already has a vSAN OSA disk group...
-[INFO] Witness host "10.191.174.197" already has a vSAN OSA disk group. Skipping disk group creation.
-[INFO] Configuring vSAN witness host for cluster "cluster-OSA"...
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.197" for cluster "cluster-OSA"...
-[INFO] Successfully configured witness host "10.191.174.197" for cluster "cluster-OSA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-OSA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-OSA" (after witness).
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-OSA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-OSA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-OSA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-OSA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-OSA". Proceeding.
-[INFO] Enabled vSAN performance service on cluster "cluster-OSA".
-[INFO] Successfully tagged vSAN OSA datastore "datastore-OSA" with tag "supervisor-OSA" (catalog "vSAN-OSA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-OSA" already contains tag "supervisor-OSA" from catalog "vSAN-OSA-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-OSA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-OSA".
-[WARNING] vSAN cluster "cluster-OSA" has alarm (not auto-remediated): "vSAN cluster alarm 'vSAN Cluster Configuration Consistency'" (status: yellow). Resolve manually if needed.
-[INFO] vSAN cluster "cluster-OSA" has alarm: "vSAN performance service alarm 'Performance service status'" (status: yellow). Attempting to enable vSAN performance service programmatically.
-[INFO] If the alarm persists, it often clears within a few minutes as the performance service starts. Otherwise enable in vCenter (vSAN Services) or check vSAN Health > Performance service.
-[INFO] Forming ArgoCD namespace name "argocd-c1347" from prefix "argocd" and cluster MoRef suffix: "-c1347" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-OSA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-OSA"...
-[INFO]   Supervisor "supervisor-OSA" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-OSA" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-OSA"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork-2 with 7 IPs
-[INFO]     Starting IP: 10.40.13.100, Gateway: 10.40.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork-2 with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.40.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork-2, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site2, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: OSA.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork-2
-[INFO] Workload Network: primaryworkloadnetwork-2
-[INFO] Load Balancer: flb-site2
-[INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork-2
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-OSA" (ID: domain-c1347)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: e8c538eb-620b-4e8b-8957-920eef85024c
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-OSA" were successfully configured in 1395 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1395 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: e8c538eb-620b-4e8b-8957-920eef85024c
-[INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] Configuring VM classes: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] The ArgoCD namespace "argocd-c1347" was created successfully.
-[INFO] VM classes assigned: guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-xsmall, best-effort-2xlarge, best-effort-medium, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge, guaranteed-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-4xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 185 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.40.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpehzv3s.yml" to namespace "argocd-c1347"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1347" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1347" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1347" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-4mz4m" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-6dfcfc7978-tzlbp" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-6fcd8cf67-f79fj" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-f9bffc78-7lkxf" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1347" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.40.12.204/
-[INFO] Login as user "admin" using temporary password: -c7W1CvQK3MIZrfd
-[INFO] To update your password run: "argocd.exe account update-password --server 10.40.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: OSA
-
-[INFO] Starting deployment for edgeSite: "ESA" (site 2 of 2).
-
-[INFO] No cluster named "cluster-ESA" was found on vCenter "10.191.174.202". Proceeding with cluster creation.
-[INFO] Using vLCM image from configuration: "ESX902-ESA".
-
-DisplayName BaseImage
------------ ---------
-ESX902-ESA  9.0.2.0.25148076
-
-[INFO] Creating the cluster "cluster-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Adding ESX host "10.191.171.173" to cluster "cluster-ESA"... Success
-[INFO] Adding ESX host "10.191.171.174" to cluster "cluster-ESA"... Success
-[INFO] Creating VDS "VDS-ESA" on vCenter "10.191.174.202"...  Success
-[INFO] Creating management port group "mgmt-ESA" on VDS "VDS-ESA" (VLAN 0).
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.173".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.173".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.173".
-[INFO] Added pNIC "vmnic1" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Migrated management (vmk0) to VDS "VDS-ESA" port group "mgmt-ESA" on host "10.191.171.174".
-[INFO] Removed standard switch "vSwitch0-restore" from host "10.191.171.174".
-[INFO] Added reclaimed pNIC "vmnic0" to VDS "VDS-ESA" on host "10.191.171.174".
-[INFO] Creating port group "primaryworkloadnetwork" on VDS "VDS-ESA" with VLAN ID 300... Success
-[INFO] Creating port group "flbmanagementnetwork" on VDS "VDS-ESA" with VLAN ID 301... Success
-[INFO] Creating port group "virtualservernetwork" on VDS "VDS-ESA" with VLAN ID 302... Success
-[INFO] Creating port group "tkgsmgmtnetwork" on VDS "VDS-ESA" with VLAN ID 303... Success
-[INFO] VDS "VDS-ESA": configured active/standby teaming (active: dvUplink1, standby: dvUplink2, failback enabled).
-[INFO] Creating port group "vmotion-ESA" on VDS "VDS-ESA" with VLAN ID 304... Success
-[INFO] Creating port group "vsan-ESA" on VDS "VDS-ESA" with VLAN ID 305... Success
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.173" (port group "vmotion-ESA", IP 10.30.14.12, MTU 9000).
-[INFO] Created VMkernel for "vMotion" on host "10.191.171.174" (port group "vmotion-ESA", IP 10.30.14.13, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.173" (port group "vsan-ESA", IP 10.30.15.12, MTU 9000).
-[INFO] Created VMkernel for "vSAN" on host "10.191.171.174" (port group "vsan-ESA", IP 10.30.15.13, MTU 9000).
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.173". Skipping witness traffic add.
-[INFO] vSAN witness traffic already configured on vmk0 on host "10.191.171.174". Skipping witness traffic add.
-[INFO] Successfully created tag catalog "vSAN-ESA-Storage-TagCatalog" on "10.191.174.202".
-[INFO] Successfully created tag name "supervisor-ESA" on "vSAN-ESA-Storage-TagCatalog".
-[INFO] Reconfiguring cluster-ESA for HA after moving vmk0 to vDS...
-[INFO] Successfully configured VM monitoring settings on cluster "cluster-ESA".
-[INFO] Ensuring vSAN configuration is applied to all hosts in cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Retrieving vSAN ESA eligible disks for cluster "cluster-ESA" from all hosts...
-[INFO] Found 4 eligible disk(s) for cluster "cluster-ESA".
-
-vSAN ESA disks claimed for cluster "cluster-ESA":
-
-Id VMHostName     CanonicalName                        CapacityGB Model
--- ----------     -------------                        ---------- -----
- 1 10.191.171.173 eui.1a11431c54cffe8b000c296603ea3add     500.00 VMware Virtual NVMe Disk
- 2 10.191.171.173 eui.ba33eac3dc25680b000c29634aad5191      80.00 VMware Virtual NVMe Disk
- 3 10.191.171.174 eui.fa196b4e38295c1d000c2965528e53f8     500.00 VMware Virtual NVMe Disk
- 4 10.191.171.174 eui.7734d14c0f1daf33000c296f08ecf6e9      80.00 VMware Virtual NVMe Disk
-
-[INFO] vSAN ESA storage pool: all 4 eligible disk(s) will be added.
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.173"... Success
-[INFO] Adding 2 disk(s) to vSAN ESA datastore from host "10.191.171.174"... Success
-[INFO] Successfully configured vSAN ESA datastore for all hosts in cluster "cluster-ESA".
-[INFO] Waiting for vSAN datastore to become available and renaming to "datastore-ESA"... Success
-[INFO] Configuring vSAN witness host for cluster "cluster-ESA".
-[INFO] Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface.
-[INFO] Enabling stretched cluster mode and configuring witness host "10.191.174.196" for cluster "cluster-ESA"...
-[INFO] Successfully configured witness host "10.191.174.196" for cluster "cluster-ESA".
-[INFO] Enabled vSAN automatic rebalancing at 30% for cluster "cluster-ESA".
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] Running vSAN cluster health check for cluster "cluster-ESA" (after witness).
-[INFO] Enabled vSAN health Alarms on cluster "cluster-ESA".
-[INFO] Waiting 20 seconds for vSAN health service to reflect HCI workflow skip.
-[INFO] Silenced vSAN health checks for lab environment on cluster "cluster-ESA": advcfgsync, controllerdiskmode, controlleronhcl.
-[INFO] vSAN advanced config not in sync on all hosts for cluster "cluster-ESA". Pushing current vSAN cluster config from vCenter to hosts.
-[INFO] Re-applied vSAN cluster configuration for cluster "cluster-ESA" (config pushed from vCenter to hosts).
-[INFO] vSAN cluster config re-applied for cluster "cluster-ESA". Sync may complete asynchronously; proceeding.
-[INFO] vSAN cluster health is green for cluster "cluster-ESA". Proceeding.
-[INFO] Successfully tagged vSAN ESA datastore "datastore-ESA" with tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog").
-[INFO] Storage policy "supervisor-ESA" already contains tag "supervisor-ESA" from catalog "vSAN-ESA-Storage-TagCatalog". Skipping tag add.
-[INFO] Cluster "cluster-ESA" is compliant to the vLCM image. No remediation required.
-[INFO] Suppress 10 GB networking alarm if present (Broadcom KB 394932) on 2/2 host(s) in cluster "cluster-ESA".
-[INFO] Forming ArgoCD namespace name "argocd-c1392" from prefix "argocd" and cluster MoRef suffix: "-c1392" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-ESA" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-ESA"...
-[INFO]   Supervisor "supervisor-ESA" not found.
-[INFO] [Step 3/3] Supervisor instance "supervisor-ESA" not found. Proceeding to create it.
-[INFO] Beginning Supervisor deployment to cluster "cluster-ESA"...
-[INFO] [Step 1/5] Parsing supervisor configuration from JSON...
-[INFO]   Management network configuration extracted: tkgsmgmtnetwork with 7 IPs
-[INFO]     Starting IP: 10.30.13.100, Gateway: 10.30.13.1/24.
-[INFO]   Workload network configuration extracted: primaryworkloadnetwork with 100 node IPs and 512 service IPs.
-[INFO]     Node IP: 10.30.10.101, Service IP: 10.97.0.0.
-[INFO]   FLB network configuration extracted: flbmanagementnetwork, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 40
-[INFO]   FLB network configuration extracted: virtualservernetwork, Type: DVPG
-[INFO]     IP Assignment: STATIC, Count: 60
-[INFO] FLB configuration extracted: flb-site1, Size: MEDIUM, VIPs: 50
-[INFO] Supervisor configuration parsed successfully for edgeSite: ESA.
-[INFO] Control Plane: 1 x SMALL
-[INFO] Management Network: tkgsmgmtnetwork
-[INFO] Workload Network: primaryworkloadnetwork
-[INFO] Load Balancer: flb-site1
-[INFO] Configuration validation passed.
-[INFO] [Step 2/5] Building Supervisor specifications...
-[INFO]    Building control plane specification...
-[INFO]    Control plane specification built successfully: Size=SMALL, VMs=1
-[INFO]    Workload network specification built successfully: primaryworkloadnetwork
-[INFO] [Step 3/5] Assembling complete supervisor specification...
-[INFO] [Step 4/5] Invoking supervisor creation API...
-[INFO]    Invoking supervisor creation on cluster "cluster-ESA" (ID: domain-c1392)...
-[INFO] [Step 4/5] Supervisor API invocation completed. ID: f79dcfac-10f6-4ae1-9cf2-a2057e405973
-[INFO] [Step 5/5] Monitoring supervisor deployment status...
-[INFO] Supervisor services on cluster "cluster-ESA" were successfully configured in 1935 seconds.
-[INFO] [Step 5/5] Supervisor is ready (elapsed: 1935 seconds)
-[INFO] Supervisor deployment completed successfully. Supervisor ID: f79dcfac-10f6-4ae1-9cf2-a2057e405973
-[INFO] Checking for available supervisor upgrade versions...
-[INFO] No supervisor upgrade available. Current version v1.32.9+vmware.2-fips-vsc9.0.2.0-25129014 is up to date.
-[INFO] Using all available VM classes for ArgoCD namespace: best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge
-[INFO] Configuring VM classes: best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge
-[INFO] The ArgoCD namespace "argocd-c1392" was created successfully.
-[INFO] VM classes assigned: best-effort-4xlarge, guaranteed-small, guaranteed-large, guaranteed-2xlarge, best-effort-xsmall, guaranteed-xsmall, best-effort-small, guaranteed-medium, guaranteed-xlarge, best-effort-medium, best-effort-2xlarge, guaranteed-4xlarge, best-effort-8xlarge, guaranteed-8xlarge, best-effort-large, best-effort-xlarge
-[INFO] The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete.
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 210 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.30.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01"...
-[ok] Token is still active. Skipped the token refresh for context "vcf-context-01"
-[i] Successfully activated context 'vcf-context-01' (Type: kubernetes)
-[i] Fetching recommended plugins for active context 'vcf-context-01'...
-[ok] All recommended plugins are already installed and up-to-date.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpe3z51w.yml" to namespace "argocd-c1392"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 created
-[INFO] kubectl context "vcf-context-01:argocd-c1392" does not exist. This is expected if the namespace was just created. Continuing with namespace flag -n for kubectl operations.
-[INFO] Verifying kubectl authentication for namespace "argocd-c1392" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c1392" after 0 seconds
-[INFO] ArgoCD pod "argocd-redis-secret-init-hgszv" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-8486d45c45-5kc9v" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-5746987cfb-mv5x5" is now in status Running.
-[INFO] ArgoCD pod "argocd-repo-server-59c8f784b4-j6zq7" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c1392" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.30.12.204/
-[INFO] Login as user "admin" using temporary password: BXPoL-CyJkzSIDOs
-[INFO] To update your password run: "argocd.exe account update-password --server 10.30.12.204 --account admin --insecure"
-[INFO] Completed deployment for cluster with edgeSite: ESA
-```
-
-## Example of multi-site cleanup - 2026-03-04
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -cleanup all -force
-
-[INFO] Processing all 3 edge site(s)...
-[INFO] Beginning workflow for 3 edge site(s), starting with edgeSite: "ESA".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
-[INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
-[INFO] CleanUp is set to "All". Cleaning up per scope, then exiting without deploying.
-[ADVISORY] Skipping cleanup confirmation (labEnvironment=true and -Force).
-[INFO] Deactivating supervisor on cluster "cluster-ESA" before compute cleanup (All).
-[INFO] Deactivating supervisor on cluster "cluster-ESA" (ID: domain-c1392)...
-[INFO] Supervisor deactivation initiated. Polling until fully deactivated (timeout: 3600 seconds)...
-[INFO] Supervisor on cluster "cluster-ESA" is fully deactivated after 2250 seconds. You can retry deployment.
-[INFO] Removing non-management VMkernel interfaces from hosts on VDS "VDS-ESA"... Removed 4 interface(s) from 2 host(s).
-[INFO] Restoring management (vmk0) to standard switch on hosts... Moved management to VSS on 2 host(s).
-[INFO] Starting vSAN deployment rollback for cluster "cluster-ESA" (vSAN-ESA)...
-[INFO] Removing vSAN ESA storage pool disk claims from 2 host(s), then vsan cluster leave.
-[INFO] vSAN disk removal completed for 2 host(s).
-[INFO] vSAN cluster leave completed for cluster "cluster-ESA".
-[INFO] Removing storage tag "supervisor-ESA" (catalog "vSAN-ESA-Storage-TagCatalog") from vCenter... Removed
-[INFO] Removing empty tag category "vSAN-ESA-Storage-TagCatalog" from vCenter... Removed
-[INFO] vSAN deployment rollback completed for cluster "cluster-ESA".
-[INFO] Detaching 2 host(s) from VDS "VDS-ESA" (removing pNICs)... Done.
-[INFO] Removing distributed port groups from VDS "VDS-ESA"... Removed 7 port group(s).
-[INFO] Removing Virtual Distributed Switch "VDS-ESA"... Removed
-[INFO] Removing cluster "cluster-ESA" (no running VMs)... Removed
-[ADVISORY] Skipping cleanup confirmation (labEnvironment=true and -Force).
-[INFO] Deactivating supervisor on cluster "cluster-OSA" before compute cleanup (All).
-[INFO] Deactivating supervisor on cluster "cluster-OSA" (ID: domain-c1347)...
-[INFO] Supervisor deactivation initiated. Polling until fully deactivated (timeout: 3600 seconds)...
-[INFO] Supervisor on cluster "cluster-OSA" is fully deactivated after 2120 seconds. You can retry deployment.
-[INFO] Removing non-management VMkernel interfaces from hosts on VDS "VDS-OSA"... Removed 4 interface(s) from 2 host(s).
-[INFO] Restoring management (vmk0) to standard switch on hosts... Moved management to VSS on 2 host(s).
-[INFO] Starting vSAN deployment rollback for cluster "cluster-OSA" (vSAN-OSA)...
-[INFO] Removing vSAN disk claims from 2 host(s) (OSA disk groups), then vsan cluster leave.
-[INFO] vSAN disk removal completed for 2 host(s).
-[INFO] vSAN cluster leave completed for cluster "cluster-OSA".
-[INFO] Removing storage tag "supervisor-OSA" (catalog "vSAN-OSA-Storage-TagCatalog") from vCenter... Removed
-[INFO] Removing empty tag category "vSAN-OSA-Storage-TagCatalog" from vCenter... Removed
-[INFO] vSAN deployment rollback completed for cluster "cluster-OSA".
-[INFO] Detaching 2 host(s) from VDS "VDS-OSA" (removing pNICs)... Done.
-[INFO] Removing distributed port groups from VDS "VDS-OSA"... Removed 7 port group(s).
-[INFO] Removing Virtual Distributed Switch "VDS-OSA"... Removed
-[INFO] Removing cluster "cluster-OSA" (no running VMs)... Removed
-[ADVISORY] Skipping cleanup confirmation (labEnvironment=true and -Force).
-[WARNING] Cluster "cluster-VMFS" not found; nothing to remove.
-[INFO] CleanUp (All) completed. Exiting without deployment.
-```
-
-## Example of Harbor Cleanup - 2026-04-01
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS -cleanup harbor -force
-
-[INFO] Processing 1 edge site(s): VMFS...
-[INFO] Beginning workflow for edgeSite: "VMFS".
-[INFO] Performing vCenter reachability check (TCP 443) for cleanup...
-[INFO] Reachability: vCenter OK.
-[ADVISORY] Running in lab mode (common.labenvironment is true in infrastructure JSON).
-[INFO] CleanUp is set to "Harbor". Cleaning up per scope, then exiting without deploying.
-[ADVISORY] Skipping cleanup confirmation (labEnvironment=true and -Force).
-[INFO] Retrieving supervisor ID for "supervisor-vmfs" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-vmfs"...
-[INFO]   Found supervisor "supervisor-vmfs" with ID: 77a8cf66-1354-4220-ac48-c0d7ebdebc3d.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-vmfs" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-vmfs" reached READY status after 0 seconds
-[INFO] Harbor service "harbor.tanzu.vmware.com" removed from supervisor "77a8cf66-1354-4220-ac48-c0d7ebdebc3d" for cluster "cluster-VMFS". Supervisor intact.
-[INFO] Harbor service namespace(s) still terminating on supervisor "77a8cf66-1354-4220-ac48-c0d7ebdebc3d" for cluster "cluster-VMFS": svc-harbor-zdnps. Waiting for cleanup before completing rollback...
-[INFO] Harbor service namespace(s) terminated on supervisor "77a8cf66-1354-4220-ac48-c0d7ebdebc3d" for cluster "cluster-VMFS". Ready for re-deployment.
-[INFO] CleanUp (Harbor) completed. Exiting without deployment.
-```
-
-## Example of Harbor Deployment (only cert and hostname specified in YAML) - 2026-04-01
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS
-
-[INFO] Checking for required JSON properties for edgeSite(s) "VMFS"...
-[INFO] Validating property formats and values for edgeSite(s) "VMFS"...
-[INFO] Processing 1 edge site(s): VMFS...
-[INFO] Beginning workflow for edgeSite: "VMFS".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 1 ESX host(s)).
-[INFO] Datastore "datastore-VMFS" is already mounted on ESX host "automation-esx01.vcfedge.demo" and has 493.23 GB free space.
-[INFO] Retrieved canonical name for existing datastore "datastore-VMFS": mpx.vmhba0:C0:T2:L0.
-[INFO] The cluster "cluster-VMFS" in datacenter "UnitTest" is already present. Skipping cluster creation.
-[INFO] Host "automation-esx01.vcfedge.demo" is already in cluster "cluster-VMFS". Skipping host add.
-[INFO] VDS "VDS-VMFS" is already present. Skipping VDS creation.
-[INFO] The ESX host "automation-esx01.vcfedge.demo" is already attached to VDS "VDS-VMFS". Skipping attachment.
-[INFO] Host "automation-esx01.vcfedge.demo" management (vmk0) is already on VDS "VDS-VMFS". Skipping migration.
-[INFO] Port group "primaryworkloadnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 500. Skipping creation.
-[INFO] Port group "flbmanagementnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 501. Skipping creation.
-[INFO] Port group "virtualservernetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 502. Skipping creation.
-[INFO] Port group "tkgsmgmtnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 503. Skipping creation.
-[INFO] Tag catalog "VMFS-Storage-TagCatalog" already exists on vCenter "10.191.174.202". Skipping tag catalog creation.
-[INFO] Tag name "supervisor-vmfs" already exists on "VMFS-Storage-TagCatalog". Skipping tag creation.
-[INFO] The datastore "datastore-VMFS" was already created on ESX host "automation-esx01.vcfedge.demo". Proceeding to tag assignment.
-[INFO] Datastore "datastore-VMFS" already has tag "supervisor-vmfs" assigned. Skipping tag assignment.
-[INFO] Storage policy "supervisor-vmfs" already contains tag "supervisor-vmfs" from catalog "VMFS-Storage-TagCatalog". Skipping tag add.
-[INFO] Forming ArgoCD namespace name "argocd-c772" from prefix "argocd" and cluster MoRef suffix: "-c772" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-vmfs" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-vmfs"...
-[INFO]   Found supervisor "supervisor-vmfs" with ID: 77a8cf66-1354-4220-ac48-c0d7ebdebc3d.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-vmfs" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-vmfs" reached READY status after 0 seconds
-[INFO] Supervisor instance "supervisor-vmfs" reported status ready, after waiting for 0 seconds.
-[INFO] Retrieving supervisor ID for "supervisor-vmfs" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-vmfs"...
-[INFO]   Found supervisor "supervisor-vmfs" with ID: 77a8cf66-1354-4220-ac48-c0d7ebdebc3d.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-vmfs" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-vmfs" reached READY status after 0 seconds
-[INFO] Using all available VM classes for ArgoCD namespace.
-[INFO] The ArgoCD namespace "argocd-c772" already exists on vCenter "10.191.174.202" Skipping namespace creation.
-[INFO] ArgoCD service already exists. Verifying configuration status...
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 0 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.50.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01:argocd-c772"...
-[INFO] Namespace-scoped context switch failed. Trying base context "vcf-context-01"...
-[INFO] VCF context "vcf-context-01" activated successfully.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpgidnam.yml" to namespace "argocd-c772"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 unchanged
-[INFO] Verifying kubectl authentication for namespace "argocd-c772" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c772" after 0 seconds
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-6b4c84cdc7-khj7v" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-secret-init-lzvnk" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-repo-server-84658955b7-2qnbb" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-55889fdf59-7w5tb" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c772" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.50.12.203/
-[INFO] Login as user "admin" using temporary password: qkSDjHfN1A6YtxTk
-[INFO] To update your password run: "argocd.exe account update-password --server 10.50.12.203 --account admin --insecure"
-[INFO] Created temporary Harbor data values file for edge site "VMFS" (hostname: "harbor-site1.example.com", storageClass: "supervisor-vmfs")
-[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
-[INFO] Harbor service install request submitted. Waiting for configuration to complete.
-[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "77a8cf66-1354-4220-ac48-c0d7ebdebc3d".
-[INFO] Harbor Supervisor Service installed successfully for edge site "VMFS" (hostname: "harbor-site1.example.com").
-[INFO] Completed deployment for cluster with edgeSite: VMFS
-```
-
-## Example of Harbor Deployment (save yaml) - 2026-04-01
-
-```powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -EdgeSite VMFS -SaveHarborYaml
-
-[INFO] Checking for required JSON properties for edgeSite(s) "VMFS"...
-[INFO] Validating property formats and values for edgeSite(s) "VMFS"...
-[INFO] Processing 1 edge site(s): VMFS...
-[INFO] Beginning workflow for edgeSite: "VMFS".
-[INFO] Performing vCenter and ESX reachability check (TCP 443)...
-[INFO] Reachability: all targets OK (vCenter and 1 ESX host(s)).
-[INFO] Datastore "datastore-VMFS" is already mounted on ESX host "automation-esx01.vcfedge.demo" and has 493.23 GB free space.
-[INFO] Retrieved canonical name for existing datastore "datastore-VMFS": mpx.vmhba0:C0:T2:L0.
-[INFO] The cluster "cluster-VMFS" in datacenter "UnitTest" is already present. Skipping cluster creation.
-[INFO] Host "automation-esx01.vcfedge.demo" is already in cluster "cluster-VMFS". Skipping host add.
-[INFO] VDS "VDS-VMFS" is already present. Skipping VDS creation.
-[INFO] The ESX host "automation-esx01.vcfedge.demo" is already attached to VDS "VDS-VMFS". Skipping attachment.
-[INFO] Host "automation-esx01.vcfedge.demo" management (vmk0) is already on VDS "VDS-VMFS". Skipping migration.
-[INFO] Port group "primaryworkloadnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 500. Skipping creation.
-[INFO] Port group "flbmanagementnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 501. Skipping creation.
-[INFO] Port group "virtualservernetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 502. Skipping creation.
-[INFO] Port group "tkgsmgmtnetwork-3" already exists on VDS "VDS-VMFS" with VLAN ID 503. Skipping creation.
-[INFO] Tag catalog "VMFS-Storage-TagCatalog" already exists on vCenter "10.191.174.202". Skipping tag catalog creation.
-[INFO] Tag name "supervisor-vmfs" already exists on "VMFS-Storage-TagCatalog". Skipping tag creation.
-[INFO] The datastore "datastore-VMFS" was already created on ESX host "automation-esx01.vcfedge.demo". Proceeding to tag assignment.
-[INFO] Datastore "datastore-VMFS" already has tag "supervisor-vmfs" assigned. Skipping tag assignment.
-[INFO] Storage policy "supervisor-vmfs" already contains tag "supervisor-vmfs" from catalog "VMFS-Storage-TagCatalog". Skipping tag add.
-[INFO] Running vLCM cluster compliance check for cluster "cluster-VMFS".
-[INFO] Cluster "cluster-VMFS" is compliant to the vLCM image. No remediation required.
-[INFO] Forming ArgoCD namespace name "argocd-c772" from prefix "argocd" and cluster MoRef suffix: "-c772" to ensure uniqueness.
-[INFO] Retrieving supervisor ID for "supervisor-vmfs" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-vmfs"...
-[INFO]   Found supervisor "supervisor-vmfs" with ID: 77a8cf66-1354-4220-ac48-c0d7ebdebc3d.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-vmfs" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-vmfs" reached READY status after 0 seconds
-[INFO] Supervisor instance "supervisor-vmfs" reported status ready, after waiting for 0 seconds.
-[INFO] Retrieving supervisor ID for "supervisor-vmfs" on vCenter "10.191.174.202"...
-[INFO] [Step 1/3] Creating REST API session...
-[INFO]   Creating REST API session with vCenter...
-[INFO]   REST API session created successfully.
-[INFO] [Step 2/3] Searching for supervisor cluster...
-[INFO]   Searching for supervisor "supervisor-vmfs"...
-[INFO]   Found supervisor "supervisor-vmfs" with ID: 77a8cf66-1354-4220-ac48-c0d7ebdebc3d.
-[INFO] [Step 3/3] Waiting for supervisor to become ready...
-[INFO]   Waiting for supervisor "supervisor-vmfs" to become ready (timeout: 3600 seconds)...
-[INFO]   Supervisor "supervisor-vmfs" reached READY status after 0 seconds
-[INFO] Using all available VM classes for ArgoCD namespace.
-[INFO] The ArgoCD namespace "argocd-c772" already exists on vCenter "10.191.174.202" Skipping namespace creation.
-[INFO] ArgoCD service already exists. Verifying configuration status...
-[INFO] The ArgoCD operator has been successfully installed on vCenter "10.191.174.202". (Took 0 seconds).
-[INFO] Creating VCF context "vcf-context-01" with endpoint "10.50.13.101"...
-[INFO] VCF context "vcf-context-01" created successfully.
-[INFO] Switching to VCF context "vcf-context-01:argocd-c772"...
-[INFO] Namespace-scoped context switch failed. Trying base context "vcf-context-01"...
-[INFO] VCF context "vcf-context-01" activated successfully.
-[INFO] Waiting for ArgoCD operator webhook service to be ready (timeout: 1200 seconds)...
-[INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
-[INFO] Applying ArgoCD deployment YAML file "C:\Users\Administrator\AppData\Local\Temp\tmpslmup2.yml" to namespace "argocd-c772"...
-[INFO] Successfully applied ArgoCD deployment YAML. Output: argocd.argocd-service.vsphere.vmware.com/argocd-instance-1 unchanged
-[INFO] Verifying kubectl authentication for namespace "argocd-c772" (timeout: 60 seconds)...
-[INFO] kubectl authentication verified for namespace "argocd-c772" after 0 seconds
-[INFO] ArgoCD pod "argocd-application-controller-0" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-6b4c84cdc7-khj7v" is now in status Running.
-[INFO] ArgoCD pod "argocd-redis-secret-init-lzvnk" is now in status Succeeded.
-[INFO] ArgoCD pod "argocd-repo-server-84658955b7-2qnbb" is now in status Running.
-[INFO] ArgoCD pod "argocd-server-55889fdf59-7w5tb" is now in status Running.
-[INFO] All 5 ArgoCD pods are ready.
-[INFO] ArgoCD namespace "vcf-context-01:argocd-c772" is now available with all pods ready.
-[INFO] To login to ArgoCD:
-[INFO] Go to https://10.50.12.203/
-[INFO] Login as user "admin" using temporary password: qkSDjHfN1A6YtxTk
-[INFO] To update your password run: "argocd.exe account update-password --server 10.50.12.203 --account admin --insecure"
-[INFO] Created temporary Harbor data values file for edge site "VMFS" (hostname: "harbor-site1.example.com", storageClass: "supervisor-vmfs")
-[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
-[INFO] Harbor service install request submitted. Waiting for configuration to complete.
-[INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "77a8cf66-1354-4220-ac48-c0d7ebdebc3d".
-[INFO] Harbor Supervisor Service installed successfully for edge site "VMFS" (hostname: "harbor-site1.example.com").
-[INFO] Harbor data values file saved (contains unredacted secrets): "C:\Users\Administrator\HarborYaml\harbor-data-values-VMFS-20260401_060201.yml". A redacted copy is in the deployment log.
-[INFO] Completed deployment for cluster with edgeSite: VMFS
 ```
