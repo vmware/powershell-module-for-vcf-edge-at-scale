@@ -4,6 +4,8 @@
 [![License](https://img.shields.io/badge/License-Broadcom-green.svg)](LICENSE.md)
 [![Version](https://img.shields.io/badge/Version-1.0.3-orange.svg)](CHANGELOG.md)
 [![GitHub Clones](https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url=https://gist.githubusercontent.com/nathanthaler/7c5ed25bb9cea6eef7f015be50e44a6f/raw/clone.json&logo=github)](https://gist.githubusercontent.com/nathanthaler/7c5ed25bb9cea6eef7f015be50e44a6f/raw/clone.json)
+[![PS Version](https://img.shields.io/powershellgallery/v/VcfEdgeAtScale?label=Version)](https://www.powershellgallery.com/packages/VcfEdgeAtScale)
+[![PS Downloads](https://img.shields.io/powershellgallery/dt/VcfEdgeAtScale?label=Downloads)](https://www.powershellgallery.com/packages/VcfEdgeAtScale)
 
 ## Overview
 

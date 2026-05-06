@@ -27,7 +27,7 @@
 # =============================================================================
 #
 # PowerShell Module: VcfEdgeAtScale
-# Module Version: 1.0.3.1000
+# Module Version: 1.0.3.1001
 # Last modified: 2026-05-06
 #
 # Section map (see #region in this file):
@@ -40,7 +40,7 @@
 #   Exported — Start-VcfEdgeAtScale, configuration help
 #
 #region Script scope variables
-$Script:ModuleVersion = '1.0.3.1000'
+$Script:ModuleVersion = '1.0.3.1001'
 
 # Set platform-specific command names for cross-platform compatibility.
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
@@ -32937,9 +32937,13 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
     foreach ($helpFileName in $helpJsonFileNames) {
         $helpTemplatePath = Join-Path -Path $templatesPath -ChildPath $helpFileName
         $helpDocsPath = Join-Path -Path $docsDirectory -ChildPath $helpFileName
-        Update-HelpJsonIfStale -DocsPath $helpDocsPath -TemplatePath $helpTemplatePath
+        $helpWasUpdated = Update-HelpJsonIfStale -DocsPath $helpDocsPath -TemplatePath $helpTemplatePath
         if (Test-Path -LiteralPath $helpDocsPath -PathType Leaf) {
-            Write-Host "    Help JSON current: $helpFileName" -ForegroundColor Green
+            if ($helpWasUpdated) {
+                Write-Host "    Updated: $helpFileName" -ForegroundColor Green
+            } else {
+                Write-Host "    Current: $helpFileName" -ForegroundColor Gray
+            }
         }
     }
 
@@ -33458,7 +33462,10 @@ Function Start-VcfEdgeAtScale {
         if ($ignoredParameterNames.Count -gt 0) {
             Write-Output "Note: -Initialize runs alone; ignoring these parameters for this run: $($ignoredParameterNames -join ', ')."
         }
-        $null = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
+        $initBaseDirectory = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
+        if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $initBaseDirectory -PathType Container)) {
+            New-LogFile -BaseDirectory $initBaseDirectory -Directory "Logs"
+        }
         return
     }
 
@@ -33494,7 +33501,12 @@ Function Start-VcfEdgeAtScale {
     }
 
     if ($Version) {
-        New-LogFile
+        $versionLogBase = $env:VcfEdgeatScaleRootDirectory
+        if (-not [String]::IsNullOrWhiteSpace($versionLogBase) -and (Test-Path -LiteralPath $versionLogBase.Trim() -PathType Container)) {
+            New-LogFile -BaseDirectory $versionLogBase.Trim() -Directory "Logs"
+        } else {
+            New-LogFile
+        }
         $versionToDisplay = $null
 
         # Try to get version from loaded module first.
@@ -34096,6 +34108,9 @@ Function Update-HelpJsonIfStale {
         .PARAMETER TemplatePath
         Full path to the source file in the module Templates directory.
 
+        .OUTPUTS
+        [Boolean] $true when the file was copied (updated or first-time); $false when the Docs copy was already current or on failure.
+
         .NOTES
         Help JSON files are not user-edited, so silent replacement is safe. Called from Invoke-VcfEdgeAtScaleModuleInitialize and Start-VcfEdgeAtScale.
     #>
@@ -34106,7 +34121,7 @@ Function Update-HelpJsonIfStale {
 
     if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
         Write-Warning "Help JSON template not found at '$TemplatePath'. Skipping auto-refresh for '$DocsPath'."
-        return
+        return $false
     }
 
     # Read the template version as the authoritative source.
@@ -34116,7 +34131,7 @@ Function Update-HelpJsonIfStale {
         $templateVersion = if ($templateJson -is [Array]) { $null } else { $templateJson.moduleVersion }
     } catch {
         Write-Warning "Could not read template help JSON at '$TemplatePath': $($_.Exception.Message). Skipping auto-refresh."
-        return
+        return $false
     }
 
     # If the template has no moduleVersion field it cannot be compared reliably; always copy so
@@ -34146,14 +34161,16 @@ Function Update-HelpJsonIfStale {
 
     if (-not $needsCopy) {
         Write-LogMessage -Type DEBUG -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' is current (v$versionLabel). No update needed."
-        return
+        return $false
     }
 
     try {
         Copy-Item -LiteralPath $TemplatePath -Destination $DocsPath -Force -ErrorAction Stop
-        Write-LogMessage -Type INFO -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' updated to module v$versionLabel."
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' updated to module v$versionLabel."
+        return $true
     } catch {
         Write-Warning "Could not update help JSON at '$DocsPath': $($_.Exception.Message)."
+        return $false
     }
 }
 

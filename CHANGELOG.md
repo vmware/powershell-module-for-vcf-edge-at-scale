@@ -1,5 +1,10 @@
 # Releases
 
+## 1.0.3.1001
+
+- Log files now written to `<BaseDirectory>/Logs/` for `-Initialize` and `-Version` instead of the module install path.
+- Help JSON status during `-Initialize` now displays inline as `Updated:` or `Current:` consistent with the rest of the output, removing the interleaved `[INFO]` console lines.
+
 ## 1.0.3.1000
 
 - Configurable vSphere HA admission policy for vSAN stretched clusters (`common.haPolicy` / `clusters[].haPolicy`): **`reservationBased`** when omitted, or **`slotBased`** / **`disabled`** when set; validated when the key is set. VMFS clusters keep percentage-based admission on HA re-apply after the VDS step.
