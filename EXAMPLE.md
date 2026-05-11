@@ -439,7 +439,7 @@ Id VMHostName                    CanonicalName       CapacityGB Model           
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (endpoint: "10.40.12.204")...
 [INFO] Harbor container image registry "harbor" registered on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (id: "2669572d-5cc2-4d78-b84d-19848e34e0bf", endpoint: "10.40.12.204").
 [INFO] Completed deployment for cluster with edgeSite: vsan-edge1
-[INFO] ESXi node health for cluster "cluster-vsan-edge1" (2 host(s)): all Connected/PoweredOn.
+[INFO] ESX node health for cluster "cluster-vsan-edge1" (2 host(s)): all Connected/PoweredOn.
 [INFO] Supervisor health for cluster "cluster-vsan-edge1" (supervisor "0612c330-c930-4187-9a58-655191f7a94e"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions.
 [INFO] Running on-demand vSAN health test for cluster "cluster-vsan-edge1" (vSAN Health RETEST equivalent after deployment; VMCreateTimeoutSeconds=120).
 [INFO] On-demand vSAN health test completed for cluster "cluster-vsan-edge1". Refresh vSAN Health in vCenter to review current status.
@@ -546,7 +546,7 @@ VCF91       9.1.0.0.25370933
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (endpoint: "10.50.12.204")...
 [INFO] Harbor container image registry "harbor" registered on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (id: "d7970dd5-28c4-48f3-857e-6ff48dbeb9be", endpoint: "10.50.12.204").
 [INFO] Completed deployment for cluster with edgeSite: localdisk-edge2
-[INFO] ESXi node health for cluster "cluster-localdisk-edge2" (1 host(s)): all Connected/PoweredOn.
+[INFO] ESX node health for cluster "cluster-localdisk-edge2" (1 host(s)): all Connected/PoweredOn.
 [INFO] Supervisor health for cluster "cluster-localdisk-edge2" (supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions.
 ```
 

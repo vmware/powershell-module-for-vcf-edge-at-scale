@@ -1095,7 +1095,7 @@ Function Invoke-HarborDeploymentPhase {
                 Write-LogMessage -Type DEBUG -Message "Created HarborYaml save directory: `"$harborYamlSaveDir`"."
             } catch {
                 Write-LogMessage -Type ERROR -Message "Cannot create HarborYaml directory `"$harborYamlSaveDir`": $($_.Exception.Message)"
-                throw "Deployment failed. Check logs for details."
+                throw "Cannot create HarborYaml directory `"$harborYamlSaveDir`": $($_.Exception.Message)"
             }
         }
     }
@@ -1108,11 +1108,11 @@ Function Invoke-HarborDeploymentPhase {
         $effectiveHarborHostname = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $inputData.common -LabEnvironmentEnabled $labEnvironment
         if ([String]::IsNullOrWhiteSpace($effectiveHarborHostname)) {
             Write-LogMessage -Type ERROR -Message "Could not resolve Harbor hostname for edge site `"$currentEdgeSite`". Set clusters[].harborConfiguration.hostname or use lab mode with a Harbor data values template that defines hostname."
-            throw "Deployment failed. Check logs for details."
+            throw "Could not resolve Harbor hostname for edge site `"$currentEdgeSite`". Set clusters[].harborConfiguration.hostname or use lab mode with a Harbor data values template that defines hostname."
         }
         if (-not (Test-JsonPropertyFormat -InputData $effectiveHarborHostname -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname (deploy)")) {
             Write-LogMessage -Type ERROR -Message "Resolved Harbor hostname `"$effectiveHarborHostname`" for edge site `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address (deploy-time check)."
-            throw "Deployment failed. Check logs for details."
+            throw "Resolved Harbor hostname `"$effectiveHarborHostname`" for edge site `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address (deploy-time check)."
         }
         if ($harborConfig.PSObject.Properties["hostname"]) {
             $harborConfig.hostname = $effectiveHarborHostname
@@ -1493,7 +1493,7 @@ Function Initialize-VcfEdgeAtScale {
             }
         } else {
             Write-LogMessage -Type ERROR -Message "No clusters found in infrastructure JSON."
-            throw "Deployment failed. Check logs for details."
+            throw "No clusters found in infrastructure JSON."
         }
 
         Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
@@ -1561,7 +1561,7 @@ Function Initialize-VcfEdgeAtScale {
         $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
             # Connection cleanup handled by function-level finally block.
-            throw "Deployment failed. Check logs for details."
+            throw "vCenter version check failed: $($result.ErrorMessage)"
         }
 
         # Enforce vCenter 9 supervisor limit (default 50 per vCenter per product guidance); fail if already at limit so we cannot add another.
@@ -1670,7 +1670,7 @@ Function Initialize-VcfEdgeAtScale {
                     $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                     if (-not $esxVerResult.Success) {
                         Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                        throw "Deployment failed. Check logs for details."
+                        throw $esxVerResult.ErrorMessage
                     }
                     $esxVersionChecked[$esxHost] = $true
                 } catch {
@@ -1726,7 +1726,7 @@ Function Initialize-VcfEdgeAtScale {
                 $networkSegments = $cluster.networking.networkSegments
             } else {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite `"$currentEdgeSite`" has no network segments specified."
-                throw "Deployment failed. Check logs for details."
+                throw "Cluster with edgeSite `"$currentEdgeSite`" has no network segments specified."
             }
 
             # Extract supervisor services (ArgoCD configuration). Cluster level takes priority over common.
@@ -1797,7 +1797,7 @@ Function Initialize-VcfEdgeAtScale {
                             $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                             if (-not $esxVerResult.Success) {
                                 Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                throw "Deployment failed. Check logs for details."
+                                throw $esxVerResult.ErrorMessage
                             }
                             $esxVersionChecked[$esxHost] = $true
                         }
@@ -1805,8 +1805,7 @@ Function Initialize-VcfEdgeAtScale {
                         if ($diskCanonicalName) {
                             $diskCanonicalNames[$esxHost] = $diskCanonicalName
                         }
-                    }
-                    catch {
+                    } catch {
                         $errorMessage = $_.Exception.Message
                         if ($errorMessage -match "Authentication failed" -and $esxUsedEnvPassword) {
                             Write-LogMessage -Type WARNING -Message "ESX authentication with ESX_COMMON_PASSWORD failed; falling back to password prompt."
@@ -1822,7 +1821,7 @@ Function Initialize-VcfEdgeAtScale {
                                     $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                                     if (-not $esxVerResult.Success) {
                                         Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                        throw "Deployment failed. Check logs for details."
+                                        throw $esxVerResult.ErrorMessage
                                     }
                                     $esxVersionChecked[$esxHost] = $true
                                 }
@@ -1848,7 +1847,7 @@ Function Initialize-VcfEdgeAtScale {
                 }
 
                 if ($esxConnectionFailed) {
-                    throw "Deployment failed. Check logs for details."
+                    throw "One or more ESX hosts could not be connected or verified. Check logs for details."
                 }
             }
             elseif ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
@@ -1872,13 +1871,12 @@ Function Initialize-VcfEdgeAtScale {
                                 $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                                 if (-not $esxVerResult.Success) {
                                     Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                    throw "Deployment failed. Check logs for details."
+                                    throw $esxVerResult.ErrorMessage
                                 }
                                 $esxVersionChecked[$esxHost] = $true
                             }
                             Write-LogMessage -Type DEBUG -Message "Successfully validated credentials for ESX host `"$esxHost`"."
-                        }
-                        catch {
+                        } catch {
                             # Connect-Vcenter already logged the failure; avoid duplicating long error text.
                             $errorMessage = $_.Exception.Message
                             if ($errorMessage -match "Authentication failed|incorrect user name or password") {
@@ -1939,7 +1937,7 @@ Function Initialize-VcfEdgeAtScale {
                         Write-LogMessage -Type INFO -Message "Retrying credential validation with new password..."
                     } else {
                         Write-LogMessage -Type ERROR -Message "Maximum retry attempts reached or non-authentication error occurred."
-                        throw "Deployment failed. Check logs for details."
+                        throw "Maximum retry attempts reached or non-authentication error occurred."
                     }
                 }
             }
@@ -2175,10 +2173,9 @@ Function Initialize-VcfEdgeAtScale {
                 $firstEsxHost = $esxHosts[0]
                 try {
                     $esxHostObject = Get-VMHost -Name $firstEsxHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                }
-                catch {
+                } catch {
                     Write-LogMessage -Type ERROR -Message "Failed to get the ESX host `"$firstEsxHost`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Failed to get the ESX host `"$firstEsxHost`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
                 }
                 $storageAlreadyProvisioned = Set-NewDatastore -DatastoreName $datastoreName -EsxHost $esxHostObject -DiskCanonicalName $diskCanonicalName -TagName $Script:SupervisorName
             }
@@ -2661,8 +2658,7 @@ Function ConvertFrom-Yaml {
             # Call the internal YAML parsing function with collected lines.
             # This returns an array containing hashtables representing the YAML structure.
             return ConvertFrom-YamlInternal -YamlLines $validLines
-        }
-        catch {
+        } catch {
             # Provide detailed error information for troubleshooting YAML parsing issues.
 
             Write-Error "Failed to parse YAML: $($_.Exception.Message)"

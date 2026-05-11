@@ -335,7 +335,7 @@ Function Write-ErrorAndReturn {
         $result = Add-HostToVDS -Hostname $esxHost -VdsName $vdsName
         if (-not $result.Success) {
             Write-LogMessage -Type ERROR -Message "VDS configuration failed: $($result.ErrorMessage)."
-            throw "Deployment failed. Check logs for details."  # Main workflow decides to throw
+            throw "VDS configuration failed: $($result.ErrorMessage)."
         }
 
         .OUTPUTS
@@ -802,7 +802,7 @@ Function New-LogFile {
                 New-Item -ItemType Directory -Path $Script:LogFolder -ErrorAction Stop | Out-Null
             } catch {
                 Write-Information "Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)" -InformationAction Continue
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)"
             }
         }
     }
@@ -819,7 +819,7 @@ Function New-LogFile {
                 New-Item -Type File -Path $Script:LogFile -ErrorAction Stop | Out-Null
             } catch {
                 Write-Information "Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)" -InformationAction Continue
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)"
             }
             Get-EnvironmentSetup
 
@@ -1205,9 +1205,8 @@ Function Connect-Vcenter {
                 Write-LogMessage -Type DEBUG -Message "Successfully connected to $ServerType `"$ServerName`"."
             } catch [System.TimeoutException] {
                 Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
-                throw "Deployment failed. Check logs for details."
-            }
-            catch {
+                throw "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
+            } catch {
                 # Extract clean error message and classify so we can show targeted guidance (SSL, auth, or generic).
                 $errorMessage = $_.Exception.Message
 
@@ -1228,7 +1227,7 @@ Function Connect-Vcenter {
                         Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $ServerName -Port 443"
                         Write-Output ""
                         Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage."
-                        throw "Deployment failed. Check logs for details."
+                        throw "Full error details: $errorMessage."
                     }
                     "incorrect user name or password|authentication|credentials" {
                         Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."
@@ -1281,7 +1280,7 @@ Function Connect-Vcenter {
                                 Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": $errorMessage"
                             }
                         }
-                        throw "Deployment failed. Check logs for details."
+                        throw "Failed to connect to $ServerType `"$ServerName`": $errorMessage"
                     }
                 }
             }
@@ -1337,7 +1336,7 @@ Function Test-VcenterConnection {
         $connectionTest = Test-VcenterConnection
         if (-not $connectionTest.IsConnected) {
             Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
         }
 
         .EXAMPLE
@@ -1605,9 +1604,8 @@ Function Disconnect-Vcenter {
     # Disconnect from vCenter. Try bulk disconnect first, then individual if needed.
     if ($AllServers) {
         try {
-            Disconnect-VIServer -Server * -Force -Confirm:$false -ErrorAction:Stop | Out-Null
-        }
-        catch {
+            Disconnect-VIServer -Server * -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        } catch {
             # Bulk disconnect failed - try individual disconnects if there are any connections.
             # Only attempt if the error isn't "no servers found" (which is expected when there are no connections).
             if ($_.Exception.Message -notmatch "Could not find any of the servers") {
@@ -1616,7 +1614,7 @@ Function Disconnect-Vcenter {
                 if ($Global:DefaultVIServer) {
                     $serversToDisconnect = @($Global:DefaultVIServer)
                     foreach ($server in $serversToDisconnect) {
-                        Disconnect-VIServer -Server $server.Name -Force -Confirm:$false -ErrorAction:SilentlyContinue | Out-Null
+                        Disconnect-VIServer -Server $server.Name -Force -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
                     }
                 }
             }
@@ -1626,9 +1624,8 @@ Function Disconnect-Vcenter {
             if ($ServerType) {
                 Write-LogMessage -Type DEBUG -Message "Disconnecting from $ServerType `"$ServerName`"..."
             }
-            Disconnect-VIServer -Server $ServerName -Force -Confirm:$false -ErrorAction:Stop | Out-Null
-        }
-        catch {
+            Disconnect-VIServer -Server $ServerName -Force -Confirm:$false -ErrorAction Stop | Out-Null
+        } catch {
             Write-LogMessage -Type DEBUG -Message "Error during server disconnection (non-critical): $($_.Exception.Message)"
         }
     }
@@ -1654,7 +1651,7 @@ Function Disconnect-Vcenter {
             } else {
                 $serverNames = $activeConnections | Select-Object -ExpandProperty Name
                 Write-LogMessage -Type ERROR -Message "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
             }
         }
     }
@@ -1697,7 +1694,7 @@ Function Test-VCenterVersion {
         $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
             Write-LogMessage -Type ERROR -Message "Version validation failed: $($result.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "Version validation failed: $($result.ErrorMessage)"
         }
 
         Validates the vCenter version against a minimum requirement of 9.0.0.
@@ -1953,7 +1950,7 @@ Function New-SubscriptionBasedContentLibrary {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     # Check if a content library with the same name already exists.
@@ -1988,7 +1985,7 @@ Function New-SubscriptionBasedContentLibrary {
             }
 
             Write-LogMessage -Type ERROR -Message "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
-            throw "Deployment failed. Check logs for details."
+            throw "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
         }
 
         Write-LogMessage -Type DEBUG -Message "Found datastore `"$DatastoreName`" (ID: $($datastoreObject.Id)) on vCenter `"$Script:vCenterName`"."
@@ -2030,21 +2027,20 @@ Function New-SubscriptionBasedContentLibrary {
             if (-not $certificate) {
                 Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. RemoteCertificate is null."
                 Write-LogMessage -Type ERROR -Message "This may indicate a network connectivity issue or the server is not responding."
-                throw "Deployment failed. Check logs for details."
+                throw "This may indicate a network connectivity issue or the server is not responding."
             }
 
             # Get the raw hash and format it with colons (format required by New-ContentLibrary).
             $rawHash = $certificate.GetCertHashString()
             $sslThumbprint = ($rawHash.ToUpper() -replace '(..)(?=.+)', '$1:')
             Write-LogMessage -Type DEBUG -Message "Retrieved SSL thumbprint for $hostname - $sslThumbprint"
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to retrieve SSL certificate thumbprint from $hostname - $($_.Exception.Message)"
             if ($_.Exception.InnerException) {
                 Write-LogMessage -Type ERROR -Message "Inner exception: $($_.Exception.InnerException.Message)"
             }
             Write-LogMessage -Type ERROR -Message "Cannot create content library without SSL thumbprint."
-            throw "Deployment failed. Check logs for details."
+            throw "Cannot create content library without SSL thumbprint."
         }
         finally {
             # Clean up SSL stream and TCP client.
@@ -2066,7 +2062,7 @@ Function New-SubscriptionBasedContentLibrary {
 
         if (-not $sslThumbprint) {
             Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
-            throw "Deployment failed. Check logs for details."
+            throw "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
         }
 
         # Create the content library with SSL thumbprint (required parameter).
@@ -2086,20 +2082,19 @@ Function New-SubscriptionBasedContentLibrary {
         $contentLibraryId = Get-ContentLibraryId -LibraryName $LibraryName
         if (-not $contentLibraryId) {
             Write-LogMessage -Type ERROR -Message "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
-            throw "Deployment failed. Check logs for details."
+            throw "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
         }
 
         return $contentLibraryId
     }
     catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         $errorMessage = $_.Exception.Message
         $innerException = $_.Exception.InnerException
 
@@ -2127,7 +2122,7 @@ Function New-SubscriptionBasedContentLibrary {
             Write-LogMessage -Type ERROR -Message "SOLUTION: Verify the subscription URL is correct and the publisher library is accessible from this vCenter."
         }
 
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to query lifecycle content libraries on `"$Script:vCenterName`". Check logs for details."
     }
 }
 Function Get-SupervisorLifecycleContentLibraries {
@@ -2219,8 +2214,7 @@ Function Get-SupervisorLifecycleContentLibraries {
             Libraries = $libraries
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to query lifecycle content libraries: $errorMessage"
 
@@ -2302,8 +2296,7 @@ Function Set-SupervisorLifecycleContentLibrary {
             Success = $true
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to associate content library `"$ContentLibraryId`" with supervisor: $errorMessage"
 
@@ -2401,8 +2394,7 @@ Function Initialize-SupervisorLifecycleContentLibrary {
             ActionTaken = "associated"
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type WARNING -Message "Error during lifecycle content library check/association: $errorMessage. Skipping content library association."
         return [PSCustomObject]@{
@@ -2473,7 +2465,7 @@ Function Test-ContentLibraryBySubscriptionUri {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -2490,12 +2482,11 @@ Function Test-ContentLibraryBySubscriptionUri {
 
         Write-LogMessage -Type DEBUG -Message "No content library found with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`"."
         return $false
-    }
-    catch {
+    } catch {
         # Re-throw API errors so callers can distinguish a transient failure from a missing library.
         # Returning $false on error would cause callers to create a duplicate content library.
         Write-LogMessage -Type ERROR -Message "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function Initialize-SupervisorContentLibrary {

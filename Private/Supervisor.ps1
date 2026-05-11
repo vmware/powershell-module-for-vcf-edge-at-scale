@@ -31,7 +31,7 @@ Function Write-ClusterEsxiNodeHealthReport {
 
     <#
         .SYNOPSIS
-        Logs ESXi host connection and power state for a vSphere cluster after deployment checks.
+        Logs ESX host connection and power state for a vSphere cluster after deployment checks.
 
         .DESCRIPTION
         Emits a single summary line when all hosts are healthy (ConnectionState=Connected and
@@ -52,15 +52,15 @@ Function Write-ClusterEsxiNodeHealthReport {
         $vmHosts = @(Get-VMHost -Location $clusterObject -Server $Script:vCenterName -ErrorAction Stop | Sort-Object -Property Name)
         $unhealthyHosts = @($vmHosts | Where-Object { $_.ConnectionState -ne "Connected" -or $_.PowerState -ne "PoweredOn" })
         if ($unhealthyHosts.Count -eq 0) {
-            Write-LogMessage -Type INFO -Message "ESXi node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): all Connected/PoweredOn."
+            Write-LogMessage -Type INFO -Message "ESX node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): all Connected/PoweredOn."
             return
         }
-        Write-LogMessage -Type WARNING -Message "ESXi node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): $($unhealthyHosts.Count) not Connected/PoweredOn."
+        Write-LogMessage -Type WARNING -Message "ESX node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): $($unhealthyHosts.Count) not Connected/PoweredOn."
         foreach ($vmHost in $unhealthyHosts) {
             Write-LogMessage -Type WARNING -Message "  $($vmHost.Name): ConnectionState=$($vmHost.ConnectionState), PowerState=$($vmHost.PowerState)."
         }
     } catch {
-        Write-LogMessage -Type WARNING -Message "Could not list ESXi host health for cluster `"$ClusterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type WARNING -Message "Could not list ESX host health for cluster `"$ClusterName`": $($_.Exception.Message)"
     }
 }
 Function Write-SupervisorHealthReport {
@@ -1145,8 +1145,7 @@ Function Disable-SupervisorOnCluster {
             Success = $false
             ErrorMessage = "Teardown did not complete within $TimeoutSeconds seconds. Check vCenter; retry deployment after cluster is fully disabled."
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -CompletePending -Message "failed to deactivate supervisor on cluster `"$ClusterName`": $errorMessage"
         return [PSCustomObject]@{
@@ -1248,8 +1247,7 @@ Function Wait-SupervisorReady {
                     $consecutive503Errors = 0
                     $first503ErrorTime = $null
                 }
-            }
-            catch {
+            } catch {
                 $errorMsg = $_.Exception.Message
 
                 # Check for common transient network/API errors.
@@ -1400,8 +1398,7 @@ Function Wait-SupervisorReady {
             Success = $false
             ElapsedSeconds = $elapsedTime
         }
-    }
-    catch {
+    } catch {
         # Log exception with context, then return failure with elapsed time.
 
         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Error" -Completed
@@ -1528,8 +1525,7 @@ Function Get-SupervisorUpgradeInfo {
             ClusterState = $clusterState
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to query supervisor upgrade information for cluster $ClusterId - $errorMessage"
 
@@ -1637,8 +1633,7 @@ Function Invoke-SupervisorUpgrade {
             Success = $true
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to initiate supervisor upgrade for cluster $ClusterId - $errorMessage"
 
@@ -1756,8 +1751,7 @@ Function Get-SupervisorUpgradeStatus {
             Messages = $messages
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         $innerException = $_.Exception.InnerException
 
@@ -1805,8 +1799,7 @@ Function Get-SupervisorUpgradeStatus {
                 } else {
                     Write-LogMessage -Type DEBUG -Message "Fallback query did not find cluster information for $ClusterId."
                 }
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type DEBUG -Message "Fallback query also failed: $($_.Exception.Message)"
             }
         } else {
@@ -1982,8 +1975,7 @@ Function Wait-SupervisorUpgradeComplete {
             ElapsedSeconds = $elapsedTime
             FinalVersion = $null
         }
-    }
-    catch {
+    } catch {
         Write-Progress -Activity "Waiting for supervisor upgrade to complete" -Status "Error" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type ERROR -Message "Error waiting for supervisor upgrade to complete on cluster `"$ClusterName`": $($_.Exception.Message)"
@@ -2035,7 +2027,7 @@ Function Get-SupervisorNetworkVanityDisplayName {
     $combined = "${normalizedPrefix}${PortGroupName}"
     if ($combined.Length -gt $MaxTotalLength) {
         Write-LogMessage -Type ERROR -Message "Supervisor network vanity name exceeds max length $MaxTotalLength (prefix + port group name): $combined."
-        throw "Deployment failed. Check logs for details."
+        throw "Supervisor network vanity name exceeds max length $MaxTotalLength (prefix + port group name): $combined."
     }
 
     return $combined
@@ -2088,7 +2080,7 @@ Function Get-ManagementNetworkConfig {
 
         if ([string]::IsNullOrEmpty($portgroupID)) {
             Write-LogMessage -Type ERROR -Message "Failed to resolve port group ID for management network: $networkName."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to resolve port group ID for management network: $networkName."
         }
 
         $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
@@ -2114,10 +2106,9 @@ Function Get-ManagementNetworkConfig {
         Write-LogMessage -Type DEBUG -Message "  Management network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)) with $($config.IPCount) IPs"
         Write-LogMessage -Type DEBUG -Message "    Starting IP: $($config.StartingIP), Gateway: $($config.Gateway)."
         return $config
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to extract management network configuration: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to extract management network configuration: $($_.Exception.Message)"
     }
 }
 Function Get-WorkloadNetworkConfig {
@@ -2168,7 +2159,7 @@ Function Get-WorkloadNetworkConfig {
 
         if ([string]::IsNullOrEmpty($portgroupID)) {
             Write-LogMessage -Type ERROR -Message "Failed to resolve port group ID for workload network: $networkName."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to resolve port group ID for workload network: $networkName."
         }
 
         $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
@@ -2196,10 +2187,9 @@ Function Get-WorkloadNetworkConfig {
         Write-LogMessage -Type DEBUG -Message "  Workload network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)) with $($config.IPCount) node IPs and $($config.ServiceCount) service IPs."
         Write-LogMessage -Type DEBUG -Message "    Node IP: $($config.StartingIP), Service IP: $($config.ServiceStartIP)."
         return $config
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to extract workload network configuration: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to extract workload network configuration: $($_.Exception.Message)"
     }
 }
 Function Get-FLBNetworkConfig {
@@ -2247,7 +2237,7 @@ Function Get-FLBNetworkConfig {
 
         if ([string]::IsNullOrEmpty($portGroupID)) {
             Write-LogMessage -Type ERROR -Message "Failed to resolve port group ID for FLB network: $networkName."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to resolve port group ID for FLB network: $networkName."
         }
 
         $displayName = if ($DisableSupervisorNetworkVanityPrefix) {
@@ -2273,10 +2263,9 @@ Function Get-FLBNetworkConfig {
         Write-LogMessage -Type DEBUG -Message "  FLB network configuration extracted: $($config.Name) (port group: $($config.PortGroupName)), Type: $($config.Type)"
         Write-LogMessage -Type DEBUG -Message "    IP Assignment: $($config.IPAssignmentMode), Count: $($config.IPCount)"
         return $config
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to extract FLB network configuration: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to extract FLB network configuration: $($_.Exception.Message)"
     }
 }
 Function Get-LoadBalancerConfig {
@@ -2348,10 +2337,9 @@ Function Get-LoadBalancerConfig {
 
         Write-LogMessage -Type DEBUG -Message "FLB configuration extracted: $($config.Name), Size: $($config.Size), VIPs: $($config.VipIPCount)"
         return $config
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to extract Foundation Load Balancer configuration: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to extract Foundation Load Balancer configuration: $($_.Exception.Message)"
     }
 }
 Function Get-SupervisorConfigurationFromJson {
@@ -2431,7 +2419,7 @@ Function Get-SupervisorConfigurationFromJson {
 
         if ($null -eq $supervisorDetails) {
             Write-LogMessage -Type ERROR -Message "Failed to parse JSON file or file is empty."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to parse JSON file or file is empty."
         }
 
         # Extract common supervisor specification (shared config).
@@ -2439,7 +2427,7 @@ Function Get-SupervisorConfigurationFromJson {
         $commonSpec = $supervisorDetails.commonSupervisorSpec
         if (-not $commonSpec) {
             Write-LogMessage -Type ERROR -Message "commonSupervisorSpec not found in supervisor JSON"
-            throw "Deployment failed. Check logs for details."
+            throw "commonSupervisorSpec not found in supervisor JSON"
         }
 
         # Find matching site-specific specification by edgeSite.
@@ -2447,7 +2435,7 @@ Function Get-SupervisorConfigurationFromJson {
         $siteSpec = $supervisorDetails.siteSpec | Where-Object { $_.edgeSite -eq $EdgeSite } | Select-Object -First 1
         if (-not $siteSpec) {
             Write-LogMessage -Type ERROR -Message "No matching siteSpec found for edgeSite: $EdgeSite."
-            throw "Deployment failed. Check logs for details."
+            throw "No matching siteSpec found for edgeSite: $EdgeSite."
         }
 
         # Build network name to gateway mapping from infrastructure JSON (case-sensitive).
@@ -2464,7 +2452,7 @@ Function Get-SupervisorConfigurationFromJson {
                 return $networkGatewayMap[$NetworkName]
             }
             Write-LogMessage -Type ERROR -Message "Gateway not found for network name: $NetworkName."
-            throw "Deployment failed. Check logs for details."
+            throw "Gateway not found for network name: $NetworkName."
         }
 
         # Extract control plane configuration (from commonSupervisorSpec).
@@ -2557,10 +2545,9 @@ Function Get-SupervisorConfigurationFromJson {
         Write-LogMessage -Type DEBUG -Message "Load Balancer: $($loadBalancer.Name)"
 
         return $config
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to parse supervisor configuration from JSON: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to parse supervisor configuration from JSON: $($_.Exception.Message)"
     }
 }
 Function Test-SupervisorConfiguration {
@@ -2595,7 +2582,7 @@ Function Test-SupervisorConfiguration {
         $config = Get-SupervisorConfigurationFromJson -EdgeSite $EdgeSite -JsonFilePath $InfrastructureJson -NetworkSegments $NetworkSegments
         if (-not (Test-SupervisorConfiguration -Config $config)) {
             Write-LogMessage -Type ERROR -Message "Configuration validation failed."
-            throw "Deployment failed. Check logs for details."
+            throw "Configuration validation failed."
         }
 
         .NOTES
@@ -2686,8 +2673,7 @@ Function Test-SupervisorConfiguration {
         }
 
         return $validationPassed
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Configuration validation encountered an error: $($_.Exception.Message)"
         return $false
     }
@@ -2771,10 +2757,9 @@ Function New-SupervisorControlPlaneSpec {
 
         Write-LogMessage -Type DEBUG -Message "   Control plane specification built successfully: Size=$($ControlPlaneConfig.Size), VMs=$($ControlPlaneConfig.VMCount)"
         return $controlPlane
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to build control plane specification: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to build control plane specification: $($_.Exception.Message)"
     }
 }
 Function New-SupervisorWorkloadSpec {
@@ -2846,10 +2831,9 @@ Function New-SupervisorWorkloadSpec {
 
         Write-LogMessage -Type DEBUG -Message "   Workload network specification built successfully: $($WorkloadNetworkConfig.Name)"
         return $workloadNetwork
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to build workload network specification: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to build workload network specification: $($_.Exception.Message)"
     }
 }
 Function New-SupervisorLoadBalancerSpec {
@@ -2993,10 +2977,9 @@ Function New-SupervisorLoadBalancerSpec {
 
         Write-LogMessage -Type DEBUG -Message "Foundation Load Balancer specification built successfully: $($LoadBalancerConfig.Name)"
         return $edge
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to build Foundation Load Balancer specification: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to build Foundation Load Balancer specification: $($_.Exception.Message)"
     }
 }
 Function Invoke-SupervisorCreation {
@@ -3126,8 +3109,7 @@ Function Invoke-SupervisorCreation {
             IsExisting = $false
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type DEBUG -Message "Supervisor creation API full error: $errorMessage"
 
@@ -3320,15 +3302,14 @@ Function Invoke-VlcmClusterComplianceAndRemediate {
     $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
     if (-not $clusterObject) {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" not found. Cannot check vLCM compliance."
-        throw "Deployment failed. Check logs for details."
+        throw "Cluster `"$ClusterName`" not found. Cannot check vLCM compliance."
     }
 
     $complianceResult = $null
     Write-LogMessage -Type INFO -Message "Running vLCM cluster compliance check for cluster `"$ClusterName`"."
     try {
         $complianceResult = $clusterObject | Test-LcmClusterCompliance -ErrorAction Stop
-    }
-    catch {
+    } catch {
         $vlcmErrorMsg = $_.Exception.Message
         Write-LogMessage -Type DEBUG -Message "vLCM compliance check threw: $($_.Exception.GetType().FullName): $vlcmErrorMsg"
         if ($vlcmErrorMsg -match "Object reference not set|NullReferenceException") {
@@ -3487,8 +3468,7 @@ Function Invoke-VlcmClusterComplianceAndRemediate {
                 Write-LogMessage -Type INFO -Message "A reboot is required on one or more hosts in cluster `"$ClusterName`" to complete vLCM remediation. Check vCenter Lifecycle Manager (cluster image compliance) for host status and reboot when appropriate."
             }
         }
-    }
-    catch {
+    } catch {
         $remediationError = $_.Exception.Message
         $failedHost = $null
         if ($remediationError -match "Health Check for '([^']+)' failed") {
@@ -3747,7 +3727,7 @@ Function Add-Supervisor {
         # Validate configuration before proceeding.
         if (-not (Test-SupervisorConfiguration -Config $config)) {
             Write-LogMessage -Type ERROR -Message "Supervisor configuration validation failed."
-            throw "Deployment failed. Check logs for details."
+            throw "Supervisor configuration validation failed."
         }
 
         # ========================================================================
@@ -3817,7 +3797,7 @@ Function Add-Supervisor {
             # Extract clean error message from JSON error response.
             $cleanError = Get-CleanErrorMessage -ErrorMessage $errorMsg
             Write-LogMessage -Type ERROR -Message "Supervisor creation failed: $cleanError."
-            throw "Deployment failed. Check logs for details."
+            throw "Supervisor creation failed: $cleanError."
         }
 
         $supervisorId = $creationResult.SupervisorId
@@ -3870,15 +3850,13 @@ Function Add-Supervisor {
                             try {
                                 Invoke-VcenterReconnectIfNeeded
                                 Remove-ClusterSafely -ClusterName $ClusterName
-                            }
-                            catch {
+                            } catch {
                                 $removeError = $_.Exception.Message
                                 if ($removeError -match "Not connected to vCenter|No active PowerCLI session") {
                                     try {
                                         Invoke-VcenterReconnectIfNeeded
                                         Remove-ClusterSafely -ClusterName $ClusterName
-                                    }
-                                    catch {
+                                    } catch {
                                         Write-LogMessage -Type WARNING -Message "Could not remove cluster `"$ClusterName`" after supervisor rollback: $($_.Exception.Message). Remove the cluster manually if desired."
                                     }
                                 } else {
@@ -3893,15 +3871,14 @@ Function Add-Supervisor {
                         }
                         Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N (or press Enter for N)."
                     } while ($true)
-                }
-                catch {
+                } catch {
                     Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Skipping optional cluster deletion prompt."
                 }
             } else {
                 Write-LogMessage -Type WARNING -Message "Supervisor deactivation failed or did not complete in time: $($disableResult.ErrorMessage). Manually disable the supervisor in vCenter if needed."
             }
             $Script:RollbackAttempted = $true
-            throw "Deployment failed. Check logs for details."
+            throw "Supervisor deployment failed for cluster `"$ClusterName`": $($disableResult.ErrorMessage). Check logs for details."
         }
 
         Write-LogMessage -Type DEBUG -Message "[Step 5/5] Supervisor is ready (elapsed: $($waitResult.ElapsedSeconds) seconds)"
@@ -3944,12 +3921,12 @@ Function Add-Supervisor {
                 } else {
                     Write-LogMessage -Type ERROR -Message "Supervisor upgrade did not complete within $TotalWaitTime seconds."
                     Write-LogMessage -Type ERROR -Message "The upgrade may still be in progress. Check the supervisor status in vCenter UI."
-                    throw "Deployment failed. Check logs for details."
+                    throw "The upgrade may still be in progress. Check the supervisor status in vCenter UI."
                 }
             } else {
                 Write-LogMessage -Type ERROR -Message "Failed to initiate supervisor upgrade: $($upgradeResult.ErrorMessage)."
                 Write-LogMessage -Type ERROR -Message "Supervisor upgrade is required for deployment to proceed."
-                throw "Deployment failed. Check logs for details."
+                throw "Supervisor upgrade is required for deployment to proceed."
             }
         } else {
             Write-LogMessage -Type INFO -Message "No supervisor upgrade available. Current version $($upgradeInfo.CurrentVersion) is up to date."
@@ -3958,10 +3935,9 @@ Function Add-Supervisor {
         Write-Progress -Activity "Supervisor Deployment" -Status "Completed" -PercentComplete 100 -Completed
 
         return $supervisorId
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to create a Supervisor on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to create a Supervisor on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function Get-ManagementVSwitchInfo {
@@ -4431,7 +4407,7 @@ Function Invoke-VDSCreation {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     $numUplinksInt = [int]$NumUplinks
@@ -4477,7 +4453,7 @@ Function Invoke-VDSCreation {
                         $createAttempt++
                     } else {
                         Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-                        throw "Deployment failed. Check logs for details."
+                        throw " Failed."
                     }
                 } else {
                     Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
@@ -4494,14 +4470,14 @@ Function Invoke-VDSCreation {
             return $vdsObject
         } else {
             Write-LogMessage -Type ERROR -Message "Failed to retrieve VDS `"$VdsName`" after creation."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to retrieve VDS `"$VdsName`" after creation."
         }
     } catch {
         if ($null -ne $Script:LogMessagePending) {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
         }
         Write-LogMessage -Type ERROR -Message "Failed to create VDS `"$VdsName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to create VDS `"$VdsName`": $($_.Exception.Message)"
     }
 }
 Function Add-HostToVDS {
@@ -4596,7 +4572,7 @@ Function New-VDSPortGroups {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     foreach ($portGroup in $PortGroups) {
@@ -4608,7 +4584,7 @@ Function New-VDSPortGroups {
                 # Handle case where multiple port groups with same name exist.
                 if ($existingPortGroup.GetType() -eq [System.Object[]]) {
                     Write-LogMessage -Type ERROR -Message "Two or more port groups named `"$($portGroup.Name)`" were found in vCenter `"$Script:vCenterName`". Please delete the duplicate port groups or update your configuration."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Two or more port groups named `"$($portGroup.Name)`" were found in vCenter `"$Script:vCenterName`". Please delete the duplicate port groups or update your configuration."
                 }
 
                 # Check if it's on the same VDS.
@@ -4775,7 +4751,7 @@ Function Add-PhysicalAdaptersToVDS {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -5352,7 +5328,7 @@ Function Set-VirtualDistributedSwitch {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     $numUplinksInt = [int]$NumUplinks
@@ -5373,7 +5349,7 @@ Function Set-VirtualDistributedSwitch {
         $hosts = @(Get-VMHost -Location $clusterObject -Server $Script:vCenterName)
         if (-not $hosts -or $hosts.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" has no hosts."
-            throw "Deployment failed. Check logs for details."
+            throw "Cluster `"$ClusterName`" has no hosts."
         }
 
         # Normalize NicList to adapter names.
@@ -5423,7 +5399,7 @@ Function Set-VirtualDistributedSwitch {
             foreach ($vmHost in $hosts) {
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $VdsName
                 if ($result -and -not $result.Success) {
-                    throw "Deployment failed. Check logs for details."
+                    throw "Failed to add host `"$vmHost`" to VDS `"$VdsName`": $($result.ErrorMessage)"
                 }
             }
             Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$VdsName`" for $($hosts.Count) host(s)... "
@@ -5433,7 +5409,7 @@ Function Set-VirtualDistributedSwitch {
             Write-LogMessage -Type INFO -CompletePending -Message "Done"
             $result = New-VDSPortGroups -PortGroups $PortGroups -VdsName $VdsName
             if ($result -and -not $result.Success) {
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create VDS port groups on `"$VdsName`": $($result.ErrorMessage)"
             }
             Set-VDSUplinkTeamingActiveStandby -VdsName $VdsName
         } else {
@@ -5444,9 +5420,9 @@ Function Set-VirtualDistributedSwitch {
             $vdsObjectSw2 = Invoke-VDSCreation -DatacenterObject $datacenterObject -Mtu $Mtu -NumUplinks "2" -VdsName $vdsNameSw2
             foreach ($vmHost in $hosts) {
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $vdsNameSw1
-                if ($result -and -not $result.Success) { throw "Deployment failed. Check logs for details." }
+                if ($result -and -not $result.Success) { throw "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw1`": $($result.ErrorMessage)" }
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $vdsNameSw2
-                if ($result -and -not $result.Success) { throw "Deployment failed. Check logs for details." }
+                if ($result -and -not $result.Success) { throw "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)" }
             }
             $nicListFirstTwo = @($NicList | Select-Object -First 2)
             Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$vdsNameSw1`" for $($hosts.Count) host(s)... "
@@ -5458,26 +5434,26 @@ Function Set-VirtualDistributedSwitch {
             foreach ($vmHost in $hosts) {
                 $result = Add-PhysicalAdaptersToVDS -Hostname $vmHost -NicList $nicListLastTwo -VdsName $vdsNameSw2 -VdsObject $vdsObjectSw2
                 if ($result -and -not $result.Success) {
-                    throw "Deployment failed. Check logs for details."
+                    throw "Failed to add physical adapters for host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)"
                 }
             }
             # Network segment (guest) port groups on first VDS only.
             $result = New-VDSPortGroups -PortGroups $PortGroups -VdsName $vdsNameSw1
             if ($result -and -not $result.Success) {
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create VDS port groups on `"$vdsNameSw1`": $($result.ErrorMessage)"
             }
             Set-VDSUplinkTeamingActiveStandby -VdsName $vdsNameSw1
             Set-VDSUplinkTeamingActiveStandby -VdsName $vdsNameSw2
         }
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$VdsName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot configure distributed switch `"$VdsName`" due to authorization issues: $($_.Exception.Message)"
     } catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot configure distributed switch `"$VdsName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot configure distributed switch `"$VdsName`" due to network/timeout issues: $($_.Exception.Message)"
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to configure distributed switch `"$VdsName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to configure distributed switch `"$VdsName`": $($_.Exception.Message)"
     }
 }
 Function Set-StoragePolicy {
@@ -5559,7 +5535,7 @@ Function Set-StoragePolicy {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -5780,7 +5756,7 @@ Function Set-StoragePolicy {
                                 $tagDetailsList = $allTags | ForEach-Object { "Name=$($_.Name), Id=$($_.Id), Category=$($_.Category.Name)" }
                                 $tagDetailsString = $tagDetailsList -join '; '
                                 Write-LogMessage -Type ERROR -Message "Tag details: $tagDetailsString"
-                                throw "Deployment failed. Check logs for details."
+                                throw "Tag details: $tagDetailsString"
                             }
                         } else {
                             Write-LogMessage -Type WARNING -Message "No valid tags found in existing tag rules (same category). Adding new tag rule separately."
@@ -5803,7 +5779,7 @@ Function Set-StoragePolicy {
                             $ruleDetailsList = $updatedRules | ForEach-Object { "Type=$($_.GetType().FullName), Capability=$($_.Capability), AnyOfTags=$($_.AnyOfTags)" }
                             $ruleDetailsString = $ruleDetailsList -join '; '
                             Write-LogMessage -Type ERROR -Message "Rule details: $ruleDetailsString"
-                            throw "Deployment failed. Check logs for details."
+                            throw "Rule details: $ruleDetailsString"
                         }
                     } else {
                         Write-LogMessage -Type WARNING -Message "No rules to add to rule set in policy `"$PolicyName`". Skipping this rule set."
@@ -5825,7 +5801,7 @@ Function Set-StoragePolicy {
                     $updatedRuleSets.Add($ruleSet)
                 } catch {
                     Write-LogMessage -Type ERROR -Message "Failed to create new rule set: $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Failed to create new rule set: $($_.Exception.Message)"
                 }
             }
 
@@ -5855,7 +5831,7 @@ Function Set-StoragePolicy {
                     Write-LogMessage -Type ERROR -Message "  3. Check that tag `"$TagName`" exists in catalog `"$TagCatalog`""
                     Write-LogMessage -Type ERROR -Message "  4. Consider manually adding the tag to the policy via vCenter UI"
                     Write-LogMessage -Type ERROR -Message "  5. Alternatively, delete and recreate the storage policy."
-                    throw "Deployment failed. Check logs for details."
+                    throw "  5. Alternatively, delete and recreate the storage policy."
                 } else {
                     throw
                 }
@@ -5895,15 +5871,14 @@ Function Set-StoragePolicy {
         }
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$PolicyName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot create storage policy `"$PolicyName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot create storage policy `"$PolicyName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot create storage policy `"$PolicyName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to create storage policy `"$PolicyName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to create storage policy `"$PolicyName`": $($_.Exception.Message)"
     }
 }
 Function Get-SupervisorControlPlaneIp {
@@ -5944,7 +5919,7 @@ Function Get-SupervisorControlPlaneIp {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -5957,7 +5932,7 @@ Function Get-SupervisorControlPlaneIp {
         $controlPlaneVMsArray = @($controlPlaneVMs)
         if ($controlPlaneVMsArray.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "No Supervisor Control Plane VM found in cluster `"$ClusterName`""
-            throw "Deployment failed. Check logs for details."
+            throw "No Supervisor Control Plane VM found in cluster `"$ClusterName`""
         }
         if ($controlPlaneVMsArray.Count -gt 1) {
             Write-LogMessage -Type WARNING -Message "Multiple Supervisor Control Plane VMs found in cluster `"$ClusterName`" ($($controlPlaneVMsArray.Count)). Using the first one: $($controlPlaneVMsArray[0].Name)"
@@ -5971,7 +5946,7 @@ Function Get-SupervisorControlPlaneIp {
         $ipAddresses = @($vmView.Guest.IPAddress | Where-Object { $_ -match '^\d+\.\d+\.\d+\.\d+$' })
         if ($ipAddresses.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "No IPv4 address found for Supervisor Control Plane VM `"$($controlPlaneVM.Name)`" in cluster `"$ClusterName`""
-            throw "Deployment failed. Check logs for details."
+            throw "No IPv4 address found for Supervisor Control Plane VM `"$($controlPlaneVM.Name)`" in cluster `"$ClusterName`""
         }
         if ($ipAddresses.Count -gt 1) {
             Write-LogMessage -Type WARNING -Message "Supervisor Control Plane VM `"$($controlPlaneVM.Name)`" has multiple IPv4 addresses: $($ipAddresses -join ', '). Using the first one: $($ipAddresses[0])"
@@ -5982,15 +5957,14 @@ Function Get-SupervisorControlPlaneIp {
 
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot fetch Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -Message "Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" could not be fetched: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" could not be fetched: $($_.Exception.Message)"
     }
 }
 Function Set-VCFContextCreate {
@@ -6127,7 +6101,7 @@ Function Set-VCFContextCreate {
                 throw "Deployment failed. Supervisor endpoint may not be available. Check logs for details."
             } else {
                 Write-LogMessage -Type ERROR -Message "Failed to create VCF context `"$ContextName`": $errorMessage"
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create VCF context `"$ContextName`": $errorMessage"
             }
         }
 
@@ -6164,7 +6138,7 @@ Function Set-VCFContextCreate {
             }
         } else {
             Write-LogMessage -Type ERROR -Message "Failed to list VCF contexts to verify creation (exit code: $LASTEXITCODE)."
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to list VCF contexts to verify creation (exit code: $LASTEXITCODE)."
         }
 
         # Step 4: Switch to the context (use same TLS option as context create so switch succeeds).
@@ -6236,7 +6210,7 @@ Function Set-VCFContextCreate {
 
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to create or configure VCF context `"$ContextName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to create or configure VCF context `"$ContextName`": $($_.Exception.Message)"
     }
 }
 Function Test-WebhookServiceReady {
@@ -6355,8 +6329,7 @@ Function Test-WebhookServiceReady {
 
         Write-LogMessage -Type DEBUG -Message "Webhook service `"$ServiceName`" has subsets but no addresses (pods may not be ready yet)."
         return $false
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Error checking webhook service: $($_.Exception.Message). Continuing to wait..."
         return $false
     }
@@ -6721,7 +6694,7 @@ Function Wait-ArgoCDPodsReady {
                 Write-Progress -Activity "Waiting for ArgoCD pods to be created" -Status "Timeout" -Completed
                 [Console]::Out.Flush()
                 Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods to be created after $TimeoutSeconds seconds. Only $totalPods pod(s) found."
-                throw "Deployment failed. Check logs for details."
+                throw "Timeout waiting for ArgoCD pods to be created after $TimeoutSeconds seconds. Only $totalPods pod(s) found."
             }
             continue
         }
@@ -6756,7 +6729,7 @@ Function Wait-ArgoCDPodsReady {
                 Write-Progress -Activity "Waiting for ArgoCD pods to be ready" -Status "Timeout" -Completed
                 [Console]::Out.Flush()
                 Write-LogMessage -Type ERROR -Message "Timeout waiting for ArgoCD pods after $TimeoutSeconds seconds. Ready: $readyPods/$totalPods."
-                throw "Deployment failed. Check logs for details."
+                throw "Timeout waiting for ArgoCD pods after $TimeoutSeconds seconds. Ready: $readyPods/$totalPods."
             }
         }
 
@@ -6814,7 +6787,7 @@ Function Update-YamlNamespace {
 
     if (-not (Test-Path -Path $YamlFilePath)) {
         Write-LogMessage -Type ERROR -Message "YAML file not found: $YamlFilePath."
-        throw "Deployment failed. Check logs for details."
+        throw "YAML file not found: $YamlFilePath."
     }
 
     try {
@@ -6870,7 +6843,7 @@ Function Update-YamlNamespace {
             Write-LogMessage -Type DEBUG -Message "--- END TEMP YAML FILE CONTENTS ---"
         } else {
             Write-LogMessage -Type ERROR -Message "Temporary file was not created successfully: $tempYamlFile."
-            throw "Deployment failed. Check logs for details."
+            throw "Temporary file was not created successfully: $tempYamlFile."
         }
 
         Write-LogMessage -Type DEBUG -Message "Updated namespace in YAML file. Temporary file: $tempYamlFile"
@@ -6878,7 +6851,7 @@ Function Update-YamlNamespace {
         return $tempYamlFile
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to update namespace in YAML file `"$YamlFilePath`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to update namespace in YAML file `"$YamlFilePath`": $($_.Exception.Message)"
     }
 }
 Function Get-KubectlNamespaceNamesMatchingPattern {
@@ -7415,7 +7388,7 @@ Function Add-ArgoCDInstance {
                 $errorMessage = $_.Exception.Message
                 Write-LogMessage -Type ERROR -Message "Error during kubectl authentication check: $errorMessage."
                 Write-Progress -Activity "Waiting for kubectl authentication" -Status "Error" -Completed
-                throw "Deployment failed. Check logs for details."
+                throw "kubectl authentication failed: $errorMessage"
             }
         } while ($elapsedTime -lt $authTimeoutSeconds)
 
@@ -7424,7 +7397,7 @@ Function Add-ArgoCDInstance {
             Write-Progress -Activity "Waiting for kubectl authentication" -Status "Timeout" -Completed
             Write-LogMessage -Type ERROR -Message "kubectl authentication failed after $authTimeoutSeconds seconds."
             Write-LogMessage -Type ERROR -Message "You may need to manually re-authenticate using: vcf context use $ContextName."
-            throw "Deployment failed. Check logs for details."
+            throw "You may need to manually re-authenticate using: vcf context use $ContextName."
         }
 
         Write-Progress -Activity "Waiting for kubectl authentication" -Status "Authenticated" -Completed
@@ -7436,7 +7409,7 @@ Function Add-ArgoCDInstance {
 
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to add ArgoCD instance: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to add ArgoCD instance: $($_.Exception.Message)"
     }
 }
 Function Show-ArgoCDInstanceDetails {
@@ -7598,18 +7571,18 @@ Function Show-ArgoCDInstanceDetails {
         $decodedPassword = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($encodedPassword))
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`": $($_.Exception.Message)."
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`": $($_.Exception.Message)."
     }
     if ([String]::IsNullOrWhiteSpace($decodedPassword)) {
         Write-LogMessage -Type ERROR -Message "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`"."
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to decode initial admin password for ArgoCD in namespace `"$ArgoCdNamespace`"."
     }
-    Write-Output "$($PSStyle.Foreground.BrightYellow)---------------------------------------$($PSStyle.Reset)"
-    Write-LogMessage -Type INFO -ForceToScreen -Message "To login to ArgoCD:"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "╔═══════════════════════════════════════╗"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "  ArgoCD Login"
     Write-LogMessage -Type INFO -ForceToScreen -Message "   Go to https://${ipAddr}/"
     Write-LogMessage -Type INFO -ForceToScreen -SuppressOutputToFile -Message "   Login as user `"admin`" using temporary password: $decodedPassword"
     Write-LogMessage -Type INFO -ForceToScreen -Message "   To update your password run: `"$Script:ArgocdCmd account update-password --server $ipAddr --account admin --insecure`""
-    Write-Output "$($PSStyle.Foreground.BrightYellow)---------------------------------------$($PSStyle.Reset)"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "╚═══════════════════════════════════════╝"
 
     # Cleanup credentials.
     Remove-Variable -Name decodedPassword -Force
@@ -7718,8 +7691,8 @@ Function Show-HarborInstanceDetails {
         $harborNamespace = $harborDiscovery.Names[-1]
     }
 
-    Write-Output "$($PSStyle.Foreground.BrightYellow)---------------------------------------$($PSStyle.Reset)"
-    Write-LogMessage -Type INFO -ForceToScreen -Message "Harbor is deployed for cluster `"$ClusterName`" — connection details:"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "╔═══════════════════════════════════════╗"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "  Harbor — $ClusterName"
     Write-LogMessage -Type INFO -ForceToScreen -Message "  Username : admin"
     Write-LogMessage -Type INFO -ForceToScreen -SuppressOutputToFile -Message "  Password : $adminPassword"
 
@@ -7727,10 +7700,11 @@ Function Show-HarborInstanceDetails {
         Write-LogMessage -Type WARNING -Message "Harbor namespace (svc-harbor-*) not found via kubectl on supervisor `"$SupervisorId`". Verify kubectl context, then run: kubectl get namespace"
         Write-LogMessage -Type INFO -ForceToScreen -Message "  Namespace: <unknown>   (run: kubectl get namespace | Select-String svc-harbor)"
         Write-LogMessage -Type INFO -ForceToScreen -Message "  URL      : https://<load-balancer-ip>   (find IP: kubectl get svc -n <svc-harbor-*-namespace>)"
-        Write-LogMessage -Type INFO -ForceToScreen -Message "DNS: Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
+        Write-LogMessage -Type INFO -ForceToScreen -Message "  DNS      : Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
         if ($LabGeneratedSelfSignedTls.IsPresent) {
             Write-LogMessage -Type INFO -ForceToScreen -Message "  TLS      : Self-signed certificate (lab mode: common.labenvironment true; tlsCrt/tlsKey were omitted). Browsers and clients will warn until you trust the certificate or replace TLS with your own PEM files."
         }
+        Write-LogMessage -Type INFO -ForceToScreen -Message "╚═══════════════════════════════════════╝"
         Remove-Variable -Name adminPassword -Force -ErrorAction SilentlyContinue
         return
     }
@@ -7792,15 +7766,15 @@ Function Show-HarborInstanceDetails {
     Write-LogMessage -Type INFO -ForceToScreen -Message "  Namespace: $harborNamespace"
     if (-not [String]::IsNullOrWhiteSpace($lbIp)) {
         Write-LogMessage -Type INFO -ForceToScreen -Message "  URL      : https://$lbIp"
-        Write-LogMessage -Type INFO -ForceToScreen -Message "DNS: Create a record pointing `"$($HarborConfig.hostname)`" to $lbIp (Harbor load balancer external IP)."
+        Write-LogMessage -Type INFO -ForceToScreen -Message "  DNS      : Create a record pointing `"$($HarborConfig.hostname)`" to $lbIp (Harbor load balancer external IP)."
     } else {
         Write-LogMessage -Type INFO -ForceToScreen -Message "  URL      : https://<load-balancer-ip>   (find IP: kubectl get svc -n $harborNamespace)"
-        Write-LogMessage -Type INFO -ForceToScreen -Message "DNS: Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
+        Write-LogMessage -Type INFO -ForceToScreen -Message "  DNS      : Create a record pointing `"$($HarborConfig.hostname)`" to the Harbor load balancer external IP."
     }
     if ($LabGeneratedSelfSignedTls.IsPresent) {
         Write-LogMessage -Type INFO -ForceToScreen -Message "  TLS      : Self-signed certificate (lab mode: common.labenvironment true; tlsCrt/tlsKey were omitted). Browsers and clients will warn until you trust the certificate or replace TLS with your own PEM files."
     }
-    Write-Output "$($PSStyle.Foreground.BrightYellow)---------------------------------------$($PSStyle.Reset)"
+    Write-LogMessage -Type INFO -ForceToScreen -Message "╚═══════════════════════════════════════╝"
 
 
     Remove-Variable -Name adminPassword -Force -ErrorAction SilentlyContinue
@@ -7865,7 +7839,7 @@ Function Get-Base64FromYml {
         return $base64
     } catch {
         Write-LogMessage -Type ERROR -Message "Get-Base64FromYml: Failed to read or encode YAML file `"$Path`": $($_.Exception.Message)."
-        throw "Deployment failed. Check logs for details."
+        throw "Get-Base64FromYml: Failed to read or encode YAML file `"$Path`": $($_.Exception.Message)."
     }
 }
 Function Set-ArgoCDService {
@@ -7906,7 +7880,7 @@ Function Set-ArgoCDService {
             throw "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
         }
         $vcenterNamespaceManagementSupervisorServicesCheckContentRequest = & $createSpecCmd -CarvelSpec $vcenterNamespaceManagementSupervisorServicesCarvelCreateSpec
-        Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction:Stop | Out-Null
+        Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction Stop | Out-Null
         Write-LogMessage -Type INFO -Message "Successfully created ArgoCD service `"$argoServiceName`" version `"$argoServiceVersion`"."
     } catch {
         $errMsg = $_.Exception.Message
@@ -7916,7 +7890,7 @@ Function Set-ArgoCDService {
         }
         else {
             Write-LogMessage -Type ERROR -Message "ArgoCD service `"$argoServiceName`" version `"$argoServiceVersion`" creation failed: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "ArgoCD service `"$argoServiceName`" version `"$argoServiceVersion`" creation failed: $($_.Exception.Message)"
         }
     }
 }
@@ -7962,7 +7936,7 @@ Function Set-HarborService {
             throw "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
         }
         $vcenterNamespaceManagementSupervisorServicesCheckContentRequest = & $createSpecCmd -CarvelSpec $vcenterNamespaceManagementSupervisorServicesCarvelCreateSpec
-        Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction:Stop | Out-Null
+        Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction Stop | Out-Null
         Write-LogMessage -Type INFO -Message "Successfully registered Harbor service `"$harborServiceName`" version `"$harborServiceVersion`"."
     } catch {
         $errMsg = $_.Exception.Message
@@ -7970,7 +7944,7 @@ Function Set-HarborService {
             Write-LogMessage -Type INFO -Message "Harbor service `"$harborServiceName`" version `"$harborServiceVersion`" is already registered globally on this vCenter. Skipping re-registration."
         } else {
             Write-LogMessage -Type ERROR -Message "Harbor service `"$harborServiceName`" version `"$harborServiceVersion`" registration failed: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Harbor service `"$harborServiceName`" version `"$harborServiceVersion`" registration failed: $($_.Exception.Message)"
         }
     }
 }
@@ -8273,7 +8247,7 @@ Function Install-HarborSupervisorService {
     try {
         $spec = Initialize-VcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -SupervisorService $Service -Version $Version -YamlServiceConfig $yamlBase64
         try {
-            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $spec -Confirm:$false -ErrorAction:Stop
+            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $spec -Confirm:$false -ErrorAction Stop
             Write-LogMessage -Type INFO -Message "Harbor service install request submitted. Waiting for configuration to complete."
             Start-Sleep $CheckInterval
         } catch {
@@ -8287,14 +8261,14 @@ Function Install-HarborSupervisorService {
                     Write-LogMessage -Type ERROR -Message "Harbor installation failed: namespace `"$terminatingNamespace`" is still terminating on the Supervisor from a previous rollback."
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Wait for the namespace to finish deleting, then re-run this script. To check status: kubectl get namespace $terminatingNamespace"
-                    throw "Deployment failed. Check logs for details."
+                    throw "SOLUTION: Wait for the namespace to finish deleting, then re-run this script. To check status: kubectl get namespace $terminatingNamespace"
                 }
                 "Supervisor Service is not in activated state" {
                     Write-LogMessage -Type ERROR -Message "Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`"."
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: In vCenter UI go to Menu > Supervisor Management > Services, find `"$Service`", and either deactivate then delete the service, then re-run this script."
                     Write-LogMessage -Type WARNING -Message "If the service is stuck: kubectl delete namespace $serviceNamespace"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`". Check logs for details."
                 }
                 "Signature verification result for Service Version ([0-9.-]+) not found" {
                     $requestedVersion = $matches[1]
@@ -8305,7 +8279,7 @@ Function Install-HarborSupervisorService {
                     Write-LogMessage -Type ERROR -Message "Harbor installation failed: $cleanErrorMessage."
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update supervisorServices.harborServiceYamlFileName (and parentDirectory) to a compatible Carvel package file."
-                    throw "Deployment failed. Check logs for details."
+                    throw "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update supervisorServices.harborServiceYamlFileName (and parentDirectory) to a compatible Carvel package file."
                 }
                 default {
                     $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
@@ -8327,7 +8301,7 @@ Function Install-HarborSupervisorService {
                     } else {
                         Write-LogMessage -Type ERROR -Message "Unexpected error in Install-HarborSupervisorService: $errMsg."
                     }
-                    throw "Deployment failed. Check logs for details."
+                    throw "Harbor installation failed: $cleanMessage"
                 }
             }
         }
@@ -8512,7 +8486,7 @@ Function Install-HarborSupervisorService {
     } catch {
         if ($_.Exception.Message -match "Deployment failed") { throw }
         Write-LogMessage -Type ERROR -Message "Install-HarborSupervisorService unexpected error: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Install-HarborSupervisorService unexpected error: $($_.Exception.Message)"
     }
 }
 Function Test-YamlPropertyConsistency {
@@ -8897,7 +8871,7 @@ Function Get-ArgoCDServiceDetail {
         Write-LogMessage -Type DEBUG -Message "Total parsed YAML documents: $($config.Count)"
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to convert YAML file to JSON: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to convert YAML file to JSON: $($_.Exception.Message)"
     }
     # Access properties from the parsed YAML documents.
     # Look for the first document that has a 'spec' with 'refName' and 'version' (Package document)
@@ -8935,7 +8909,7 @@ Function Get-ArgoCDServiceDetail {
                 }
             }
         }
-        throw "Deployment failed. Check logs for details."
+        throw "ArgoCD service context key validation failed. Check logs for details."
     }
 }
 Function Get-ContentLibraryId {
@@ -9002,7 +8976,7 @@ Function Get-ContentLibraryId {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -9019,7 +8993,7 @@ Function Get-ContentLibraryId {
         return $null
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to retrieve content library `"$LibraryName`" from `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to retrieve content library `"$LibraryName`" from `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function New-VCenterRestApiSession {
@@ -9205,8 +9179,7 @@ Function New-VCenterRestApiSession {
             SessionId = $sessionId
             ErrorMessage = $null
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         $innerException = $_.Exception.InnerException
 
@@ -9365,8 +9338,7 @@ Function Find-SupervisorByName {
                 ErrorMessage = $null
             }
         }
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to query supervisor summaries: $errorMessage."
 
@@ -9565,8 +9537,7 @@ Function Wait-SupervisorDiscoverable {
             # Wait before next check.
             Start-Sleep $CheckInterval
             $elapsedTime += $CheckInterval
-        }
-        catch {
+        } catch {
             $errorMessage = $_.Exception.Message
             Write-LogMessage -Type ERROR -Message "  Error during supervisor status check: $errorMessage."
             Write-Progress -Activity "Waiting for Supervisor `"$SupervisorName`"" -Status "Error" -Completed
@@ -9885,7 +9856,7 @@ Function Get-SupervisorId {
 
         if (-not $session.Success) {
             Write-LogMessage -Type ERROR -Message "Failed to create REST API session: $($session.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to create REST API session: $($session.ErrorMessage)"
         }
 
         # ========================================================================
@@ -9902,7 +9873,7 @@ Function Get-SupervisorId {
 
         if (-not $findResult.Success) {
             Write-LogMessage -Type ERROR -Message "Failed to query supervisors: $($findResult.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to query supervisors: $($findResult.ErrorMessage)"
         }
 
         # If supervisor not found, return null (may not be created yet).
@@ -9925,7 +9896,7 @@ Function Get-SupervisorId {
 
         if (-not $waitResult.Success) {
             Write-LogMessage -Type ERROR -Message "Supervisor did not become ready: $($waitResult.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "Supervisor did not become ready: $($waitResult.ErrorMessage)"
         }
 
         # Supervisor is ready.
@@ -9937,7 +9908,7 @@ Function Get-SupervisorId {
 
     } catch {
         Write-LogMessage -Type ERROR -Message "Unable to fetch supervisor ID for `"$SupervisorName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Unable to fetch supervisor ID for `"$SupervisorName`": $($_.Exception.Message)"
     } finally {
         # Cleanup the vCenter REST API session.
         if ($session -and $session.Success -and $session.SessionHeaders) {
@@ -10016,7 +9987,7 @@ Function Get-StoragePolicyId {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     # Get storage policy id from the storage policy name.
@@ -10026,7 +9997,7 @@ Function Get-StoragePolicyId {
         return $storagePolicyId
     } catch {
         Write-LogMessage -Type "ERROR" -Message "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function Get-OrCreateSupervisor {
@@ -10364,8 +10335,7 @@ Function Add-ArgoCDNamespace {
             $vcenterNamespacesInstancesCreateSpecV2 = Initialize-VcenterNamespacesInstancesCreateSpecV2 -supervisor $SupervisorId -Namespace $ArgoCdNamespace
             Invoke-CreateNamespacesInstancesV2 -VcenterNamespacesInstancesCreateSpecV2 $vcenterNamespacesInstancesCreateSpecV2 -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type DEBUG -Message "Namespace creation initiated successfully."
-        }
-        catch {
+        } catch {
             # Extract clean error message from API response.
             $errorMessage = $_.Exception.Message
 
@@ -10396,7 +10366,7 @@ Function Add-ArgoCDNamespace {
                 Write-LogMessage -Type ERROR -Message "Resolution: Wait for the supervisor to reach a stable state and retry."
             }
 
-            throw "Deployment failed. Check logs for details."
+            throw "Supervisor update failed; supervisor did not reach stable state. Check logs for details."
         }
         Start-Sleep $NamespaceStabilizationDelaySeconds
 
@@ -10421,12 +10391,11 @@ Function Add-ArgoCDNamespace {
         try {
             $vcenterNamespacesInstancesVMServiceSpec = Initialize-VcenterNamespacesInstancesVMServiceSpec -VmClasses $vmClassesToPass -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "VM service specification initialized successfully."
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to initialize VM service specification."
             Write-LogMessage -Type ERROR -Message "Error details: $($_.Exception.Message)"
             Write-LogMessage -Type ERROR -Message "VM classes attempted: $($VmClasses -join ', ')"
-            throw "Deployment failed. Check logs for details."
+            throw "VM classes attempted: $($VmClasses -join ', ')"
         }
 
         # Initialize the namespace set specification (with storage and VM service specifications)
@@ -10434,11 +10403,10 @@ Function Add-ArgoCDNamespace {
         try {
             $vcenterNamespacesInstancesSetSpec = Initialize-VcenterNamespacesInstancesSetSpec -StorageSpecs $vcenterNamespacesInstancesStorageSpec -VmServiceSpec $vcenterNamespacesInstancesVMServiceSpec -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "Namespace set specification initialized successfully."
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to initialize namespace set specification."
             Write-LogMessage -Type ERROR -Message "Error details: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Error details: $($_.Exception.Message)"
         }
 
         # Apply the namespace configuration (this is where VM classes are actually assigned)
@@ -10447,8 +10415,7 @@ Function Add-ArgoCDNamespace {
         try {
             Invoke-SetNamespaceInstances -Namespace $argocdNameSpace -VcenterNamespacesInstancesSetSpec $vcenterNamespacesInstancesSetSpec -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type DEBUG -Message "Namespace configuration applied successfully."
-        }
-        catch {
+        } catch {
             # Extract clean error message from API response.
             $errorMessage = $_.Exception.Message
 
@@ -10465,22 +10432,20 @@ Function Add-ArgoCDNamespace {
             try {
                 Invoke-DeleteNamespaceInstances -Namespace $argocdNameSpace -Confirm:$false -ErrorAction Stop | Out-Null
                 Write-LogMessage -Type INFO -Message "Namespace `"$argocdNameSpace`" deleted successfully."
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type WARNING -Message "Failed to delete namespace `"$argocdNameSpace`": $($_.Exception.Message)"
                 Write-LogMessage -Type WARNING -Message "You may need to manually delete the namespace."
             }
 
-            throw "Deployment failed. Check logs for details."
+            throw "ArgoCD namespace `"$argocdNameSpace`" could not be deleted. Check logs for details."
         }
 
         Start-Sleep $NamespaceStabilizationDelaySeconds
         Write-LogMessage -Type INFO -Message "The ArgoCD namespace `"$ArgoCdNamespace`" was created successfully with $($VmClasses.Count) VM classes assigned: $($VmClasses -join ', ')"
-    }
-    catch {
+    } catch {
         $namespaceError = $_.Exception.Message
         Write-LogMessage -Type "ERROR" -Message "The namespace could not be created: $namespaceError"
-        throw "Deployment failed. Check logs for details."
+        throw "The namespace could not be created: $namespaceError"
     }
 }
 Function Install-ArgoCDOperator {
@@ -10640,7 +10605,7 @@ Function Install-ArgoCDOperator {
     try {
         $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec = Initialize-VcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -SupervisorService $Service -Version $Version
         try {
-            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -Confirm:$false -ErrorAction:Stop
+            Invoke-VcenterNamespaceManagementSupervisorsSupervisorServicesCreate -supervisor $SupervisorId -vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorsSupervisorServicesCreateSpec -Confirm:$false -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "The ArgoCD operator was successfully created.  Waiting for configuration tasks to complete."
             Start-Sleep $CheckInterval
         } catch {
@@ -10669,7 +10634,7 @@ Function Install-ArgoCDOperator {
                     Write-LogMessage -Type WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
                     Write-LogMessage -Type WARNING -Message "  List namespaces with: kubectl get namespaces"
                     Write-LogMessage -Type WARNING -Message "  Then manually remove the service via vCenter REST API or contact VMware support."
-                    throw "Deployment failed. Check logs for details."
+                    throw "ArgoCD service is not in activated state on supervisor `"$SupervisorId`". Check logs for details."
                 }
                 "Signature verification result for Service Version ([0-9.-]+) not found" {
                     # Service version not available on this supervisor (signature verification failed)
@@ -10689,7 +10654,7 @@ Function Install-ArgoCDOperator {
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
                     Write-LogMessage -Type ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
-                    throw "Deployment failed. Check logs for details."
+                    throw "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
                 }
                 "Supervisor Service \(argocd-service\.vsphere\.vmware\.com\) version \(([^)]+)\) has not been found" {
                     # Generic "version not found" error.
@@ -10701,7 +10666,7 @@ Function Install-ArgoCDOperator {
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
                     Write-LogMessage -Type ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
-                    throw "Deployment failed. Check logs for details."
+                    throw "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
                 }
                 "Failed to run compatibility check for Supervisor Service" {
                     # Only catch compatibility check errors that are NOT about version availability.
@@ -10713,7 +10678,7 @@ Function Install-ArgoCDOperator {
                     Write-Output ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to version 9.0.0.0-0100-24847555 or higher and try again."
                     Write-LogMessage -Type ERROR -Message "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
-                    throw "Deployment failed. Check logs for details."
+                    throw "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
                 }
                 default {
                     # Extract clean error message from JSON response.
@@ -10726,7 +10691,7 @@ Function Install-ArgoCDOperator {
                         Write-LogMessage -Type ERROR -Message "Unexpected error in Install-ArgoCDOperator: $errMsg."
                     }
 
-                    throw "Deployment failed. Check logs for details."
+                    throw "ArgoCD operator installation failed: $errMsg"
                 }
             }
         }
@@ -10895,7 +10860,7 @@ Function Install-ArgoCDOperator {
                             Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
                         }
                     }
-                    throw "Deployment failed. Check logs for details."
+                    throw "ArgoCD operator installation failed: $cleanErrorMessage"
                 }
                 default {
                     $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: $($serviceOutput.ConfigStatus)"
@@ -10908,7 +10873,7 @@ Function Install-ArgoCDOperator {
 
         Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Timeout" -Completed
         Write-LogMessage -Type ERROR -Message "The service install request has timed out after $TotalWaitTime seconds. Please check the service logs for more information."
-        throw "Deployment failed. Check logs for details."
+        throw "The service install request has timed out after $TotalWaitTime seconds. Please check the service logs for more information."
     } catch {
         # Try to extract clean error message from JSON response.
 
@@ -10936,7 +10901,7 @@ Function Install-ArgoCDOperator {
         } catch {
             Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Argo CD operator outer catch): $($_.Exception.Message)"
         }
-        throw "Deployment failed. Check logs for details."
+        throw "ArgoCD operator deployment failed. Check logs for details."
     }
 }
 Function Resolve-HarborSecretValue {
@@ -11495,7 +11460,7 @@ Function New-HarborDataValuesFile {
 
     if (-not (Test-Path -Path $HarborTemplateFilePath)) {
         Write-LogMessage -Type ERROR -Message "Harbor data values template file not found: `"$HarborTemplateFilePath`"."
-        throw "Deployment failed. Check logs for details."
+        throw "Harbor data values template file not found: `"$HarborTemplateFilePath`"."
     }
 
     # Kubernetes StorageClasses use a lowercase, dash-separated form of the storage policy name.
@@ -11579,7 +11544,7 @@ Function New-HarborDataValuesFile {
 
         if (-not (Test-Path -Path $tempYamlFile)) {
             Write-LogMessage -Type ERROR -Message "New-HarborDataValuesFile: Temporary file was not created: `"$tempYamlFile`"."
-            throw "Deployment failed. Check logs for details."
+            throw "New-HarborDataValuesFile: Temporary file was not created: `"$tempYamlFile`"."
         }
 
         # Log numbered content at DEBUG level so any server-reported line number maps directly.
@@ -11616,7 +11581,7 @@ Function New-HarborDataValuesFile {
         if ($tempYamlFile -and (Test-Path -Path $tempYamlFile)) {
             Remove-Item -Path $tempYamlFile -Force -ErrorAction SilentlyContinue
         }
-        throw "Deployment failed. Check logs for details."
+        throw "New-HarborDataValuesFile: Failed to create Harbor data values file from template `"$HarborTemplateFilePath`": $($_.Exception.Message)"
     }
 }
 Function Convert-CountToInt {
@@ -11928,8 +11893,7 @@ Function Get-JsonDataWithValidation {
         $jsonFilePathData = ConvertFrom-JsonSafely -JsonFilePath $JsonFilePath
         $ValidationResult.Value.JsonData = $jsonFilePathData
         return $jsonFilePathData
-    }
-    catch {
+    } catch {
         $ValidationResult.Value.IsValid = $false
         $ValidationResult.Value.ErrorCount = 1
         $ValidationResult.Value.Summary = "$JsonObjectName validation failed: Unable to parse JSON file $JsonFilePath. Error: $_"
@@ -12131,8 +12095,7 @@ Function ConvertFrom-JsonSafely {
         $cleanedContent = $rawContent -replace '(?m)^\s*$\n', ''
         return $cleanedContent | ConvertFrom-Json -ErrorVariable ErrorMessage
 
-    }
-    catch {
+    } catch {
         # Handle JSON parsing errors with detailed, user-friendly logging.
         $errorMessage = $_.Exception.Message
 
@@ -12173,7 +12136,7 @@ Function ConvertFrom-JsonSafely {
             }
         }
 
-        throw "Deployment failed. Check logs for details."
+        throw "JSON validation failed for `"$JsonFilePath`": $errorMessage"
     }
 }
 Function Test-CommandAvailability {
@@ -12209,7 +12172,7 @@ Function Test-CommandAvailability {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Executable $Command found in PATH. Proceeding."
     } else {
         Write-LogMessage -Type ERROR -Message "Executable `"$Command`" not found in PATH.  $Description is required for the script to proceed. Exiting"
-        throw "Deployment failed. Check logs for details."
+        throw "Executable `"$Command`" not found in PATH.  $Description is required for the script to proceed. Exiting"
     }
 }
 Function Test-Filepath {
@@ -12245,7 +12208,7 @@ Function Test-Filepath {
         Write-LogMessage -Type INFO -Message "Found the `"$Description`" file on disk: `"$FilePath`"."
     } else {
         Write-LogMessage -Type ERROR -Message "Failed to find `"$Description`" file on disk: `"$FilePath`" not found. Exiting."
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to find `"$Description`" file on disk: `"$FilePath`" not found. Exiting."
     }
 }
 Function Test-JsonMissingProperties {
@@ -13076,7 +13039,7 @@ Function Get-EdgeSitesFromParameter {
 
     if (-not $InputData -and -not $InfrastructureJson) {
         Write-LogMessage -Type ERROR -Message "Get-EdgeSitesFromParameter requires InputData or InfrastructureJson when EdgeSite is specified."
-        throw "Deployment failed. Check logs for details."
+        throw "Get-EdgeSitesFromParameter requires InputData or InfrastructureJson when EdgeSite is specified."
     }
 
     if (-not $InputData) {
@@ -13292,8 +13255,7 @@ Function Test-EdgeSiteMatching {
         }
 
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "EdgeSite matching validation passed. All edgeSite values match between infrastructure and supervisor JSONs."
-    }
-    catch {
+    } catch {
         $validationResult.IsValid = $false
         $validationResult.ErrorMessage = "Error during edgeSite matching validation: $($_.Exception.Message)"
         Write-LogMessage -Type ERROR -Message $validationResult.ErrorMessage
@@ -13490,7 +13452,7 @@ Function Test-JsonShallowValidation {
     if (-not $inputDataValidationResult.IsValid) {
         Write-LogMessage -Type ERROR -Message "Input JSON validation failed: $($inputDataValidationResult.Summary)"
         Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with incomplete input configuration. Please fix the missing properties and try again."
-        throw "Deployment failed. Check logs for details."
+        throw "Deployment cannot proceed with incomplete input configuration. Please fix the missing properties and try again."
     } else {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Input JSON validation passed: $($inputDataValidationResult.Summary)"
     }
@@ -13499,7 +13461,7 @@ Function Test-JsonShallowValidation {
     if (-not $supervisorDataValidationResult.IsValid) {
         Write-LogMessage -Type ERROR -Message "Supervisor JSON validation failed: $($supervisorDataValidationResult.Summary)"
         Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with incomplete supervisor configuration. Please fix the missing properties and try again."
-        throw "Deployment failed. Check logs for details."
+        throw "Deployment cannot proceed with incomplete supervisor configuration. Please fix the missing properties and try again."
     } else {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Supervisor JSON validation passed: $($supervisorDataValidationResult.Summary)"
     }
@@ -13512,7 +13474,7 @@ Function Test-JsonShallowValidation {
     if (-not $inputNullValidationResult.IsValid) {
         Write-LogMessage -Type ERROR -Message "Input JSON null value validation failed: $($inputNullValidationResult.Summary)"
         Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with null values in input configuration. Please provide valid values for all required properties."
-        throw "Deployment failed. Check logs for details."
+        throw "Deployment cannot proceed with null values in input configuration. Please provide valid values for all required properties."
     } else {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Input JSON null value validation passed: $($inputNullValidationResult.Summary)"
     }
@@ -13521,7 +13483,7 @@ Function Test-JsonShallowValidation {
     if (-not $supervisorNullValidationResult.IsValid) {
         Write-LogMessage -Type ERROR -Message "Supervisor JSON null value validation failed: $($supervisorNullValidationResult.Summary)"
         Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with null values in supervisor configuration. Please provide valid values for all required properties."
-        throw "Deployment failed. Check logs for details."
+        throw "Deployment cannot proceed with null values in supervisor configuration. Please provide valid values for all required properties."
     } else {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Supervisor JSON null value validation passed: $($supervisorNullValidationResult.Summary)"
     }
@@ -13534,7 +13496,7 @@ Function Test-JsonShallowValidation {
         $edgeSiteValidationResult = Test-EdgeSiteMatching -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
         if (-not $edgeSiteValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -Message "EdgeSite matching validation failed: $($edgeSiteValidationResult.ErrorMessage)"
-            throw "Deployment failed. Check logs for details."
+            throw "EdgeSite matching validation failed: $($edgeSiteValidationResult.ErrorMessage)"
         }
     }
 
@@ -13548,19 +13510,19 @@ Function Test-JsonShallowValidation {
         foreach ($cluster in $inputData.clusters) {
             if ($cluster.PSObject.Properties.Name -contains "esxHost") {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite '$($cluster.edgeSite)' uses deprecated 'esxHost' (singular). Use 'esxHosts' (plural) array instead."
-                throw "Deployment failed. Check logs for details."
+                throw "Cluster with edgeSite '$($cluster.edgeSite)' uses deprecated 'esxHost' (singular). Use 'esxHosts' (plural) array instead."
             }
             if (-not $cluster.esxHosts) {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite '$($cluster.edgeSite)' is missing 'esxHosts' array."
-                throw "Deployment failed. Check logs for details."
+                throw "Cluster with edgeSite '$($cluster.edgeSite)' is missing 'esxHosts' array."
             }
             if ($cluster.esxHosts -isnot [Array]) {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite '$($cluster.edgeSite)' has 'esxHosts' that is not an array."
-                throw "Deployment failed. Check logs for details."
+                throw "Cluster with edgeSite '$($cluster.edgeSite)' has 'esxHosts' that is not an array."
             }
             if ($cluster.esxHosts.Count -eq 0) {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite '$($cluster.edgeSite)' has empty 'esxHosts' array."
-                throw "Deployment failed. Check logs for details."
+                throw "Cluster with edgeSite '$($cluster.edgeSite)' has empty 'esxHosts' array."
             }
         }
     }
@@ -13750,8 +13712,7 @@ Function Test-IpAddressInCidrRange {
         }
 
         return $isInRange
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Error checking IP address range: $($_.Exception.Message)"
         return $false
     }
@@ -13914,8 +13875,7 @@ Function Get-JsonPropertyValue {
             $result = $InputData.ToString()
             return $result
         }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Error extracting property value: $($_.Exception.Message)"
         return $null
     }
@@ -14723,7 +14683,7 @@ Function Test-TagCatalogCategory {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -14753,7 +14713,7 @@ Function Test-TagCatalogCategory {
             } else {
                 Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$TagCatalog`" on `"$Script:vCenterName`": $errorMessage"
             }
-            throw "Deployment failed. Check logs for details."
+            throw "Error creating tag catalog `"$TagCatalog`" on `"$Script:vCenterName`": $errorMessage"
         }
 
     } else {
@@ -14817,7 +14777,7 @@ Function Test-Tag {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     # Create tagCategoy object.
@@ -14825,7 +14785,7 @@ Function Test-Tag {
         $tagCatalogObject = Get-TagCategory -Name $TagCatalog -Server $Script:vCenterName -ErrorAction SilentlyContinue}
     catch {
         Write-LogMessage -Type ERROR -Message "Error looking up tag catalog `"$TagCatalog`" on vCenter `"$Script:vCenterName`" $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Error looking up tag catalog `"$TagCatalog`" on vCenter `"$Script:vCenterName`" $($_.Exception.Message)"
     }
 
     # Look to see if tag has already been created.
@@ -14833,7 +14793,7 @@ Function Test-Tag {
         $foundTagName = Get-Tag -Name $TagName -Category $tagCatalogObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
     } catch {
         Write-LogMessage -Type ERROR -Message "Error looking up tag `"$TagName`" in tag catalog `"$TagCatalog`" on vCenter `"$Script:vCenterName`" $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Error looking up tag `"$TagName`" in tag catalog `"$TagCatalog`" on vCenter `"$Script:vCenterName`" $($_.Exception.Message)"
     }
 
     # If tag has not been created, create it.
@@ -14845,7 +14805,7 @@ Function Test-Tag {
             Write-LogMessage -Type INFO -Message "Successfully created tag name `"$TagName`" on `"$TagCatalog`"."
         } catch {
             Write-LogMessage -Type ERROR -Message "Error creating tag name `"$TagName`" on `"$TagCatalog`": $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Error creating tag name `"$TagName`" on `"$TagCatalog`": $($_.Exception.Message)"
         }
     } else {
         Write-LogMessage -Type INFO -Message "Tag name `"$TagName`" already exists on `"$TagCatalog`". Skipping tag creation."
@@ -15817,11 +15777,11 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
                 $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
                 if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
                     Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
                 }
                 if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
                     Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
                 }
             }
         }
@@ -15831,11 +15791,11 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
                 $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
                 if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
                     Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
                 }
                 if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
                     Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
                 }
             }
 
@@ -15851,7 +15811,7 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
                     }
                     if (-not (Test-Path -LiteralPath $tlsPath -PathType Leaf)) {
                         Write-LogMessage -Type ERROR -Message "Shallow path check: clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
-                        throw "Deployment failed. Check logs for details."
+                        throw "Shallow path check: clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
                     }
                 }
             }
@@ -16951,7 +16911,7 @@ Function Test-JsonDeeperValidation {
 
     if ($validationFailures -gt 0) {
         Write-LogMessage -Type ERROR -prependNewLine -Message "JSON parameter validation failed with $validationFailures error(s)."
-        throw "Deployment failed. Check logs for details."
+        throw "JSON parameter validation failed with $validationFailures error(s)."
     } else {
         Write-LogMessage -Type DEBUG -Message "JSON parameter validation passed."
     }
@@ -17059,12 +17019,12 @@ Function Find-Datastore {
             }
             else {
                 Write-LogMessage -Type ERROR -Message "Could not retrieve canonical name for datastore `"$DatastoreName`""
-                throw "Deployment failed. Check logs for details."
+                throw "Could not retrieve canonical name for datastore `"$DatastoreName`""
             }
         }
         else {
             Write-LogMessage -Type ERROR -Message "Datastore `"$DatastoreName`" is mounted, but in unexpected type: (Type: $($result.MountedDatastoreStatus.Type)). Cannot proceed."
-            throw "Deployment failed. Check logs for details."
+            throw "Datastore `"$DatastoreName`" is mounted, but in unexpected type: (Type: $($result.MountedDatastoreStatus.Type)). Cannot proceed."
         }
     }
 }
@@ -17146,10 +17106,9 @@ Function Find-VlcmImage {
     }
     try {
         $imageList = Invoke-EsxSettingsRepositorySoftwareList -ErrorAction Stop
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to retrieve vLCM images: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to retrieve vLCM images: $($_.Exception.Message)"
     }
 
     # Check if no images are available and exit if none found.
@@ -17355,7 +17314,7 @@ Function Find-VlcmImage {
             Write-Host ""
             Write-LogMessage -Type WARNING -Message "User cancelled vLCM image selection."
             Write-LogMessage -Type ERROR -Message "vLCM image selection cancelled. Cannot proceed with deployment."
-            throw "Deployment failed. Check logs for details."
+            throw "vLCM image selection cancelled. Cannot proceed with deployment."
         }
         elseif ($userInput -match '^\d+$') {
             $selectedId = [int]$userInput

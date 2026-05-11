@@ -108,33 +108,32 @@ Function Add-Cluster {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
-        $dataCenterFound = Get-Datacenter -Name $DataCenterName -Server $Script:vCenterName -ErrorAction:Ignore
+        $dataCenterFound = Get-Datacenter -Name $DataCenterName -Server $Script:vCenterName -ErrorAction Ignore
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Datacenter operation on `"$DataCenterName`" : $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to perform Get-Datacenter operation on `"$DataCenterName`" : $($_.Exception.Message)"
     }
 
     if (-not $dataCenterFound) {
         Write-LogMessage -Type ERROR -AppendNewLine -Message "The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:vCenterName`". Exiting."
-        throw "Deployment failed. Check logs for details."
+        throw "The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:vCenterName`". Exiting."
     }
     Write-LogMessage -Type DEBUG -Message "Datacenter `"$DataCenterName`" found on vCenter `"$Script:vCenterName`"."
 
     $clusterFound = $null
     try {
-        $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction:Stop -Server $Script:vCenterName
+        $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction Stop -Server $Script:vCenterName
     } catch {
         $clusterFound = $null
         Write-LogMessage -Type INFO -Message "No cluster named `"$ClusterName`" was found on vCenter `"$Script:vCenterName`". Proceeding with cluster creation."
@@ -154,14 +153,13 @@ Function Add-Cluster {
             Write-LogMessage -Type DEBUG -Message "Retrieving software specification object for ID: $softwareSpecificationId."
             try {
                 $softwareSpecification = Get-LcmSoftwareSpecification -Id $softwareSpecificationId -ErrorAction Stop
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type ERROR -Message "Failed to retrieve software specification with ID `"$softwareSpecificationId`": $($_.Exception.Message)"
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to retrieve software specification with ID `"$softwareSpecificationId`": $($_.Exception.Message)"
             }
             if ($null -eq $softwareSpecification) {
                 Write-LogMessage -Type ERROR -Message "Software specification with ID `"$softwareSpecificationId`" was not found."
-                throw "Deployment failed. Check logs for details."
+                throw "Software specification with ID `"$softwareSpecificationId`" was not found."
             }
             $specId = if ($softwareSpecification.Id) { $softwareSpecification.Id } else { "N/A" }
             $specName = if ($softwareSpecification.Name) { $softwareSpecification.Name } else { "N/A" }
@@ -201,20 +199,19 @@ Function Add-Cluster {
                 Write-LogMessage -Type DEBUG -Message "Add-Cluster: waiting $ClusterCreationDelaySeconds second(s) for vCenter to stabilize before verification."
                 Start-Sleep -Seconds $ClusterCreationDelaySeconds
             }
-            $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction:Stop -Server $Script:vCenterName
+            $clusterFound = Get-Cluster -Name $ClusterName -location $DataCenterName -ErrorAction Stop -Server $Script:vCenterName
             Write-LogMessage -Type DEBUG -Message "Add-Cluster: verification Get-Cluster succeeded; cluster Id=$($clusterFound.Id), Name=$($clusterFound.Name)."
             Set-VclsRetreatModeForCluster -ClusterName $ClusterName -Server $Script:vCenterName
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed (authorization)."
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-            throw "Deployment failed. Check logs for details."
-        }
-        catch {
+            throw " Failed (timeout)."
+        } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
     } else {
         Write-LogMessage -Type INFO -Message "The cluster `"$ClusterName`" in datacenter `"$DataCenterName`" is already present. Skipping cluster creation."
@@ -225,7 +222,7 @@ Function Add-Cluster {
         Write-LogMessage -Type INFO -CompletePending -Message " Success"
     } else {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" was not found in datacenter `"$DataCenterName`" on vCenter `"$Script:vCenterName`" after creation attempt."
-        throw "Deployment failed. Check logs for details."
+        throw "Cluster `"$ClusterName`" was not found in datacenter `"$DataCenterName`" on vCenter `"$Script:vCenterName`" after creation attempt."
     }
 }
 Function Remove-ClusterSafely {
@@ -261,7 +258,7 @@ Function Remove-ClusterSafely {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
@@ -406,14 +403,14 @@ Function Update-Cluster {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
         $cluster = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         if (-not $cluster) {
             Write-LogMessage -Type ERROR -Message "The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found."
-            throw "Deployment failed. Check logs for details."
+            throw "The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found."
         } else {
             # VCF PowerCLI 9: Get-VMHost uses -Location for cluster (no -Cluster parameter). Suppress VMHost.DatastoreIdList deprecation when reading host count.
             $prevWarningPreference = $WarningPreference
@@ -489,15 +486,14 @@ Function Update-Cluster {
         }
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" : $($_.Exception.Message)"
     }
 }
 Function Invoke-ReconfigureClusterHA {
@@ -800,8 +796,7 @@ Function Test-VmkernelVsanTrafficViaEsxcli {
         }
         Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" esxcli vsan network list did not show required traffic (RequireWitnessTraffic=$RequireWitnessTraffic). $sampleLog"
         return $false
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Failed on host `"$hostName`": $($_.Exception.Message)."
         return $false
     }
@@ -1088,8 +1083,7 @@ Function Add-VsanWitnessTrafficToVmkViaEsxcli {
             }
         }
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). vSAN witness traffic is required; deployment will roll back."
         throw "vSAN witness traffic is required. Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). Enable witness traffic on a VMkernel (e.g. in vCenter UI) or retry. Deployment will roll back."
     }
@@ -1117,7 +1111,7 @@ Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
         IPv4 netmask for the VMkernel (e.g. **255.255.255.0**).
 
         .PARAMETER VMHost
-        Target ESXi host.
+        Target ESX host.
 
         .PARAMETER VmkernelName
         VMkernel device name (e.g. **vmk3**).
@@ -1148,8 +1142,7 @@ Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
 
     try {
         $esxcli = Get-EsxCli -VMHost $VMHost -V2 -Server $Server -ErrorAction Stop
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: Get-EsxCli failed on `"$hostName`": $($_.Exception.Message)"
         throw
     }
@@ -1211,8 +1204,7 @@ Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
                 return
             }
         }
-    }
-    catch {
+    } catch {
         $lastError = $_.Exception.Message
         Write-LogMessage -Type DEBUG -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: CreateArgs path failed: $lastError"
     }
@@ -1227,8 +1219,7 @@ Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
             $setCmd.Invoke($ps) | Out-Null
             Write-LogMessage -Type INFO -Message "Set default gateway $gw on $VmkernelName on host `"$hostName`" (esxcli fallback parameter set)."
             return
-        }
-        catch {
+        } catch {
             $lastError = $_.Exception.Message
             continue
         }
@@ -1398,7 +1389,7 @@ Function Add-HostToCluster {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -1407,23 +1398,22 @@ Function Add-HostToCluster {
         $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
     }
     catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
         Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired. Do not log out the vCenter user session during deployment. Re-run the deployment to reconnect."
-        throw "Deployment failed. Check logs for details."
+        throw "vCenter session was logged out or expired. Do not log out the vCenter user session during deployment. Re-run the deployment to reconnect."
     }
     catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
         Write-LogMessage -Type ERROR -Message "vCenter connection was lost (session logged out, vCenter restart, or network). Re-run the deployment to reconnect."
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "vCenter connection was lost (session logged out, vCenter restart, or network). Re-run the deployment to reconnect."
+    } catch {
         Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
     }
 
     # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
@@ -1463,16 +1453,16 @@ Function Add-HostToCluster {
                     $task = Add-VMHost -Name $EsxHostName -Credential $EsxCredential -Location $clusterObject -Force -Server $Script:vCenterName -RunAsync -ErrorAction Stop
                 } catch [System.UnauthorizedAccessException] {
                     Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
                 } catch [System.TimeoutException] {
                     Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
                 } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
                     Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
-                    throw "Deployment failed. Check logs for details."
+                    throw "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
                 } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
                     Write-LogMessage -Type ERROR -Message "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                    throw "Deployment failed. Check logs for details."
+                    throw "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
                 } catch {
                     $errorMessage = $_.Exception.Message
                 }
@@ -1516,16 +1506,16 @@ Function Add-HostToCluster {
                     break
                 } catch [System.UnauthorizedAccessException] {
                     Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
                 } catch [System.TimeoutException] {
                     Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
                 } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
                     Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
-                    throw "Deployment failed. Check logs for details."
+                    throw "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
                 } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
                     Write-LogMessage -Type ERROR -Message "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                    throw "Deployment failed. Check logs for details."
+                    throw "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
                 } catch {
                     $errorMessage = $_.Exception.Message
                 }
@@ -1547,11 +1537,11 @@ Function Add-HostToCluster {
                 }
                 $otherCluster = if ($hostInVc) { $hostInVc.Parent.Name } else { "another cluster" }
                 Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" is already managed by vCenter `"$Script:vCenterName`" (in cluster: `"$otherCluster`"). Remove the host from that cluster in vCenter, or remove it from vCenter, then re-run the deployment."
-                throw "Deployment failed. Check logs for details."
+                throw "Host `"$EsxHostName`" is already managed by vCenter `"$Script:vCenterName`" (in cluster: `"$otherCluster`"). Remove the host from that cluster in vCenter, or remove it from vCenter, then re-run the deployment."
             }
             if ($errorMessage -match "vSAN cluster UUID mismatch|vSAN host cannot be moved to the destination cluster") {
                 Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" belongs to a different vSAN cluster (vSAN cluster UUID mismatch). Remove the host from the other vSAN cluster in vCenter, or remove it from vCenter, then re-run the deployment. Moving a vSAN host between clusters requires removing it first."
-                throw "Deployment failed. Check logs for details."
+                throw "Host `"$EsxHostName`" belongs to a different vSAN cluster (vSAN cluster UUID mismatch). Remove the host from the other vSAN cluster in vCenter, or remove it from vCenter, then re-run the deployment. Moving a vSAN host between clusters requires removing it first."
             }
             if ($errorMessage -match "already exists|current state of the object|did not complete within") {
                 Write-LogMessage -Type DEBUG -Message "Add-VMHost threw (attempt $addHostAttempt): $errorMessage"
@@ -1576,14 +1566,14 @@ Function Add-HostToCluster {
                     continue
                 }
                 Write-LogMessage -Type ERROR -Message "Add-VMHost failed after $AddHostRetryCount attempt(s). If the host is in another cluster, remove it from vCenter and re-run. Otherwise check vCenter logs and re-run."
-                throw "Deployment failed. Check logs for details."
+                throw "Add-VMHost failed after $AddHostRetryCount attempt(s). If the host is in another cluster, remove it from vCenter and re-run. Otherwise check vCenter logs and re-run."
             }
             if ($errorMessage -match "session|logged out|expired|InvalidLogin|Authentication failed") {
                 Write-LogMessage -Type ERROR -Message "The vCenter session may have been logged out during the operation. Do not log out the vCenter user session while deployment tasks are in progress. Re-run the deployment to reconnect."
-                throw "Deployment failed. Check logs for details."
+                throw "The vCenter session may have been logged out during the operation. Do not log out the vCenter user session while deployment tasks are in progress. Re-run the deployment to reconnect."
             }
             Write-LogMessage -Type ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage"
         } while ($addHostAttempt -le $AddHostRetryCount -and -not $addHostSucceeded)
     } finally {
         $ProgressPreference = $savedProgress
@@ -1591,7 +1581,7 @@ Function Add-HostToCluster {
 
     if (-not $addHostSucceeded) {
         Write-LogMessage -Type ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" after $AddHostRetryCount attempt(s). Workflow will fail."
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" after $AddHostRetryCount attempt(s). Workflow will fail."
     }
 
     # Verify that the host was successfully added.
@@ -1599,25 +1589,25 @@ Function Add-HostToCluster {
     $connectionAfterAdd = Test-VcenterConnection
     if (-not $connectionAfterAdd.IsConnected) {
         Write-LogMessage -Type ERROR -Message "vCenter session is no longer valid after Add-VMHost (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
-        throw "Deployment failed. Check logs for details."
+        throw "vCenter session is no longer valid after Add-VMHost (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
     }
     try {
         $verifyHost = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction Stop
     } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
         Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
-        throw "Deployment failed. Check logs for details."
+        throw "vCenter session was logged out or expired. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
     } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
         Write-LogMessage -Type ERROR -Message "vCenter connection was lost. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
-        throw "Deployment failed. Check logs for details."
+        throw "vCenter connection was lost. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to verify host `"$EsxHostName`" in vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to verify host `"$EsxHostName`" in vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
     }
 
     # Check if host is in the correct cluster.
     if ($verifyHost.Parent.Name -ne $ClusterName) {
         Write-LogMessage -Type ERROR -Message "Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`". Host is in cluster: `"$($verifyHost.Parent.Name)`""
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`". Host is in cluster: `"$($verifyHost.Parent.Name)`""
     }
 
     # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
@@ -1630,29 +1620,27 @@ Function Add-HostToCluster {
             Write-LogMessage -Type INFO -CompletePending -Message "Set"
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
         catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
         catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
-        }
-        catch {
+            throw " Failed."
+        } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
     }
 
         Write-LogMessage -Type INFO -CompletePending -Message "Success"
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
         if ($StoragePolicyType -eq "vSAN-ESA" -or $StoragePolicyType -eq "vSAN-OSA") {
             Write-LogMessage -Type INFO -Message "vSAN witness traffic or host add failed for cluster `"$ClusterName`". You will be prompted whether to roll back (same sequence as cleanup: VMkernel removal, management restore, vSAN disk/leave/tags, VDS removal, cluster removal)."
@@ -1709,7 +1697,7 @@ Function Get-ClusterId {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -1724,15 +1712,14 @@ Function Get-ClusterId {
 
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to get cluster id for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to get cluster id for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function Get-VcenterSupervisorCount {
@@ -1802,8 +1789,7 @@ Function Get-VcenterSupervisorCount {
         }
 
         return $result
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to list supervisors in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
         throw "Failed to get supervisor count. Check logs for details."
     }
@@ -1971,7 +1957,7 @@ Function Get-PortGroupId {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -1983,15 +1969,14 @@ Function Get-PortGroupId {
 
     } catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
-    }
-    catch {
+        throw "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to get port group id for `"$PortGroupName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to get port group id for `"$PortGroupName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
     }
 }
 Function Set-NewDatastore {
@@ -2071,7 +2056,7 @@ Function Set-NewDatastore {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     $existingDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
@@ -2098,20 +2083,19 @@ Function Set-NewDatastore {
         }
         catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $($_.Exception.Message)"
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
-        }
-        catch {
+            throw "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $($_.Exception.Message)"
+        } catch {
             Write-LogMessage -Type ERROR -Message "Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $($_.Exception.Message)"
         }
 
         if ($conflictingDatastore) {
             Write-LogMessage -Type ERROR -Message "The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:vCenterName`". Exiting."
-            throw "Deployment failed. Check logs for details."
+            throw "The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:vCenterName`". Exiting."
         }
     }
 
@@ -2155,27 +2139,26 @@ Function Set-NewDatastore {
 
             if (-not $datastoreReady) {
                 Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-                throw "Deployment failed. Check logs for details."
+                throw " Failed (timeout)."
             }
             Write-LogMessage -Type INFO -CompletePending -Message " Success"
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed (authorization)."
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-            throw "Deployment failed. Check logs for details."
-        }
-        catch {
+            throw " Failed (timeout)."
+        } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw "Deployment failed. Check logs for details."
+            throw " Failed."
         }
     }
     try {
         $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
     } catch {
         Write-LogMessage -Type ERROR -Message "Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
     }
     # Tag the datastore.
     try {
@@ -2207,11 +2190,11 @@ Function Set-NewDatastore {
             Write-LogMessage -Type ERROR -Message "  2. If the tag is `"single`" cardinality, remove it from the other datastore first"
             Write-LogMessage -Type ERROR -Message "  3. If the tag is `"many`" cardinality, check if it has reached its limit"
             Write-LogMessage -Type ERROR -Message "  4. Consider using a different tag or modifying the tag category cardinality."
-            throw "Deployment failed. Check logs for details."
+            throw "  4. Consider using a different tag or modifying the tag category cardinality."
         }
         else {
             Write-LogMessage -Type ERROR -Message "Error tagging datastore `"$DatastoreName`" with tag `"$TagName`": $errorMessage"
-            throw "Deployment failed. Check logs for details."
+            throw "Error tagging datastore `"$DatastoreName`" with tag `"$TagName`": $errorMessage"
         }
     }
     return $datastoreAlreadyExisted
@@ -2431,8 +2414,7 @@ Function Invoke-AsyncPowerShellOperation {
         foreach ($varName in $Variables.Keys) {
             $runspace.SessionStateProxy.SetVariable($varName, $Variables[$varName])
         }
-    }
-    catch {
+    } catch {
         $runspace.Close()
         $runspace.Dispose()
         Write-LogMessage -Type ERROR -Message "Failed to set runspace variables: $($_.Exception.Message)"
@@ -2461,8 +2443,7 @@ Function Invoke-AsyncPowerShellOperation {
         if ($operationElapsed -ge $remainingTimeout) {
             try {
                 $ps.Stop()
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type DEBUG -Message "Suppressed when stopping runspace: $($_.Exception.Message)"
             }
             finally {
@@ -2495,8 +2476,7 @@ Function Invoke-AsyncPowerShellOperation {
         if ($ps.Streams.Error.Count -gt 0) {
             $operationError = $ps.Streams.Error[0].Exception.Message
         }
-    }
-    catch {
+    } catch {
         $operationError = $_.Exception.Message
     }
     finally {
@@ -2566,7 +2546,7 @@ Function Get-VsanEsaEligibleDisksFromCluster {
 
     if (-not $ClusterHosts -or $ClusterHosts.Count -eq 0) {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-        throw "Deployment failed. Check logs for details."
+        throw "Cluster `"$ClusterName`" does not contain any hosts."
     }
 
     Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" contains $($ClusterHosts.Count) host(s): $($ClusterHosts.Name -join ', ')"
@@ -2662,7 +2642,7 @@ Function Get-VsanEsaEligibleDisksFromCluster {
             throw "Deployment failed. No eligible disks; cluster hosts already have vSAN storage pool disks ($poolSummary). Check logs for details."
         }
         Write-LogMessage -Type ERROR -Message "No vSAN ESA eligible disks found for cluster `"$ClusterName`"."
-        throw "Deployment failed. Check logs for details."
+        throw "No vSAN ESA eligible disks found for cluster `"$ClusterName`"."
     }
 
     Write-LogMessage -Type INFO -Message "Found $($eligibleDisks.Count) eligible disk(s) for cluster `"$ClusterName`"."
@@ -2773,8 +2753,7 @@ Function Get-VsanOsaDiskGroupsOnHost {
         if (-not $hasValidOsaGroup -and $diskGroupCount -gt 0) {
             Write-LogMessage -Type DEBUG -Message "Host `"$($VMHost.Name)`" has $diskGroupCount disk mapping(s) but none with both cache and capacity."
         }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Get-VsanOsaDiskGroupsOnHost failed for `"$($VMHost.Name)`": $($_.Exception.Message). Treating as no disk groups."
         $diskGroupCount = 0
     }
@@ -2844,8 +2823,7 @@ Function Test-VsanOsaDiskGroupPresentViaEsxcli {
         if ($resultStr -match 'VSAN\s+Disk\s+Group\s+UUID:\s*\S+') {
             return $true
         }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Test-VsanOsaDiskGroupPresentViaEsxcli failed for `"$($VMHost.Name)`": $($_.Exception.Message)."
     }
     return $false
@@ -2895,7 +2873,7 @@ Function Get-VsanOsaEligibleDisksFromCluster {
 
     if (-not $ClusterHosts -or $hostCount -eq 0) {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-        throw "Deployment failed. Check logs for details."
+        throw "Cluster `"$ClusterName`" does not contain any hosts."
     }
 
     Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" contains $($ClusterHosts.Count) host(s): $($ClusterHosts.Name -join ', ')"
@@ -2919,8 +2897,7 @@ Function Get-VsanOsaEligibleDisksFromCluster {
             $vsanSystem = Get-View -Id $vsanSystemRef -Server $Script:vCenterName -ErrorAction Stop
             # QueryDisksForVsan(optional canonicalName[]) returns items with .state and .disk; pass $null to query all disks.
             $diskResults = $vsanSystem.QueryDisksForVsan($null)
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type WARNING -Message "Failed to retrieve vSAN OSA eligible disks from host `"$hostName`": $($_.Exception.Message). Continuing with other hosts..."
             continue
         }
@@ -2993,7 +2970,7 @@ Function Get-VsanOsaEligibleDisksFromCluster {
             $errorDetail += " The host may have no local disks, or disks may already be in use (e.g. in a disk group or VMFS). For a vSAN witness host, ensure it has at least one SSD for cache and at least one disk for capacity (capacity can be HDD or SSD)."
         }
         Write-LogMessage -Type ERROR -Message $errorDetail
-        throw "Deployment failed. Check logs for details."
+        throw $errorDetail
     }
 
     Write-LogMessage -Type INFO -Message "Found $($eligibleDisks.Count) eligible disk(s) for cluster `"$ClusterName`"."
@@ -3125,7 +3102,7 @@ Function Get-UserDiskSelection {
                 }
                 else {
                     Write-LogMessage -Type ERROR -Message "Invalid disk ID format: `"$part`". Expected numeric value."
-                    throw "Deployment failed. Check logs for details."
+                    throw "Invalid disk ID format: `"$part`". Expected numeric value."
                 }
             }
         }
@@ -3135,7 +3112,7 @@ Function Get-UserDiskSelection {
         $invalidIds = $idsToDeselectArray | Where-Object { $_ -lt 1 -or $_ -gt $diskDisplayList.Count }
         if ($invalidIds) {
             Write-LogMessage -Type ERROR -Message "Invalid disk ID(s) provided: $($invalidIds -join ', '). Valid range is 1-$($diskDisplayList.Count)."
-            throw "Deployment failed. Check logs for details."
+            throw "Invalid disk ID(s) provided: $($invalidIds -join ', '). Valid range is 1-$($diskDisplayList.Count)."
         }
 
         # Remove deselected IDs from the selected list.
@@ -3143,7 +3120,7 @@ Function Get-UserDiskSelection {
 
         if ($selectedDiskIds.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "No disks selected. At least one disk must be selected."
-            throw "Deployment failed. Check logs for details."
+            throw "No disks selected. At least one disk must be selected."
         }
 
         $disksWereDeselected = $true
@@ -3203,7 +3180,7 @@ Function Get-UserDiskSelection {
     # Validate that at least one disk is selected before proceeding.
     if ($selectedDisks.Count -eq 0) {
         Write-LogMessage -Type ERROR -Message "No disks selected for vSAN $StorageType storage pool. At least one disk must be selected to create a vSAN datastore."
-        throw "Deployment failed. Check logs for details."
+        throw "No disks selected for vSAN $StorageType storage pool. At least one disk must be selected to create a vSAN datastore."
     }
 
     return [PSCustomObject]@{
@@ -3250,7 +3227,7 @@ Function Add-VsanOsaDiskToDiskGroup {
         $capacityDisks = $hostSelection.CapacityDisks
         if (-not $cacheDisk) {
             Write-LogMessage -Type ERROR -Message "No cache disk defined for host `"$hostName`"."
-            throw "Deployment failed. Check logs for details."
+            throw "No cache disk defined for host `"$hostName`"."
         }
         $capacityCanonicalNames = @()
         if ($capacityDisks -and $capacityDisks.Count -gt 0) {
@@ -3266,7 +3243,7 @@ Function Add-VsanOsaDiskToDiskGroup {
             try {
                 if ($capacityCanonicalNames.Count -eq 0) {
                     Write-LogMessage -Type ERROR -Message "At least one capacity disk is required per host for vSAN OSA disk group on `"$hostName`"."
-                    throw "Deployment failed. Check logs for details."
+                    throw "At least one capacity disk is required per host for vSAN OSA disk group on `"$hostName`"."
                 }
                 # Pass as array so cmdlet receives string[] and does not enumerate a single string as characters (avoids "Sequence contains no elements").
                 $dataDiskArray = @($capacityCanonicalNames)
@@ -3276,8 +3253,7 @@ Function Add-VsanOsaDiskToDiskGroup {
                 $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
                 Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup completed for host `"$hostName`" after $operationDuration seconds."
                 Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA disk group on host `"$hostName`"."
-            }
-            catch {
+            } catch {
                 $operationEndTime = Get-Date
                 $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
                 Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup failed for host `"$hostName`" after $operationDuration seconds."
@@ -3300,12 +3276,11 @@ Function Add-VsanOsaDiskToDiskGroup {
                         Write-LogMessage -Type ERROR -Message "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg"
                     }
                 }
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg. Check logs for details."
             }
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to create vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to create vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)"
         }
     }
 }
@@ -3398,8 +3373,7 @@ Function Add-VsanEsaDiskToStoragePool {
                 Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation completed for host `"$hostName`" after $operationDuration seconds."
 
                 Write-LogMessage -Type INFO -CompletePending -Message "Success"
-            }
-            catch {
+            } catch {
                 $operationEndTime = Get-Date
                 $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
                 Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation failed for host `"$hostName`" after $operationDuration seconds."
@@ -3418,16 +3392,15 @@ Function Add-VsanEsaDiskToStoragePool {
                     Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
                     Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
                 }
-                throw "Deployment failed. Check logs for details."
+                throw "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
             }
-        }
-        catch {
+        } catch {
             if ($null -ne $Script:LogMessagePending) {
                 Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
             }
             $errorReason = Get-CleanVsanErrorMessage -ErrorMessage $_.Exception.Message
             Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
         }
     }
 }
@@ -3530,8 +3503,7 @@ Function Wait-ForVsanDatastoreAndRename {
                     }
 
                     Write-LogMessage -Type INFO -CompletePending -Message "Success"
-                }
-                catch {
+                } catch {
                     Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
                     Write-LogMessage -Type ERROR -Message "Failed to rename vSAN datastore from `"$($vsanDatastore.Name)`" to `"$DatastoreName`": $($_.Exception.Message)"
                     throw "Deployment failed. vSAN datastore rename failed. Check logs for details."
@@ -3999,8 +3971,7 @@ Function Set-VsanWitness {
                 $witnessSetParams = @{ VirtualNic = $witnessVsanCheck.Vmk0Adapter; VsanTrafficEnabled = $true }
                 Set-VMHostNetworkAdapter @witnessSetParams -Confirm:$false -ErrorAction Stop | Out-Null
                 Write-LogMessage -Type INFO -Message "vSAN witness host `"$vSanWitnessVmName`" had no VMkernel with vSAN traffic enabled; vSAN traffic has been enabled on vmk0."
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type ERROR -Message "Failed to enable vSAN traffic on vmk0 on witness host `"$vSanWitnessVmName`": $($_.Exception.Message). vSAN traffic is required for the witness; deployment will roll back."
                 throw "vSAN traffic is required for the witness host. Could not ensure an interface is tagged for vSAN traffic on witness `"$vSanWitnessVmName`". Deployment will roll back."
             }
@@ -4181,8 +4152,7 @@ Function Set-VsanWitness {
                 } else {
                     Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain by name: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
                 }
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type DEBUG -Message "Could not resolve VsanFaultDomain (Get-VsanFaultDomain): $($_.Exception.Message). Proceeding without -PreferredFaultDomain."
             }
 
@@ -4204,8 +4174,7 @@ Function Set-VsanWitness {
                     if ($preferredFaultDomain) {
                         Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain after creation: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
                     }
-                }
-                catch {
+                } catch {
                     Write-LogMessage -Type ERROR -Message "Failed to create vSAN fault domains for cluster `"$ClusterName`": $($_.Exception.Message)"
                     throw "Deployment failed configuring vSAN witness for cluster `"$ClusterName`": could not create fault domains. $($_.Exception.Message)"
                 }
@@ -4292,8 +4261,7 @@ Function Set-VsanWitness {
         $cleanMessage = "Failed to configure vSAN witness for cluster `"$ClusterName`". Reason: $reason"
         Write-LogMessage -Type ERROR -Message $cleanMessage
         throw "Deployment failed. $cleanMessage"
-    }
-    catch {
+    } catch {
         $errorMessage = $_.Exception.Message
         $reason = Get-CleanVsanErrorMessage -ErrorMessage $errorMessage
         $cleanMessage = "Failed to configure vSAN witness for cluster `"$ClusterName`". Reason: $reason"
@@ -4722,8 +4690,7 @@ Function Enable-VsanAutomaticRebalance {
         Set-VsanClusterConfiguration @params -ErrorAction Stop | Out-Null
         Write-LogMessage -Type DEBUG -Message "Enabled vSAN automatic rebalancing at $AutomaticRebalanceThreshold% for cluster `"$ClusterName`"."
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Failed to enable vSAN automatic rebalancing for cluster `"$ClusterName`": $($_.Exception.Message). Continuing."
         return $false
     }
@@ -4779,8 +4746,7 @@ Function Test-VsanAutomaticRebalanceAtThreshold {
             return $false
         }
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Test-VsanAutomaticRebalanceAtThreshold failed for `"$ClusterName`": $($_.Exception.Message)."
         return $false
     }
@@ -4850,8 +4816,7 @@ Function Enable-VsanAutomaticDiskClaimIfSupported {
         }
         Write-LogMessage -Type DEBUG -Message "vSAN Managed Disk Claim already Automatic or unchanged (current mode: $currentMode)."
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Failed to enable vSAN Managed Disk Claim for cluster `"$ClusterName`": $($_.Exception.Message). Continuing."
         return $false
     }
@@ -4899,8 +4864,7 @@ Function Invoke-VsanClusterConfigReapply {
         Set-VsanClusterConfiguration -Configuration $vsanClusterConfig -Server $Script:vCenterName -ErrorAction Stop | Out-Null
         Write-LogMessage -Type DEBUG -Message "Re-applied vSAN cluster configuration for cluster `"$ClusterName`" (config pushed from vCenter to hosts)."
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Failed to re-apply vSAN cluster configuration for cluster `"$ClusterName`": $($_.Exception.Message). Will wait and recheck advCfgSync."
         return $false
     }
@@ -4940,8 +4904,7 @@ Function Get-VsanClusterTriggeredAlarms {
 
     try {
         $view = Get-View -Id $clusterObject.ExtensionData.MoRef -Property Name, TriggeredAlarmState -Server $Script:vCenterName -ErrorAction Stop
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "Get-VsanClusterTriggeredAlarms: failed to get cluster view for `"$ClusterName`": $($_.Exception.Message)"
         return @()
     }
@@ -4960,8 +4923,7 @@ Function Get-VsanClusterTriggeredAlarms {
             if ($alarmView -and $alarmView.Info -and $alarmView.Info.Name) {
                 $alarmName = $alarmView.Info.Name
             }
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type DEBUG -Message "Get-VsanClusterTriggeredAlarms: could not get alarm definition for alarm id $($triggered.Alarm): $($_.Exception.Message)"
         }
         if (-not $alarmName) {
@@ -5114,8 +5076,7 @@ Function Set-VsanDomNetworkSchedulerThrottleOnHost {
         $setCmd.Invoke($argsObj) | Out-Null
         Write-LogMessage -Type DEBUG -Message "Set DOM throttle (10G alarm suppression, Broadcom KB 394932) on host `"$hostNameForLogging`"."
         return [PSCustomObject]@{ Applied = $true; AlreadySet = $false }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Could not set /VSAN/DOMNetworkSchedulerThrottleComponent on host `"$hostNameForLogging`": $($_.Exception.Message)."
         return [PSCustomObject]@{ Applied = $false; AlreadySet = $false }
     }
@@ -5580,8 +5541,7 @@ Function Invoke-VsanClusterObjectRepairAndWait {
             Write-LogMessage -Type WARNING -Message "VsanHealthRepairClusterObjectsImmediate returned no task."
             return $true
         }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "VsanHealthRepairClusterObjectsImmediate failed: $($_.Exception.Message)"
         $innerMsg = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { "" }
         Write-LogMessage -Type DEBUG -Message "vSAN repair API exception: $($_.Exception.Message). Inner: $innerMsg"
@@ -5664,8 +5624,7 @@ Function Enable-VsanHealthAlarms {
     $silentTestIds = $null
     try {
         $silentTestIds = $healthSystemView.VsanHealthGetVsanClusterSilentChecks($clusterMoRef)
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "VsanHealthGetVsanClusterSilentChecks failed: $($_.Exception.Message). Skipping enable vSAN health alarms."
         return $false
     }
@@ -5684,8 +5643,7 @@ Function Enable-VsanHealthAlarms {
         Set-VsanClusterConfiguration -Configuration $config -RemoveSilentHealthCheck $idList -Server $Script:vCenterName -ErrorAction Stop | Out-Null
         Write-LogMessage -Type INFO -Message "Re-enabled vSAN health alarms for cluster `"$ClusterName`" (removed $($idList.Count) check(s) from silent list)."
         return $true
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Failed to re-enable vSAN health alarms for cluster `"$ClusterName`": $($_.Exception.Message)."
         return $false
     }
@@ -5726,8 +5684,7 @@ Function Invoke-AbandonHciWorkflowIfInProgress {
     try {
         $ext.AbandonHciWorkflow()
         Write-LogMessage -Type INFO -Message "Enabled vSAN health Alarms on cluster `"$ClusterName`"."
-    }
-    catch {
+    } catch {
         $msg = $_.Exception.Message
         if ($msg -match "not allowed in the current state") {
             Write-LogMessage -Type DEBUG -Message "Quickstart workflow already skipped for cluster `"$ClusterName`" (not allowed in current state)."
@@ -5792,8 +5749,7 @@ Function Add-VsanClusterSilentHealthChecks {
     $currentSilent = $null
     try {
         $currentSilent = $healthSystemView.VsanHealthGetVsanClusterSilentChecks($clusterMoRef)
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type DEBUG -Message "VsanHealthGetVsanClusterSilentChecks failed for cluster `"$ClusterName`" ($LogContext): $($_.Exception.Message). Skipping."
         return
     }
@@ -5812,8 +5768,7 @@ Function Add-VsanClusterSilentHealthChecks {
         try {
             $healthSystemView.VsanHealthSetVsanClusterSilentChecks($clusterMoRef, $chunk, $null) | Out-Null
             Write-LogMessage -Type DEBUG -Message "Silenced vSAN health check ID(s) on cluster `"$ClusterName`" ($LogContext): $($chunk -join ', ')."
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type WARNING -Message "VsanHealthSetVsanClusterSilentChecks failed for cluster `"$ClusterName`" ($LogContext, batch: $($chunk -join ', ')): $($_.Exception.Message). Skipping this batch."
             [void]$failed.AddRange($chunk)
         }
@@ -5902,7 +5857,7 @@ Function Invoke-VsanClusterHealthRetestAfterDeployment {
         When supported by Test-VsanClusterHealth, limits VM creation test duration (default 120). Raise only if Broadcom guidance or support recommends a longer window.
 
         .NOTES
-        Does not SSH to ESXi or restart vsanmgmtd; for Stats Primary election remediation see Broadcom KB 401679.
+        Does not SSH to ESX or restart vsanmgmtd; for Stats Primary election remediation see Broadcom KB 401679.
     #>
 
     [CmdletBinding()]
@@ -5931,8 +5886,7 @@ Function Invoke-VsanClusterHealthRetestAfterDeployment {
         Write-LogMessage -Type INFO -Message "Running on-demand vSAN health test for cluster `"$ClusterName`" (vSAN Health RETEST equivalent after deployment; $timeoutNote)."
         $null = Test-VsanClusterHealth @invokeParams
         Write-LogMessage -Type INFO -Message "On-demand vSAN health test completed for cluster `"$ClusterName`". Refresh vSAN Health in vCenter to review current status."
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Post-deployment vSAN health test failed for cluster `"$ClusterName`" (non-fatal): $($_.Exception.Message). Run vSAN Health > RETEST in vCenter if you need an updated evaluation."
     }
 }
@@ -5971,8 +5925,7 @@ Function Enable-VsanPerformanceService {
         }
         Set-VsanClusterConfiguration -Configuration $config -PerformanceServiceEnabled $true -Server $Server -ErrorAction Stop | Out-Null
         Write-LogMessage -Type DEBUG -Message "Enabled vSAN performance service on cluster `"$ClusterName`"."
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Failed to enable vSAN performance service on cluster `"$ClusterName`": $($_.Exception.Message). Continuing."
     }
 }
@@ -6142,8 +6095,7 @@ Function Invoke-VsanClusterHealthRetriggerForStatsPrimary {
             $timeoutNote = if ($invokeParams.ContainsKey("VMCreateTimeoutSeconds")) { "VMCreateTimeoutSeconds=$VmCreateTimeoutSeconds" } else { "VMCreateTimeoutSeconds=cmdlet default" }
             Write-LogMessage -Type INFO -Message "Running Test-VsanClusterHealth to refresh vSAN Health for cluster `"$ClusterName`" ($timeoutNote)."
             $null = Test-VsanClusterHealth @invokeParams
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type WARNING -Message "Test-VsanClusterHealth failed during Stats Primary re-trigger for cluster `"$ClusterName`" (non-fatal): $($_.Exception.Message). A newer vCenter build or PowerCLI module may expose this cmdlet; otherwise use vSAN Health > RETEST in the UI."
         }
     }
@@ -6500,8 +6452,7 @@ Function Remove-StorageTag {
         Write-LogMessage -Type INFO -NoNewline -Message "Removing storage tag `"$TagName`" (catalog `"$TagCatalog`") from vCenter... "
         Remove-Tag -Tag $tagObject -Server $Server -Confirm:$false -ErrorAction Stop
         Write-LogMessage -Type INFO -CompletePending -Message "Removed"
-    }
-    catch {
+    } catch {
         if ($null -ne $Script:LogMessagePending) {
             Write-LogMessage -Type WARNING -CompletePending -Message " Failed."
         }
@@ -6556,8 +6507,7 @@ Function Remove-TagCategoryIfEmpty {
         Write-LogMessage -Type INFO -NoNewline -Message "Removing empty tag category `"$TagCatalog`" from vCenter... "
         Remove-TagCategory -Category $categoryObject -Server $Server -Confirm:$false -ErrorAction Stop
         Write-LogMessage -Type INFO -CompletePending -Message "Removed"
-    }
-    catch {
+    } catch {
         if ($null -ne $Script:LogMessagePending) {
             Write-LogMessage -Type WARNING -CompletePending -Message " Failed."
         }
@@ -6658,8 +6608,7 @@ Function Invoke-PauseBeforeRollbackIfRequested {
             $validOptions = if ($singleSitePrompt) { "Y or N" } else { "Y, N, or A" }
             Write-LogMessage -Type WARNING -Message "Invalid response `"$response`". Please enter $validOptions."
         }
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Skipping rollback; pass -RollbackOnFailure `$true to rollback without prompt."
         return "DoNotRollback"
     }
@@ -7044,8 +6993,7 @@ Function Remove-VmfsDatastoreForCluster {
         Write-LogMessage -Type INFO -NoNewline -Message "Removing VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`"... "
         Remove-Datastore -Datastore $datastore -VMHost $vmhost -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
         Write-LogMessage -Type INFO -CompletePending -Message "Success"
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -CompletePending -Message " Failed."
         Write-LogMessage -Type WARNING -Message "Could not remove VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`": $($_.Exception.Message). Remove the datastore manually in vCenter if desired."
     }
@@ -7284,8 +7232,7 @@ Function Invoke-VsanDeploymentRollback {
         if (-not $SkipClusterRemoval.IsPresent) {
             Write-LogMessage -Type WARNING -Message "vSAN rollback only performs disk/leave/tags. Caller must remove VDS then cluster (same order as cleanup: VMkernel removal, management restore, VDS removal, cluster removal). Use -CleanUp Compute or run the full teardown sequence; do not call Invoke-VsanDeploymentRollback without -SkipClusterRemoval for full teardown."
         }
-    }
-    catch {
+    } catch {
         $Script:RollbackFailed = $true
         Write-LogMessage -Type ERROR -Message "vSAN rollback encountered an error: $($_.Exception.Message). Script will exit with failure."
         throw

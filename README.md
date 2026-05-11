@@ -93,7 +93,7 @@ The initialization function copies templated supervisor and infrastructure JSON 
 
 - Change to your VcfEdgeatScaleRootDirectory directory.
 - Run `python3 Tools/veas-json-generator.py`
-- Open a browser and point it to http://127.0.0.1:8080
+- Open a browser and point it to http://127.0.0.1:8000
 - Follow the on-screen instructions.
 
 ### Option 2: Modify JSON files by hand
@@ -157,6 +157,10 @@ Show-SupervisorJsonConfigurationHelp -Format GridView
 **Deployment Parameters:**
 
 - `AcceptBadCheckResults` (Switch, optional) - When specified, automatically proceed when vSAN cluster health is red or when vLCM cluster compliance remediation fails (no Y/N prompts).
+  - **PSGallery install** (`Install-Module`): prompts to run `Update-Module` automatically if a newer version is available.
+  - **Manual install** (git clone / `Install-VcfEdgeAtScaleModule.ps1`): announces the newer version and shows the `git pull` + re-run installer steps; no automatic install is attempted.
+  - If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped — it is always non-fatal.
+  - For silent once-per-day auto-checks see `common.autoUpdate` in the infrastructure JSON reference table below.
 - `CleanUp` (String, optional) - Cleanup only; no deploy. Must be `Supervisor`, `Compute`, `All`, `ArgoCD`, or `Harbor`. **Supervisor** disables Supervisor only. **Compute** removes VDS, storage, and cluster (fails if Supervisor exists). **All** disables Supervisor then removes compute. **ArgoCD** removes only the Argo CD supervisor namespace (polls until gone). **Harbor** removes only the Harbor Supervisor Service (polls until gone). Confirm with a typed phrase such as `delete harbor for site1` unless `-Force` is used with `common.labenvironment` true (see module help for the exact pattern).
 - `ComputeOnly` (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying Argo CD.
 - `EdgeSite` (String, optional) - Comma-delimited list of edge site names (e.g. `"site1,site2"`). Deploy only clusters whose `edgeSite` matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.
@@ -190,6 +194,12 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 
 # Deploy multiple edge sites in order (comma-delimited; only comma is allowed as separator)
 Start-VcfEdgeAtScale -EdgeSite "site1,site2"
+
+# Deploy specific edge site(s) with custom configuration files
+Start-VcfEdgeAtScale `
+    -EdgeSite "site2" `
+    -InfrastructureJson "infrastructure-test.json" `
+    -SupervisorJson "supervisor-test.json"
 
 # Autonomous run: always rollback on failure without prompting
 Start-VcfEdgeAtScale -RollbackOnFailure $true
@@ -252,7 +262,7 @@ If you run into a problem and need to share a log bundle with Broadcom, please r
 Start-VcfEdgeAtScale -CollectLogs
 ```
 
-The module prompts whether to use the default JSON files under `$env:VcfEdgeatScaleRootDirectory` or custom paths, then zips `infrastructure.json`, `supervisor.json`, and the `Logs/` and `ServicesYaml/` folders from that root into **`$HOME/VcfEdgeatScale-logs-<timestamp>.zip`**.
+The module will create an archive containing your infrastructure.json, supervisor.json, logs from the `$env:VcfEdgeatScaleRootDirectory`/log directory, and the `$env:VcfEdgeatScaleRootDirectory`/VcfEdgeBaseDir directory.
 
 ## Check module version
 
@@ -263,17 +273,36 @@ Start-VcfEdgeAtScale -Version
 ## Check for new releases
 
 > [!NOTE]
-> If you install the module through PowerShell Gallery, the module will automatically check for new updates every day it is used,
-> unless the option is disabled in the JSON. Manual checks are available for all modes of installation.
-
-- **PSGallery install** (`Install-Module`): prompts to run `Update-Module` automatically if a newer version is available.
-- **Manual install** (git clone / `Install-VcfEdgeAtScaleModule.ps1`): announces the newer version and shows the `git pull` + re-run installer steps; no automatic install is attempted.
-- If PSGallery cannot be reached (network error, proxy, or air-gap), the check is silently skipped — it is always non-fatal.
-- To disable the once-per-day auto-check, set `common.autoUpdate` to `false` in `infrastructure.json`.
+> The module automatically checks for new versions once per day when used. The behaviour differs by install source:
+>
+> - **PSGallery install** (`Install-Module`): when a newer version is available, you are prompted to run `Update-Module` automatically (default Y). After a successful update the config UI tool (`veas-json-generator.py`) is also updated in your deployment root.
+> - **Manual / GitHub install** (git clone + `Install-VcfEdgeAtScaleModule.ps1`): announces the newer version and shows the manual update steps (`git pull` + re-run installer); no automatic install is attempted.
+> - If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped — it is always non-fatal.
+> - Disable automatic daily checks by setting `"autoUpdate": false` in `common` of your `infrastructure.json`.
 
 ```Powershell
 Start-VcfEdgeAtScale -CheckForUpdates
 ```
+
+**EdgeSite Parameter Usage:**
+
+The `-EdgeSite` parameter lets you target one or more edge sites from your infrastructure.json instead of processing all clusters. Use a comma-delimited list to deploy multiple sites (e.g. `-EdgeSite "site1,site2"`). This is useful for the following:
+
+- **Targeted deployments**: Deploy or redeploy specific edge sites without processing others
+- **Troubleshooting**: Isolate issues to specific clusters
+- **Incremental rollouts**: Deploy a subset of sites in a chosen order
+- **Testing**: Validate configuration for selected sites before deploying all
+
+**How it works:**
+
+- When `-EdgeSite` is **not specified**: All clusters in the `clusters[]` array are processed sequentially. The script connects to vCenter once and processes each cluster in order, maintaining the connection between clusters that share the same vCenter FQDN.
+- When `-EdgeSite` **is specified**: Only clusters whose `edgeSite` matches one of the comma-separated values are processed, in the order you list them (e.g. `-EdgeSite "site2,site1"` deploys site2 then site1).
+
+**Important Notes:**
+
+- Use **only a comma** to separate site names. Invalid delimiters (e.g. semicolon) cause the workflow to fail.
+- Each value must exactly match an `edgeSite` in your infrastructure.json `clusters[]` array. If any specified site is invalid, the workflow fails with the list of valid values.
+- All clusters in the same infrastructure.json share the same vCenter connection (from `common.vCenterName`), so the connection persists when processing multiple clusters.
 
 ### Show-InfrastructureJsonConfigurationHelp
 
@@ -387,7 +416,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 - **Storage:** Use `storagePolicy.storageType` (`VMFS`, `vSAN-ESA`, or `vSAN-OSA`). The tag catalog name can be omitted; it defaults to `{storageType}-Storage-TagCatalog` (e.g. `VMFS-Storage-TagCatalog`).
 - **vSAN witness:** `vSanWitnessVmName` may be defined at `common` (applies to all vSAN clusters) or per `clusters[]` (cluster root level only; cluster overrides common). Required for vSAN-OSA and vSAN-ESA storage types; not used for VMFS.
 - **vSphere HA admission (vSAN OSA/ESA only):** `haPolicy` may be defined at `common` or per `clusters[]` (cluster overrides common). Omitted means **`reservationBased`** (CPU and memory percentage admission; default percentage is ceiling(100 / host count) unless overridden). **`slotBased`** uses host failures tolerated = 1 (slot-style admission). **`disabled`** leaves HA on with admission control off (VM restart only, no capacity reservation). These values apply when the workflow re-applies HA after moving management to the VDS and when the vSAN alarm check remediates **vSphere HA host status**. **VMFS** clusters are not governed by this JSON key; HA re-apply after the VDS step continues to use **reservationBased**. When the key is present, JSON validation accepts only the three strings above.
-- **vSAN Health — Stats Primary election:** The module **does not** add Stats Primary to the vSAN **silent-check** list (no `VsanHealthSetVsanClusterSilentChecks` for that test). When the post-witness health summary is non-green **only** for Stats Primary election/selection (including common `perfsvc.masterexist` / label variants on older builds), it **re-triggers** evaluation: ensures the vSAN performance service is enabled, runs **`Test-VsanClusterHealth`** when the cmdlet exists (with **`VMCreateTimeoutSeconds`** when supported—default 120), waits between attempts, and re-reads health up to **four** times (45 s between attempts by default). If it still only shows that finding, deployment **proceeds with a warning** so a transient leader election does not block the gate. `common.labenvironment: true` still applies **separate** lab-only silent checks for other tests. After a successful vSAN edge deployment, **`Test-VsanClusterHealth`** runs again when available. Manual remediation remains per [Broadcom KB 401679](https://knowledge.broadcom.com/external/article/401679/stats-primary-election-alert-via-vsan-he.html). The module does not SSH to ESXi to restart services automatically.
+- **vSAN Health — Stats Primary election:** The module **does not** add Stats Primary to the vSAN **silent-check** list (no `VsanHealthSetVsanClusterSilentChecks` for that test). When the post-witness health summary is non-green **only** for Stats Primary election/selection (including common `perfsvc.masterexist` / label variants on older builds), it **re-triggers** evaluation: ensures the vSAN performance service is enabled, runs **`Test-VsanClusterHealth`** when the cmdlet exists (with **`VMCreateTimeoutSeconds`** when supported—default 120), waits between attempts, and re-reads health up to **four** times (45 s between attempts by default). If it still only shows that finding, deployment **proceeds with a warning** so a transient leader election does not block the gate. `common.labenvironment: true` still applies **separate** lab-only silent checks for other tests. After a successful vSAN edge deployment, **`Test-VsanClusterHealth`** runs again when available. Manual remediation remains per [Broadcom KB 401679](https://knowledge.broadcom.com/external/article/401679/stats-primary-election-alert-via-vsan-he.html). The module does not SSH to ESX to restart services automatically.
 - **Lab environment and the vSAN HCL (important):** When **`common.labenvironment`** is **`true`**, `Set-VsanLabSilentChecksIfRequested` silences these vSAN Health checks before the post-witness evaluation: **`advcfgsync`**, **`controllerdiskmode`**, **`controlleronhcl`**, **`controllerfirmware`**, **`controllerdriver`**, **`hclhostbadstate`**. Only `advcfgsync` is a transient-sync test; the other five map to vSAN HCL / hardware-compatibility findings (storage controller on HCL, controller disk mode, firmware, driver, and host HCL DB state). Silencing changes only the vCenter **signal layer** (health test status and the cluster alarms derived from it); it does **not** change the underlying hardware state. Two consequences you should plan for:
   - The same cluster may deploy cleanly in lab mode and **fail to enable Supervisor outside lab mode on identical hardware**, because WCP enforces cluster/host HCL conformance downstream of this module's red-alarm gate. Accepting the red vSAN alarm in non-lab mode does not fix the HCL state.
   - `Invoke-VsanClusterAlarmCheckAndRemediate` classifies each blocking red alarm with **`Test-VsanTriggeredAlarmIsHclRelated`** (matches **HCL**, **hardware compatibility**, **hardware vSAN support**, and **controller firmware/driver/disk mode/on HCL**). When any blocking red alarm is HCL-related, the **ERROR/WARNING** banner, **`AcceptBadCheckResults`** message, **Y/N** prompt, and the `Y`-accepted log line all explicitly state that Supervisor enablement is expected to fail until the cluster is HCL-conformant.
@@ -817,6 +846,34 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 - ESX hosts in connected state
 - Network connectivity to vCenter and ESX hosts
 
+## Version History
+
+See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
+
+### Version 1.0.3.1002 (current)
+
+See [CHANGELOG.md](CHANGELOG.md) for the authoritative per-release list. Recent additions include:
+
+- **`veas-json-generator.py`** copied to **`Tools/`** by `-Initialize`: a stdlib-only Python 3 web UI for building and step-validating `infrastructure.json` and `supervisor.json` without hand-editing JSON.
+
+### Version 1.0.3.1001
+
+- Added update feature
+
+### Version 1.0.3.1000
+
+Summary aligned with [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md): PowerShell module packaging for VCF 9.x edge Supervisor deployments (multi-site **`infrastructure.json`** / **`supervisor.json`**). Highlights include vLCM catalog workflows, stretched vSAN ESA/OSA, Harbor and Argo CD per site, optional **`-ComputeOnly`**, **`disableArgoCD`** / **`disableHarbor`**, lab-mode behavior (**`common.labenvironment`**), HA policy for vSAN multi-host clusters, VMkernel and witness handling, rollback/cleanup flows, cross-platform **`Import-Module`**, **`-Initialize`** persisting **`VcfEdgeatScaleRootDirectory`** via **`[System.Environment]::SetEnvironmentVariable`**, and **`Templates/*-config-help.json`** shipped under **`Docs/`** for **`Show-*ConfigurationHelp`**. See **[CHANGELOG.md](CHANGELOG.md)** for the authoritative per-release list.
+
+### Version 1.0.2
+
+- Significant reliability and performance improvements
+- Cross-platform compatibility fixes
+- Enhanced error handling and logging
+
+## Contributing
+
+This module is maintained by Broadcom. For issues, feature requests, or contributions, please refer to the project repository.
+
 ## License
 
 Copyright (c) 2026 Broadcom. All Rights Reserved.
@@ -860,6 +917,6 @@ Use the **log file** under `Logs/` (see `New-LogFile` / run output for the path)
 
 - **Networks:** Expect the four-network edge layout (management, workload, two load balancer segments) and four VLAN IDs in `infrastructure.json`, matching the design docs linked above.
 
-- **CLI tools:** Install **kubectl** ([Kubernetes install tools](https://kubernetes.io/docs/tasks/tools/)) and the **VCF CLI** ([Installing and Using VCF CLI v9](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html)) before you run the module (see [Install VCF CLI](#install-vcf-cli) above).
+- **CLI tools:** Install **kubectl** ([Kubernetes install tools](https://kubernetes.io/docs/tasks/tools/)) and the **VCF CLI** ([Installing and Using VCF CLI v9](https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html)) before you run the module (see step 6).
 
 - **Platforms:** Tested on Windows and macOS with PowerShell 7.4+.

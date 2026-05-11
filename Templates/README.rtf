@@ -93,8 +93,8 @@ pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: Guided generation\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Change to your VcfEdgeatScaleRootDirectory directory.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 python3 Tools/veas-json-generator.py}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open a browser and point it to {\field{\*\fldinst{HYPERLINK "http://127.0.0.1:8080"}}{\fldrslt{\ul
-http://127.0.0.1:8080
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open a browser and point it to {\field{\*\fldinst{HYPERLINK "http://127.0.0.1:8000"}}{\fldrslt{\ul
+http://127.0.0.1:8000
 }}}
 \par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Follow the on-screen instructions.\sa180\par}
@@ -140,6 +140,10 @@ Show-SupervisorJsonConfigurationHelp -Format GridView\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 .\\Start-VcfEdgeAtScale\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Deployment Parameters:}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 AcceptBadCheckResults} (Switch, optional) - When specified, automatically proceed when vSAN cluster health is red or when vLCM cluster compliance remediation fails (no Y/N prompts).\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): prompts to run {\f1 Update-Module} automatically if a newer version is available.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Manual install} (git clone / {\f1 Install-VcfEdgeAtScaleModule.ps1}): announces the newer version and shows the {\f1 git pull} + re-run installer steps; no automatic install is attempted.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped \u8212- it is always non-fatal.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab For silent once-per-day auto-checks see {\f1 common.autoUpdate} in the infrastructure JSON reference table below.\sa180\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 CleanUp} (String, optional) - Cleanup only; no deploy. Must be {\f1 Supervisor}, {\f1 Compute}, {\f1 All}, {\f1 ArgoCD}, or {\f1 Harbor}. {\b Supervisor} disables Supervisor only. {\b Compute} removes VDS, storage, and cluster (fails if Supervisor exists). {\b All} disables Supervisor then removes compute. {\b ArgoCD} removes only the Argo CD supervisor namespace (polls until gone). {\b Harbor} removes only the Harbor Supervisor Service (polls until gone). Confirm with a typed phrase such as {\f1 delete harbor for site1} unless {\f1 -Force} is used with {\f1 common.labenvironment} true (see module help for the exact pattern).\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 ComputeOnly} (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying Argo CD.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 EdgeSite} (String, optional) - Comma-delimited list of edge site names (e.g. {\f1 "site1,site2"}). Deploy only clusters whose {\f1 edgeSite} matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.\par}
@@ -168,6 +172,12 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\line
 \line
 # Deploy multiple edge sites in order (comma-delimited; only comma is allowed as separator)\line
 Start-VcfEdgeAtScale -EdgeSite "site1,site2"\line
+\line
+# Deploy specific edge site(s) with custom configuration files\line
+Start-VcfEdgeAtScale `\line
+    -EdgeSite "site2" `\line
+    -InfrastructureJson "infrastructure-test.json" `\line
+    -SupervisorJson "supervisor-test.json"\line
 \line
 # Autonomous run: always rollback on failure without prompting\line
 Start-VcfEdgeAtScale -RollbackOnFailure $true\line
@@ -220,17 +230,30 @@ Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure-test.json
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Collect logs\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 If you run into a problem and need to share a log bundle with Broadcom, please run the following:\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -CollectLogs\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 The module prompts whether to use the default JSON files under {\f1 $env:VcfEdgeatScaleRootDirectory} or custom paths, then zips {\f1 infrastructure.json}, {\f1 supervisor.json}, and the {\f1 Logs/} and {\f1 ServicesYaml/} folders from that root into {\b {\f1 $HOME/VcfEdgeatScale-logs-<timestamp>.zip}}.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The module will create an archive containing your infrastructure.json, supervisor.json, logs from the {\f1 $env:VcfEdgeatScaleRootDirectory}/log directory, and the {\f1 $env:VcfEdgeatScaleRootDirectory}/VcfEdgeBaseDir directory.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Check module version\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -Version\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Check for new releases\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 If you install the module through PowerShell Gallery, the module will automatically check for new updates every day it is used, unless the option is disabled in the JSON. Manual checks are available for all modes of installation.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): prompts to run {\f1 Update-Module} automatically if a newer version is available.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Manual install} (git clone / {\f1 Install-VcfEdgeAtScaleModule.ps1}): announces the newer version and shows the {\f1 git pull} + re-run installer steps; no automatic install is attempted.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab If PSGallery cannot be reached (network error, proxy, or air-gap), the check is silently skipped \u8212- it is always non-fatal.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To disable the once-per-day auto-check, set {\f1 common.autoUpdate} to {\f1 false} in {\f1 infrastructure.json}.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The module automatically checks for new versions once per day when used. The behaviour differs by install source:\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): when a newer version is available, you are prompted to run {\f1 Update-Module} automatically (default Y). After a successful update the config UI tool ({\f1 veas-json-generator.py}) is also updated in your deployment root.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Manual / GitHub install} (git clone + {\f1 Install-VcfEdgeAtScaleModule.ps1}): announces the newer version and shows the manual update steps ({\f1 git pull} + re-run installer); no automatic install is attempted.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped \u8212- it is always non-fatal.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Disable automatic daily checks by setting {\f1 "autoUpdate": false} in {\f1 common} of your {\f1 infrastructure.json}.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -CheckForUpdates\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b EdgeSite Parameter Usage:}\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The {\f1 -EdgeSite} parameter lets you target one or more edge sites from your infrastructure.json instead of processing all clusters. Use a comma-delimited list to deploy multiple sites (e.g. {\f1 -EdgeSite "site1,site2"}). This is useful for the following:\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Targeted deployments}: Deploy or redeploy specific edge sites without processing others\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Troubleshooting}: Isolate issues to specific clusters\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Incremental rollouts}: Deploy a subset of sites in a chosen order\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Testing}: Validate configuration for selected sites before deploying all\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b How it works:}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab When {\f1 -EdgeSite} is {\b not specified}: All clusters in the {\f1 clusters[]} array are processed sequentially. The script connects to vCenter once and processes each cluster in order, maintaining the connection between clusters that share the same vCenter FQDN.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab When {\f1 -EdgeSite} {\b is specified}: Only clusters whose {\f1 edgeSite} matches one of the comma-separated values are processed, in the order you list them (e.g. {\f1 -EdgeSite "site2,site1"} deploys site2 then site1).\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Important Notes:}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Use {\b only a comma} to separate site names. Invalid delimiters (e.g. semicolon) cause the workflow to fail.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Each value must exactly match an {\f1 edgeSite} in your infrastructure.json {\f1 clusters[]} array. If any specified site is invalid, the workflow fails with the list of valid values.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab All clusters in the same infrastructure.json share the same vCenter connection (from {\f1 common.vCenterName}), so the connection persists when processing multiple clusters.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Show-InfrastructureJsonConfigurationHelp\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Displays a reference table for configuring the {\f1 infrastructure.json} file (Key, Required, Notes).\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Parameters:}\par}
@@ -315,7 +338,7 @@ Show-SupervisorJsonConfigurationHelp -Filter flb -Format List\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vSAN Health \u8212- Stats Primary election:} The module {\b does not} add Stats Primary to the vSAN {\b silent-check} list (no {\f1 VsanHealthSetVsanClusterSilentChecks} for that test). When the post-witness health summary is non-green {\b only} for Stats Primary election/selection (including common {\f1 perfsvc.masterexist} / label variants on older builds), it {\b re-triggers} evaluation: ensures the vSAN performance service is enabled, runs {\b {\f1 Test-VsanClusterHealth}} when the cmdlet exists (with {\b {\f1 VMCreateTimeoutSeconds}} when supported\u8212-default 120), waits between attempts, and re-reads health up to {\b four} times (45 s between attempts by default). If it still only shows that finding, deployment {\b proceeds with a warning} so a transient leader election does not block the gate. {\f1 common.labenvironment: true} still applies {\b separate} lab-only silent checks for other tests. After a successful vSAN edge deployment, {\b {\f1 Test-VsanClusterHealth}} runs again when available. Manual remediation remains per {\field{\*\fldinst{HYPERLINK "https://knowledge.broadcom.com/external/article/401679/stats-primary-election-alert-via-vsan-he.html"}}{\fldrslt{\ul
 Broadcom KB 401679
 }}}
-. The module does not SSH to ESXi to restart services automatically.\par}
+. The module does not SSH to ESX to restart services automatically.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Lab environment and the vSAN HCL (important):} When {\b {\f1 common.labenvironment}} is {\b {\f1 true}}, {\f1 Set-VsanLabSilentChecksIfRequested} silences these vSAN Health checks before the post-witness evaluation: {\b {\f1 advcfgsync}}, {\b {\f1 controllerdiskmode}}, {\b {\f1 controlleronhcl}}, {\b {\f1 controllerfirmware}}, {\b {\f1 controllerdriver}}, {\b {\f1 hclhostbadstate}}. Only {\f1 advcfgsync} is a transient-sync test; the other five map to vSAN HCL / hardware-compatibility findings (storage controller on HCL, controller disk mode, firmware, driver, and host HCL DB state). Silencing changes only the vCenter {\b signal layer} (health test status and the cluster alarms derived from it); it does {\b not} change the underlying hardware state. Two consequences you should plan for:\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab The same cluster may deploy cleanly in lab mode and {\b fail to enable Supervisor outside lab mode on identical hardware}, because WCP enforces cluster/host HCL conformance downstream of this module's red-alarm gate. Accepting the red vSAN alarm in non-lab mode does not fix the HCL state.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\f1 Invoke-VsanClusterAlarmCheckAndRemediate} classifies each blocking red alarm with {\b {\f1 Test-VsanTriggeredAlarmIsHclRelated}} (matches {\b HCL}, {\b hardware compatibility}, {\b hardware vSAN support}, and {\b controller firmware/driver/disk mode/on HCL}). When any blocking red alarm is HCL-related, the {\b ERROR/WARNING} banner, {\b {\f1 AcceptBadCheckResults}} message, {\b Y/N} prompt, and the {\f1 Y}-accepted log line all explicitly state that Supervisor enablement is expected to fail until the cluster is HCL-conformant.\par}
@@ -1966,6 +1989,36 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab vCenter Server with administrative access\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ESX hosts in connected state\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Network connectivity to vCenter and ESX hosts\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Version History\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
+CHANGELOG.md
+}}}
+ for detailed version history.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1002 (current)\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
+CHANGELOG.md
+}}}
+ for the authoritative per-release list. Recent additions include:\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 veas-json-generator.py}} copied to {\b {\f1 Tools/}} by {\f1 -Initialize}: a stdlib-only Python 3 web UI for building and step-validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1001\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Added update feature\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1000\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Summary aligned with {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
+CHANGELOG.md
+}}}
+ and {\field{\*\fldinst{HYPERLINK "RELEASE_NOTES.md"}}{\fldrslt{\ul
+RELEASE_NOTES.md
+}}}
+: PowerShell module packaging for VCF 9.x edge Supervisor deployments (multi-site {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}}). Highlights include vLCM catalog workflows, stretched vSAN ESA/OSA, Harbor and Argo CD per site, optional {\b {\f1 -ComputeOnly}}, {\b {\f1 disableArgoCD}} / {\b {\f1 disableHarbor}}, lab-mode behavior ({\b {\f1 common.labenvironment}}), HA policy for vSAN multi-host clusters, VMkernel and witness handling, rollback/cleanup flows, cross-platform {\b {\f1 Import-Module}}, {\b {\f1 -Initialize}} persisting {\b {\f1 VcfEdgeatScaleRootDirectory}} via {\b {\f1 [System.Environment]::SetEnvironmentVariable}}, and {\b {\f1 Templates/*-config-help.json}} shipped under {\b {\f1 Docs/}} for {\b {\f1 Show-*ConfigurationHelp}}. See {\b {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
+CHANGELOG.md
+}}}
+} for the authoritative per-release list.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.2\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Significant reliability and performance improvements\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Cross-platform compatibility fixes\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Enhanced error handling and logging\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Contributing\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 This module is maintained by Broadcom. For issues, feature requests, or contributions, please refer to the project repository.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 License\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Copyright (c) 2026 Broadcom. All Rights Reserved.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 See the module manifest or LICENSE file for full license details.\par}
@@ -2111,9 +2164,6 @@ Kubernetes install tools
 ) and the {\b VCF CLI} ({\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt{\ul
 Installing and Using VCF CLI v9
 }}}
-) before you run the module (see {\field{\*\fldinst{HYPERLINK "#install-vcf-cli"}}{\fldrslt{\ul
-Install VCF CLI
-}}}
- above).\par}
+) before you run the module (see step 6).\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab {\b Platforms:} Tested on Windows and macOS with PowerShell 7.4+.\sa180\par}
 }

@@ -260,8 +260,7 @@ Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
         Write-LogMessage -Type INFO -Message "Management restore: trying VDS `"$cand`" (JSON nic count $NicListCount; alternate tried if deployment used the other topology)."
         try {
             $lastResult = Invoke-ManagementRestoreForCleanup -ClusterName $ClusterName -VdsNameWithMgmt $cand
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type WARNING -Message "Management restore threw for candidate `"$cand`": $($_.Exception.Message)"
             $lastResult = [PSCustomObject]@{
                 RestoreAttempted = $true
@@ -817,7 +816,7 @@ Function Remove-EdgeClusterDistributedSwitch {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Server`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Server`": $($connectionTest.ErrorMessage)"
     }
 
     $vdsObject = Get-VDSwitch -Name $VdsName -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
@@ -873,8 +872,7 @@ Function Remove-EdgeClusterDistributedSwitch {
                 Remove-VDPortgroup -VDPortgroup $pg -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
                 $portGroupRemoveCount++
                 Write-LogMessage -Type DEBUG -Message "Removed port group `"$($pg.Name)`" from VDS `"$VdsName`"."
-            }
-            catch {
+            } catch {
                 Write-LogMessage -Type WARNING -Message "Failed to remove port group `"$($pg.Name)`": $($_.Exception.Message) Skipping; will still try to remove other port groups and the switch."
                 [void]$failedPortGroupNames.Add($pg.Name)
             }
@@ -907,8 +905,7 @@ Function Remove-EdgeClusterDistributedSwitch {
                             Remove-VDPortgroup -VDPortgroup $pgRetry -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
                             $portGroupRemoveCountRetry++
                             Write-LogMessage -Type DEBUG -Message "Retry pass removed port group `"$($pgRetry.Name)`" from VDS `"$VdsName`"."
-                        }
-                        catch {
+                        } catch {
                             Write-LogMessage -Type WARNING -Message "Retry: failed to remove port group `"$($pgRetry.Name)`": $($_.Exception.Message)"
                             [void]$failedPortGroupNames.Add($pgRetry.Name)
                         }
@@ -925,8 +922,7 @@ Function Remove-EdgeClusterDistributedSwitch {
                     }
                 }
             }
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type WARNING -Message "Management restore fallback before VDS removal failed for `"$VdsName`": $($_.Exception.Message)"
         }
     }
@@ -938,8 +934,7 @@ Function Remove-EdgeClusterDistributedSwitch {
             Remove-VDSwitch -VDSwitch $vdsObject -Server $Server -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
             Write-LogMessage -Type DEBUG -Message "Removed VDS `"$VdsName`"."
             break
-        }
-        catch {
+        } catch {
             $removeErr = $_.Exception.Message
             if ($removeErr -match "Operation is not valid due to the current state of the object" -and $removeVdsAttempt -eq 1) {
                 Write-LogMessage -Type WARNING -Message "VDS removal failed (object in transitional state). Waiting $RemoveVdsRetryDelaySeconds s before retry."
@@ -956,7 +951,7 @@ Function Remove-EdgeClusterDistributedSwitch {
                     throw "Deployment failed. VDS could not be removed: one or more port groups are in use ($($failedPortGroupNames -join ', ')). Move VMkernel adapters to another switch and migrate VMs off the port groups, then retry or remove the VDS manually."
                 } else {
                     Write-LogMessage -Type ERROR -Message "Failed to remove VDS `"$VdsName`": $removeErr"
-                    throw "Deployment failed. Check logs for details."
+                    throw "Failed to remove VDS `"$VdsName`": $removeErr"
                 }
             }
         }
@@ -998,8 +993,7 @@ Function Set-VMHostConnectedState {
         try {
             Set-VMHost -VMHost $VMHost -Server $Server -State Connected -Confirm:$false -ErrorAction Stop | Out-Null
             Write-LogMessage -Type INFO -Message "Host `"$hostName`" exited maintenance mode successfully."
-        }
-        catch {
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to exit maintenance mode on host `"$hostName`": $($_.Exception.Message)"
             throw "Deployment failed. Host `"$hostName`" is in maintenance mode and could not be set to Connected. Exit maintenance mode manually, then re-run."
         }
@@ -1073,7 +1067,7 @@ Function Add-VsanOsaDiskGroupToCluster {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -1082,7 +1076,7 @@ Function Add-VsanOsaDiskGroupToCluster {
 
         if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-            throw "Deployment failed. Check logs for details."
+            throw "Cluster `"$ClusterName`" does not contain any hosts."
         }
 
         # Ensure no cluster host is in maintenance mode (vSAN disk group operations require connected state).
@@ -1381,8 +1375,7 @@ Function Add-VsanOsaDiskGroupToCluster {
         $cleanMessage = "Failed to configure vSAN OSA datastore for cluster `"$ClusterName`". Reason: $reason"
         Write-LogMessage -Type ERROR -Message $cleanMessage
         throw "Deployment failed. $cleanMessage"
-    }
-    catch {
+    } catch {
         if ($_.Exception.Message -match "Deployment cancelled by user" -or $_.Exception.Message -match "^Deployment failed\.") {
             throw
         }
@@ -1477,7 +1470,7 @@ Function Add-VsanEsaStoragePoolDisk {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -1486,7 +1479,7 @@ Function Add-VsanEsaStoragePoolDisk {
 
         if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
             Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-            throw "Deployment failed. Check logs for details."
+            throw "Cluster `"$ClusterName`" does not contain any hosts."
         }
 
         # Check first if a vSAN datastore with the expected name already exists and is usable. If so, skip re-apply, config sync wait, and disk addition entirely.
@@ -1723,8 +1716,7 @@ Function Add-VsanEsaStoragePoolDisk {
         $cleanMessage = "Failed to configure vSAN ESA datastore for cluster `"$ClusterName`". Reason: $reason"
         Write-LogMessage -Type ERROR -Message $cleanMessage
         throw "Deployment failed. $cleanMessage"
-    }
-    catch {
+    } catch {
         if ($_.Exception.Message -match "Deployment cancelled by user" -or $_.Exception.Message -match "^Deployment failed\.") {
             throw
         }
@@ -1833,10 +1825,9 @@ Function Get-EsxUnformattedDisk {
         }
 
         return $unformattedDiskArray.ToArray()
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -Message "Failed to scan for unformatted disks on ESX host `"$EsxHostName`": $($_.Exception.Message)"
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to scan for unformatted disks on ESX host `"$EsxHostName`": $($_.Exception.Message)"
     }
 }
 Function Get-EsxDatastoreHealth {
@@ -1963,8 +1954,7 @@ Function Get-EsxDatastoreHealth {
         }
 
         return $datastoreStatus
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type WARNING -SuppressOutputToScreen:$Silence -Message "Datastore `"$DatastoreName`" not found or not mounted on ESX host `"$EsxHostName`": $($_.Exception.Message)"
         return [PSCustomObject]@{
             Name = $DatastoreName
@@ -2060,7 +2050,7 @@ Function Get-EsxDatastoreInfo {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Deployment failed. Check logs for details."
+        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
     }
 
     try {
@@ -2077,15 +2067,14 @@ Function Get-EsxDatastoreInfo {
         }
         catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to authorization issues: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Cannot access ESX host `"$EsxHostName`" due to authorization issues: $($_.Exception.Message)"
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to network/timeout issues: $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
-        }
-        catch {
+            throw "Cannot access ESX host `"$EsxHostName`" due to network/timeout issues: $($_.Exception.Message)"
+        } catch {
             Write-LogMessage -Type ERROR -Message "Failed to get ESX host `"$EsxHostName`": $($_.Exception.Message)"
-            throw "Deployment failed. Check logs for details."
+            throw "Failed to get ESX host `"$EsxHostName`": $($_.Exception.Message)"
         }
 
         $result = [PSCustomObject]@{
@@ -2106,11 +2095,10 @@ Function Get-EsxDatastoreInfo {
 
         # Return the result object.
         return $result
-    }
-    catch {
+    } catch {
         Write-LogMessage -Type ERROR -SuppressOutputToScreen:$Silence -Message "Failed to scan ESX host `"$EsxHostName`": $($_.Exception.Message)"
         Write-LogMessage -Type EXCEPTION -Message $_.Exception.Message
-        throw "Deployment failed. Check logs for details."
+        throw "Failed to scan ESX host `"$EsxHostName`": $($_.Exception.Message)"
     }
 }
 

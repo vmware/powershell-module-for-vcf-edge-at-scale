@@ -1270,8 +1270,7 @@ Function Start-VcfEdgeAtScale {
                 $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
                 $totalElapsed = (Get-Date) - $validationStartTime
                 Write-LogMessage -Type DEBUG -Message "Required properties validation completed for $siteIndication in $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
-            }
-            catch {
+            } catch {
                 $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
                 Write-LogMessage -Type ERROR -Message "Required properties validation failed for $siteIndication after $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds."
                 throw
@@ -1305,8 +1304,7 @@ Function Start-VcfEdgeAtScale {
             $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
             $totalElapsed = (Get-Date) - $validationStartTime
             Write-LogMessage -Type DEBUG -Message "Property format validation completed for $siteIndication in $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
-        }
-        catch {
+        } catch {
             $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
             Write-LogMessage -Type ERROR -Message "Property format validation failed for $siteIndication after $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds."
             throw
@@ -1514,13 +1512,13 @@ Function Get-ModuleTemplatesPath {
 
     if (-not $moduleBase) {
         Write-LogMessage -Type ERROR -Message "Unable to determine module installation path. Please ensure the module is installed correctly."
-        throw "Deployment failed. Check logs for details."
+        throw "Unable to determine module installation path. Please ensure the module is installed correctly."
     }
 
     $templatesPath = Join-Path $moduleBase "Templates"
     if (-not (Test-Path $templatesPath)) {
         Write-LogMessage -Type ERROR -Message "Templates directory not found at: $templatesPath."
-        throw "Deployment failed. Check logs for details."
+        throw "Templates directory not found at: $templatesPath."
     }
 
     return $templatesPath
