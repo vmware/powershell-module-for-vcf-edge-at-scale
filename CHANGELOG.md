@@ -1,12 +1,9 @@
 # Releases
 
-## 1.0.3.1001
+<a id="v1.0.3.1002"></a>
+## 1.0.3.1002
 
-- Log files now written to `<BaseDirectory>/Logs/` for `-Initialize` and `-Version` instead of the module install path.
-- Help JSON status during `-Initialize` now displays inline as `Updated:` or `Current:` consistent with the rest of the output, removing the interleaved `[INFO]` console lines.
-
-## 1.0.3.1000
-
+- Checks for updates automatically daily
 - Configurable vSphere HA admission policy for vSAN stretched clusters (`common.haPolicy` / `clusters[].haPolicy`): **`reservationBased`** when omitted, or **`slotBased`** / **`disabled`** when set; validated when the key is set. VMFS clusters keep percentage-based admission on HA re-apply after the VDS step.
 - Added support for vLCM images for clusters (using vCenter image catalog) (interactive or JSON).
 - Added support for deploying multiple clusters in a single vCenter.
@@ -23,7 +20,6 @@
 - Witness validation and disk group / disk claim setup (as needed).
 - Check if correct witness OVA is used for ESA vs OSA environment.
 - vmk NIC validation and setup for data nodes and witness.
-- vSAN Health: **Stats Primary election** is **not** silenced. When it is the **only** failing test after witness, the workflow **re-triggers** health (`Enable-VsanPerformanceService`, **`Test-VsanClusterHealth`** with bounded **`VMCreateTimeoutSeconds`** when supported, wait, re-fetch) up to several times, then may **proceed with a warning** if still transient. **`common.labenvironment`** still adds separate lab-only silent checks for other tests. Post-success **`Test-VsanClusterHealth`** may run again.
 - Ensure configuration is in sync from vCenter to hosts before supervisor deployment.
 - Ensure vSAN is not partitioned before supervisor deployment.
 - Configure vSAN for auto-rebalance at 30%.
@@ -35,11 +31,13 @@
 - Ability to disable ArgoCD or Harbor services (non-default).
 - Updated ArgoCD version
 
-## 1.0.0.2 
+<a id="v1.0.0.2"></a>
+## 1.0.0.2
 
 - Fixes Windows compatibility issues with YAML parsing and handling kubectl/vcf commands on Windows.
 - Improved error messages.
 
-## 1.0.0.1 
+<a id="v1.0.0.1"></a>
+## 1.0.0.1
 
-- Initial Release.
+- Initial Release

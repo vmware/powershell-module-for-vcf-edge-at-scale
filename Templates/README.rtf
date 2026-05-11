@@ -11,125 +11,114 @@
  {\field{\*\fldinst{HYPERLINK "LICENSE.md"}}{\fldrslt{\ul
 {\cf1 [image: https://img.shields.io/badge/License-Broadcom-green.svg]\cf0}
 }}}
- {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-{\cf1 [image: https://img.shields.io/badge/Version-1.0.3-orange.svg]\cf0}
-}}}
  {\field{\*\fldinst{HYPERLINK "https://gist.githubusercontent.com/nathanthaler/7c5ed25bb9cea6eef7f015be50e44a6f/raw/clone.json"}}{\fldrslt{\ul
 {\cf1 [image: https://img.shields.io/badge/dynamic/json?color=success&label=Clone&query=count&url=https://gist.githubusercontent.com/nathanthaler/7c5ed25bb9cea6eef7f015be50e44a6f/raw/clone.json&logo=github]\cf0}
 }}}
+ {\field{\*\fldinst{HYPERLINK "https://www.powershellgallery.com/packages/VcfEdgeAtScale"}}{\fldrslt{\ul
+{\cf1 [image: https://img.shields.io/powershellgallery/v/VcfEdgeAtScale?label=Version]\cf0}
+}}}
+ {\field{\*\fldinst{HYPERLINK "https://www.powershellgallery.com/packages/VcfEdgeAtScale"}}{\fldrslt{\ul
+{\cf1 [image: https://img.shields.io/powershellgallery/dt/VcfEdgeAtScale?label=PS%20Gallery%20Downloads]\cf0}
+}}}
+ {\field{\*\fldinst{HYPERLINK "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale/releases"}}{\fldrslt{\ul
+{\cf1 [image: https://img.shields.io/github/downloads/vmware/powershell-module-for-vcf-edge-at-scale/total?label=Github%20Release%20Downloads]\cf0}
+}}}
 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Overview\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b VcfEdgeAtScale} deploys a vSphere Supervisor end to end in {\b VCF 9.x}, following the {\field{\*\fldinst{HYPERLINK "https://blogs.vmware.com/cloud-foundation/2025/07/14/modernizing-your-edge-with-single-node-vsphere-supervisor-in-vmware-cloud-foundation-9-0/"}}{\fldrslt{\ul
-single-node supervisor design guidance
-}}}
-. It uses {\b VCF PowerCLI 9.0 or later} plus {\f1 infrastructure.json} and {\f1 supervisor.json} to drive cluster, network, storage, Supervisor, Argo CD, and Harbor. Use {\b {\f1 Start-VcfEdgeAtScale -Initialize}} to lay out or refresh the configuration directory from the module {\b {\f1 Templates}} store (see {\field{\*\fldinst{HYPERLINK "#getting-started"}}{\fldrslt{\ul
-Getting started
-}}}
-). Use {\b {\f1 Start-VcfEdgeAtScale -CollectLogs}} to build a support zip of your JSON, {\b Logs}, and {\b ServicesYaml} under {\b {\f1 VcfEdgeatScaleRootDirectory}} (see {\field{\*\fldinst{HYPERLINK "#support-bundle--collectlogs"}}{\fldrslt{\ul
-Support bundle
-}}}
-).\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Customer distribution\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Validate first:} Set {\b {\f1 VcfEdgeatScaleRootDirectory}} (or pass {\b {\f1 -InfrastructureJson}} / {\b {\f1 -SupervisorJson}}), then run {\b {\f1 Start-VcfEdgeAtScale -ValidateOnly}} (and {\b {\f1 Invoke-Pester}} on the module tests) in a non-production environment before production rollout.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Support boundary:} External links in this README point to Broadcom or community documentation for {\b VCF}, {\b PowerShell}, and {\b Kubernetes}; your support agreement for this automation is defined by whoever ships the package to you (for example your account team or internal platform team).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Identity:} The module manifest uses a unique {\b GUID} for side-by-side installs; do not duplicate the same GUID across forked packages you intend to publish separately.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF for edge sites, offering turnkey enablement of 1\u8211-2 node clusters with vSphere Supervisor and Supervisor services (Harbor and Argo CD). Leveraging two simple JSON input files, {\f1 infrastructure.json} and {\f1 supervisor.json}, it provides a flexible, idempotent deployment mechanism to drive different, validated edge deployment topologies. A Python-based JSON generator is provided to help create the JSON files needed to generate edge configurations with safeguards against configuration errors.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Prerequisites\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VCF 9.x and vCenter:} Running environment with vCenter available.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Hosts:} ESXi installed and cabled; management and required data networks reachable.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Provisioning host:} Can reach vCenter, ESXi, and the Supervisor management network.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Datacenter:} Already exists in vCenter; vLCM image is present in the Image Catalog (per {\f1 infrastructure.json}).\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vCenter:} vCenter 9.0 with a virtual datacenter and at least one vLCM image present in the Image Catalog (per {\f1 infrastructure.json}).\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Hosts:} ESX 9.0 installed: management and required data networks reachable.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Provisioning host:} Script execution system can route to vCenter, ESX, and proposed Supervisor management network.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PowerShell:} 7.4 or newer ({\field{\*\fldinst{HYPERLINK "https://github.com/PowerShell/PowerShell"}}{\fldrslt{\ul
 PowerShell
 }}}
 ).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VCF PowerCLI:} {\f1 VCF.PowerCLI} {\b 9.0+} on the provisioning host (enforced at startup and when a new log file is created).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl:} Installed; see {\field{\*\fldinst{HYPERLINK "https://kubernetes.io/docs/tasks/tools/"}}{\fldrslt{\ul
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VCF PowerCLI:} {\f1 VCF.PowerCLI} on script execution system. {\field{\*\fldinst{HYPERLINK "https://developer.broadcom.com/powercli"}}{\fldrslt{\ul
+VCF.PowerCLI
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl:} installed on script execution system {\field{\*\fldinst{HYPERLINK "https://kubernetes.io/docs/tasks/tools/"}}{\fldrslt{\ul
 Kubernetes tools
 }}}
 .\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VCF CLI:} Installed; see {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt{\ul
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VCF CLI:} installed on script execution system {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt{\ul
 Installing and using VCF CLI v9
 }}}
-.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Functions Performed by this Automation\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 This automation performs the following:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Deployment (per edge site)\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 1.\tx360\tab {\b Cluster creation and host addition}: Creates a new cluster in vCenter and adds the specified host(s) to the cluster. If a host is already managed by vCenter before it is added to the cluster, the module refuses to proceed while that host has {\b powered-on} VMs unless you confirm at a {\b Y/N} prompt (default {\b N}); it logs each running VM\u8217's name, power state, and guest OS, and the vCenter server name.\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 2.\tx360\tab {\b Cluster configuration}:\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab DRS set to Automatic\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab vLCM: image selection from the vCenter Image Catalog (by name from JSON or interactive prompt); cluster compliance check and remediation run before vSAN health checks.\sa180\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 3.\tx360\tab {\b VDS and networking}:\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab vSphere Distributed Switch (VDS) creation with required port groups (management, vMotion, vSAN, vSAN Witness as configured) and VMkernel interfaces. Management (vmk0) remains management-only; vMotion, vSAN, and vSAN Witness use dedicated VMkernels when configured. With {\b four physical NICs} (two VDS instances, {\f1 -sw1} and {\f1 -sw2}), {\b vSAN witness traffic stays on the first VDS} ({\f1 VDS-<edgesite>-sw1}): the dedicated witness VMkernel (vmk3) and its distributed port group are created there; vMotion and vSAN VMkernels remain on the second VDS ({\f1 VDS-<edgesite>-sw2}). With two NICs, all VMkernel port groups use the single VDS.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab Physical NIC connectivity check before VDS creation; active/standby uplink teaming; MTU from config (default 9000 for vMotion/vSAN, 1500 for management and vSAN Witness).\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab When {\b vSAN Witness} is a dedicated VMkernel ({\b vmk3}), {\b {\f1 gateway}} in {\b {\f1 networkingVmKernelInterfaces}} is applied on each host with {\b esxcli} (VCF PowerCLI does not configure a VMkernel default gateway on create).\sa180\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 4.\tx360\tab {\b Storage}:\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b VMFS}: Local VMFS datastore from available disk; storage policy for the edge datastore.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b vSAN OSA or vSAN ESA}: vSAN enabled (OSA or ESA per config); disk auto-claim; vSAN witness traffic (and optional witness host); vSAN performance service and alarm checks. {\b Triggered vCenter alarms} with {\b red} status require you to opt in to continue (default {\b N}), or use {\b {\f1 -AcceptBadCheckResults}} to proceed without prompting (same switch also relaxes strict vSAN health / vLCM gates elsewhere). {\b Yellow} alarms log a warning and do not block. vSAN cluster {\b health} (API) remains gated separately after witness where applicable.\sa180\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab {\b vSphere Supervisor enablement}: Supervisor enabled on the cluster with VM Operator, VKS, Velero, and Argo CD Operator services.\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 6.\tx360\tab {\b Argo CD instance}: Argo CD instance created and configured. The script appends the cluster MoRef to the Argo CD namespace (for example {\f1 argocd} \u8594 ? {\f1 argocd-c462}) so multiple supervisors on one vCenter stay unique. It prints the URL and temporary admin password when done.\par}
-{\pard \ql \f0 \sa180 \li360 \fi-360 7.\tx360\tab {\b Harbor instance}: Harbor registry created and configured from a templated data file so many edge sites stay consistent and easier to maintain.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 At-scale and targeting\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Multiple edge sites}: Deploys all clusters defined in {\f1 infrastructure.json} sequentially, or a subset via {\f1 -EdgeSite "site1,site2"} in the order specified.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Operational modes\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Validate only} ({\f1 -ValidateOnly}): JSON checks (including network segments) and YAML path checks only; no vCenter session and no deployment.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Compute only} ({\f1 -ComputeOnly}): Cluster, hosts, storage, VDS, and vLCM through remediation; stops before Supervisor, Argo CD, and Harbor. JSON/YAML validation is limited to compute paths (supervisor.json, Argo/Harbor YAML, and {\f1 common.contextName} are not required). {\b {\f1 Start-VcfEdgeAtScale}} does not run {\b {\f1 Invoke-HarborEnvVarPreflight}} in this mode, so {\b {\f1 harborConfiguration}} may still list {\b {\f1 $env:}} secrets for a later full deploy without defining those variables during compute-only preparation.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Cleanup} ({\f1 -CleanUp}): Removes the chosen scope without deploying. Values: {\f1 Supervisor}, {\f1 Compute}, {\f1 All}, {\f1 ArgoCD}, {\f1 Harbor}.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Supervisor:} Disable Supervisor; compute stays.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Compute:} Remove VDS, storage, and cluster; fails if Supervisor is still enabled.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b All:} Disable Supervisor, then remove compute.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b ArgoCD:} Remove the Argo CD supervisor namespace for that cluster; script waits until it is gone.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Harbor:} Remove the Harbor Supervisor Service from the supervisor; script waits until it is gone.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab Typed confirmation is required unless {\f1 -Force} is used with {\f1 common.labenvironment} true (for example {\f1 delete harbor for site1}; use your cleanup scope and edge site name).\sa180\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Rollback on failure:} Rollback follows the failure point (compute, Supervisor, Argo CD namespace, or Harbor service). {\f1 -RollbackOnFailure} selects always, never, or prompt (Y/N/Always). For a normal fix-and-retry workflow, choose rollback (Y, A, or {\f1 -RollbackOnFailure $true}) before you change configuration and run again. Use N or {\f1 -RollbackOnFailure $false} only when you deliberately keep a partial deployment open for hands-on debugging; when you are finished, run the matching {\f1 -CleanUp} scope (see {\b Cleanup} above) for that edge site so the next run does not stack on a broken half-state.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Helper functions\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Start-VcfEdgeAtScale -Initialize}} (and {\b {\f1 -Initialize -InitializeTemplatesOnly}}): Lay out or refresh the configuration directory from the module {\b {\f1 Templates}} store (see {\b Getting started}). When {\b {\f1 VcfEdgeatScaleRootDirectory}} is set and resolves to a {\b fully initialized} layout (same checks as a completed first run), the run states that the variable was {\b detected}, shows its value, and asks whether to initialize a {\b different} directory instead of re-entering the base path (answer {\b N} to reuse that root). The {\b Initialize summary} reports whether the user-level environment variable was persisted. Output is colorized by section (YAML, Docs, JSON, summary).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Start-VcfEdgeAtScale -CollectLogs}}: Interactive support bundle \u8212- zips {\b {\f1 infrastructure.json}}, {\b {\f1 supervisor.json}} (defaults or custom paths), plus {\b Logs} and {\b ServicesYaml} from the deployment root, to {\b {\f1 Join-Path $HOME 'VcfEdgeatScale-logs-<timestamp>.zip'}} (see {\field{\*\fldinst{HYPERLINK "#support-bundle--collectlogs"}}{\fldrslt{\ul
-Support bundle
+.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Python} The JSON generation tool requires Python 3.9 or greater. {\field{\*\fldinst{HYPERLINK "https://www.python.org/downloads/"}}{\fldrslt{\ul
+Python
 }}}
-).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Show-InfrastructureJsonConfigurationHelp} / {\b Show-SupervisorJsonConfigurationHelp}: Display configuration reference (Key, Required, Notes) for the JSON files (List, Table, GridView, or Auto by terminal width; optional {\f1 -Filter}). When {\b {\f1 VcfEdgeatScaleRootDirectory}} is set and {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory (Join-Path 'Docs' 'infrastructure-config-help.json')}} (or {\b {\f1 supervisor-config-help.json}}) exists, that copy is used; otherwise the module {\b {\f1 Templates}} files are used.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Installation\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Manual Installation\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 1.\tx360\tab Download the module files from this repository\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 2.\tx360\tab Extract to your PowerShell modules directory:\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Windows}: {\f1 $env:USERPROFILE\\Documents\\PowerShell\\Modules\\VcfEdgeAtScale\\}\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Linux/macOS}: {\f1 ~/.local/share/powershell/Modules/VcfEdgeAtScale/}\sa180\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab Import the module: {\f1 Import-Module VcfEdgeAtScale}\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Getting started\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Follow these steps in order the first time you use the module on a provisioning host.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 1.\tx360\tab {\b Install the module} (see {\b Installation} above) and confirm {\b {\f1 Import-Module VcfEdgeAtScale}} succeeds.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 2.\tx360\tab {\b Create or refresh the configuration layout} with an interactive run (default base directory is {\b {\f1 Join-Path $HOME 'VCFEdgeAtScale'}}; you can type another path, including an {\b existing} directory). This creates {\b {\f1 Docs}}, {\b {\f1 Logs}}, and {\b {\f1 ServicesYaml}} if needed, copies Supervisor service YAML and documentation from {\b {\f1 Templates}}, and prompts {\b y/N} (default {\b N}) before overwriting files that already exist. If {\b {\f1 VcfEdgeatScaleRootDirectory}} is already set and resolves to a directory that looks like a {\b completed} initialize ( {\b {\f1 Docs}}, {\b {\f1 Logs}}, {\b {\f1 ServicesYaml}}, root {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}}, and all shipped YAML files under {\b {\f1 ServicesYaml}} ), Initialize reports that it {\b detected} the variable, shows the value, and asks {\b Initialize a different directory instead? (y/N)} \u8212- answer {\b N} to refresh/overwrite in place without re-typing the base path; {\b Y} to choose a new path.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Full init:} {\f1 Start-VcfEdgeAtScale -Initialize} \u8212- seeds {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} in the base folder when they are missing; if they already exist, you are asked whether to replace each from the module template (replacing {\b {\f1 infrastructure.json}} sets {\b {\f1 common.supervisorServices.parentDirectory}} to this layout\u8217's {\b {\f1 ServicesYaml}} folder; {\b {\f1 clusters[].harborConfiguration.parentDirectory}} stays as in the template for TLS PEM paths).\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Templates only (existing site):} {\f1 Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly} \u8212- refreshes {\b {\f1 ServicesYaml}} and {\b {\f1 Docs}} only; does {\b not} create or replace the root JSON files. Use this after a module upgrade to pull new YAML or help copies without touching your edited JSON.\sa180\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab {\b {\f1 -Initialize} sets {\f1 VcfEdgeatScaleRootDirectory} for the current session} and persists it via {\b {\f1 [System.Environment]::SetEnvironmentVariable}} (User scope, cross-platform) so new PowerShell sessions inherit it automatically \u8212- no {\f1 $PROFILE} edit needed. If the persist step fails, a fallback manual command is printed. If the variable already points at a {\b folder that does not exist} (stale user or session value), {\b {\f1 -Initialize} clears} it from the session and user environment, then continues with the base-directory prompt. Every {\b {\f1 Start-VcfEdgeAtScale}} run except {\b {\f1 -Version}} needs this variable set; it defaults {\b {\f1 -InfrastructureJson}} / {\b {\f1 -SupervisorJson}} to {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'infrastructure.json'}} and {\b {\f1 'supervisor.json'}}, and writes logs under {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'Logs'}}.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 4.\tx360\tab {\b Edit configuration} in the base directory: {\b {\f1 infrastructure.json}}, {\b {\f1 supervisor.json}}, and the YAML files under {\b {\f1 ServicesYaml}} as needed for your environment (see {\b Configure template files} below).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 5.\tx360\tab {\b Optional:} {\f1 Show-InfrastructureJsonConfigurationHelp} / {\f1 Show-SupervisorJsonConfigurationHelp} for field-level reference.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 6.\tx360\tab {\b Validate:} {\f1 Start-VcfEdgeAtScale -ValidateOnly} (still requires {\b {\f1 VcfEdgeatScaleRootDirectory}} set).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 7.\tx360\tab {\b Deploy:} {\f1 Start-VcfEdgeAtScale} (add {\b {\f1 -EdgeSite}}, {\b {\f1 -ComputeOnly}}, etc. as required).\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b {\f1 -Version}} does not require {\b {\f1 VcfEdgeatScaleRootDirectory}}.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Support bundle (-CollectLogs)\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Use {\b {\f1 Start-VcfEdgeAtScale -CollectLogs}} when you need a single archive for troubleshooting or support (no vCenter session, no deployment).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Deployment root:} Uses {\b {\f1 VcfEdgeatScaleRootDirectory}} when set; if unset, you are prompted for the folder that contains {\b {\f1 Logs}} and {\b {\f1 ServicesYaml}}.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b JSON files:} You are asked whether to use the default {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} under that root, or to type full paths to other files.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Included in the zip:} Those two JSON files plus the contents of {\b {\f1 Logs}} and {\b {\f1 ServicesYaml}} under the deployment root.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Output file:} {\b {\f1 Join-Path $HOME 'VcfEdgeatScale-logs-<timestamp>.zip'}} (timestamp format {\b {\f1 yyyyMMdd-HHmmss}}).\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Do not combine {\b {\f1 -CollectLogs}} with {\b {\f1 -Initialize}}, {\b {\f1 -InitializeTemplatesOnly}}, or {\b {\f1 -Version}}.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Quick Start\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 1. What {\f1 -Initialize} places on disk\par}
+\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 1: Installation\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: PowerShell Gallery\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 Install-Module -Name VcfEdgeAtScale\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Clone from GitHub and install manually\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Open a PowerShell 7.4+ prompt (pwsh on macOS/Linux, PowerShell 7 on Windows)\line
+git clone https://github.com/vmware/powershell-module-for-vcf-edge-at-scale.git\line
+cd powershell-module-for-vcf-edge-at-scale/VcfEdgeAtScale\line
+pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 3: Download latest release from GitHub and install manually\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 $tempDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()))\line
+$fullPath = Join-Path -Path $tempDir -ChildPath "VcfEdgeAtScale.zip"\line
+Invoke-WebRequest -Uri "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale/releases/latest/download/VcfEdgeAtScale.zip" -OutFile $fullPath\line
+Expand-Archive -Path $fullPath -DestinationPath $tempDir\line
+cd $tempDir\line
+pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b {\f1 -ExecutionPolicy Bypass}} is required on Windows when running a script downloaded from the internet. It is accepted but has no effect on macOS and Linux, so the same command works on all platforms. The installer also calls {\f1 Unblock-File} on all installed module files to remove the Windows "mark of the web" that would otherwise block {\f1 Import-Module} even after the script completes.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The installer prompts whether to add {\f1 Import-Module VcfEdgeAtScale} to your {\f1 $PROFILE} so the module loads automatically in every new PowerShell session. To skip the prompt, pass {\f1 -AddToProfile} to always add the line or {\f1 -SkipProfileUpdate} to never modify the profile.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 2: Initialize Settings\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The initialization function performs the following steps\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Establishes a base directory for the module's logs and configuration files based on user input.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Copies templated JSON files into said base directory.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Copies Service YAML files into a ServiceYaml subdirectory.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Copies the JSON configuration generator tool ({\f1 veas-json-generator.py}) into place.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Copies local help files into place (accessible through the module).\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Creates an environment variable for the base directory.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Creates a logs directory for the module's debug logs.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Establishes the {\f1 $env:VcfEdgeatScaleRootDirectory} variable pointing to the base directory.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -Initialize\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b macOS / Linux:} After {\f1 -Initialize} completes, the variable is set for the current session and the line is automatically appended to your {\f1 $PROFILE} so new terminal sessions inherit it. No manual steps are required.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 What {\f1 -Initialize} places on disk:\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 After {\b {\f1 Start-VcfEdgeAtScale -Initialize}} (or {\b {\f1 -Initialize -InitializeTemplatesOnly}}), the base directory contains:\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}} at the base (full init only, unless you decline replacement when they already exist)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 ServicesYaml/}} \u8212- {\f1 1.1.0-25100889.yml}, {\f1 argocd-deployment.yml}, {\f1 harbor-data-values-v2.14.2.yml}, {\f1 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml} (list is {\b {\f1 VcfEdgeAtScaleServiceYamlTemplateFileNames}} in {\b {\f1 VcfEdgeAtScale.psm1}} when filenames change)\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 ServicesYaml/}} \u8212- {\f1 1.1.0-25100889.yml}, {\f1 argocd-deployment.yml}, {\f1 harbor-data-values-v2.14.2.yml}, {\f1 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Docs/}} \u8212- {\f1 infrastructure-config-help.json}, {\f1 supervisor-config-help.json}, {\f1 README.rtf}, {\f1 EXAMPLE.rtf}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Tools/}} \u8212- {\f1 veas-json-generator.py} \u8212- a stdlib-only Python 3 web UI for building and validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Logs/}} \u8212- daily deployment logs once you run {\b {\f1 Start-VcfEdgeAtScale}} (not created by init alone beyond the empty folder)\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 2. Configure Template Files\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Edit the template files with your environment-specific values:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b infrastructure.json}: Update vCenter details, ESX hosts, cluster name, network settings, storage configuration. {\b Supervisor service YAML} paths are normally {\f1 Join-Path(supervisorServices.parentDirectory, *YamlFileName)} (cluster can override {\f1 parentDirectory} or each file name). If you omit {\f1 parentDirectory} or a matching {\f1 *YamlFileName}, the module falls back to legacy full paths in {\b {\f1 supervisorServices.argoCdOperatorYamlPath}}, {\b {\f1 argoCdDeploymentYamlPath}}, {\b {\f1 harborDataTemplateYamlPath}}, and {\b {\f1 harborServiceYamlPath}} (cluster overrides common per key). {\b Harbor TLS} PEMs use {\f1 Join-Path(harborConfiguration.parentDirectory, fileName)} when {\b {\f1 harborConfiguration.parentDirectory}} is set; if it is omitted, set {\b {\f1 tlsCrt}}, {\b {\f1 tlsKey}}, and {\b {\f1 caCrt}} to full or infrastructure-relative paths. After combining or resolving, paths use the same directory search as the module\u8217's path resolver (current directory, then the infrastructure JSON folder).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b supervisor.json}: Configure supervisor cluster settings, network IP ranges, load balancer configuration\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b argocd-deployment.yml}: Configure ArgoCD instance settings. {\b Note:} The namespace value in this file will be automatically modified during deployment to ensure uniqueness (the cluster MoRef identifier will be appended). The namespace value in {\f1 infrastructure.json} should match the base namespace value in this file.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b 1.1.0-25100889.yml}: Typically no changes needed (ArgoCD operator package)\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b harbor-data-values-v2.14.2.yml}: Configure Harbor registry data values for supervisor service deployment\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml}: Typically no changes needed (Harbor Supervisor Service package)\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Need help configuring your JSON files?} Use the built-in helper functions to view detailed configuration reference tables:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 3: Customize JSON files\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The initialization function copies templated supervisor and infrastructure JSON files into place, but they must be customized for your specific edge site locations.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: Guided generation\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Change to your VcfEdgeatScaleRootDirectory directory.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 python3 Tools/veas-json-generator.py}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open a browser and point it to {\field{\*\fldinst{HYPERLINK "http://127.0.0.1:8080"}}{\fldrslt{\ul
+http://127.0.0.1:8080
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Follow the on-screen instructions.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Modify JSON files by hand\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open {\f1 $env:VcfEdgeatScaleRootDirectory/infrastructure.json} and {\f1 $env:VcfEdgeatScaleRootDirectory/supervisor.json} in the editor of your choice.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Modify the files\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 Start-VcfEdgeAtScale -ValidateOnly} to validate your entries.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Informational: Deployment Process (per edge site)\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 1.\tx360\tab {\b Cluster creation and host addition}: Creates a new cluster in vCenter and adds the specified host(s) to the cluster. If a host is already managed by vCenter before it is added to the cluster, the module refuses to proceed while that host has {\b powered-on} VMs unless you confirm at a {\b Y/N} prompt (default {\b N}); it logs each running VM\u8217's name, power state, and guest OS, and the vCenter server name.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 2.\tx360\tab Cluster configuration:\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab DRS set to Automatic\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab vLCM: image selection from the vCenter Image Catalog (by name from JSON or interactive prompt); cluster compliance check and remediation run before vSAN health checks (if applicable).\sa180\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 3.\tx360\tab VDS and networking:\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab vSphere Distributed Switch (VDS) creation with required port groups (management, vMotion, vSAN, vSAN Witness as configured) and VMkernel interfaces. Management (vmk0) remains management-only; vMotion, vSAN, and vSAN Witness use dedicated VMkernel interfaces when configured. With {\b four physical NICs} (two VDS instances, {\f1 -sw1} and {\f1 -sw2}), {\b vSAN witness traffic stays on the first VDS} ({\f1 VDS-<edgesite>-sw1}): the dedicated witness VMkernel (vmk3) and its distributed port group are created there; vMotion and vSAN VMkernels remain on the second VDS ({\f1 VDS-<edgesite>-sw2}). With two NICs, all VMkernel port groups use the single VDS.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab The management vmkernel interface will be automatically migrated from a standard vSwitch to a new vDS during the initialization process.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab Physical NIC connectivity check before VDS creation; active/standby uplink teaming; MTU from config (default 9000 for vMotion/vSAN, 1500 for management and vSAN Witness).\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab The {\b vSAN Witness} VMkernel interface may be configured with an optional {\b {\f1 gateway}}.\sa180\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 4.\tx360\tab {\b Storage}:\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b VMFS}: When this storage type is selected, the largest, unformatted disk is automatically selected for as a VMFS datastore.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b vSAN OSA or vSAN ESA}: For vSAN enabled configurations, OSA or ESA, auto-disk claim is utilized. Both vSAN variants storage types require a vSAN witness. The witness can be defined at the common level or the edge site level. If both are defined, the edge site takes priority. Please take note: there are two different types of vSAN witness virtual appliances, one for ESA and one for OSA; the witness ESX version must also match the ESX host version. Throughout vSAN health checks and vLCM gate checks are performed before a supervisor deployment may begin.\sa180\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab {\b vSphere Supervisor enablement}: Unless the edge site is deployed with the {\f1 -ComputeOnly} flag, a Supervisor is automatically deployed upon successful standup of the compute and networking stack. After which, the PowerShell module will check if there are any pending supervisor updates available and apply them. Unless Argo CD and/or Harbor are disabled, it will then proceed to deploy one or both of those services.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 6.\tx360\tab {\b Argo CD instance creation}: Argo CD instance created and configured. After deployment, it prints the URL and temporary admin password for immediate use.\par}
+{\pard \ql \f0 \sa180 \li360 \fi-360 7.\tx360\tab {\b Harbor instance creation}: Harbor registry created and configured from a templated data file so many edge sites stay consistent and easier to maintain. The code will also show a URL and login password post deployment.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Informational: In-application help\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 # View infrastructure.json configuration reference (auto-detects best format)\line
 Show-InfrastructureJsonConfigurationHelp\line
 \line
@@ -147,60 +136,29 @@ Show-SupervisorJsonConfigurationHelp -Format Table\line
 # Use interactive grid view (Windows PowerShell only)\line
 Show-InfrastructureJsonConfigurationHelp -Format GridView\line
 Show-SupervisorJsonConfigurationHelp -Format GridView\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Format Options:}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Auto} (default): Automatically selects the best format based on terminal width. Uses 'List' for narrow screens (< 120 characters) and 'Table' for wide screens (\u8805 ? 120 characters).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b List}: Displays each field on its own line. Works best for narrow screens (40-50+ characters). No column wrapping issues.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Table}: Displays data in a table format with horizontal separators between rows. Best for wide screens (120+ characters).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b GridView}: Opens an interactive grid view window with sorting and filtering capabilities. Works on any screen size but requires Windows PowerShell (not available in PowerShell Core on macOS/Linux).\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 These functions display a reference table with {\b Key}, {\b Required} (Yes/No/Conditional), and {\b Notes} for each configuration field.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 3. Run Deployment\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Set {\b {\f1 VcfEdgeatScaleRootDirectory}} to your base directory (for example after {\b {\f1 Start-VcfEdgeAtScale -Initialize}}, or manually). Then:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Deploy using default infrastructure.json and supervisor.json under the root directory\line
-Start-VcfEdgeAtScale\line
-\line
-# Validate configuration files only (no vCenter connection or deployment)\line
-Start-VcfEdgeAtScale -ValidateOnly\line
-\line
-# Or specify custom file paths and log level\line
-Start-VcfEdgeAtScale `\line
-    -InfrastructureJson "./config/infrastructure.json" `\line
-    -SupervisorJson "./config/supervisor.json" `\line
-    -LogLevel INFO\line
-\line
-# Deploy a single site, or run cleanup (Supervisor / Compute / All / ArgoCD), or compute-only\line
-# See the Start-VcfEdgeAtScale section below for more examples.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Module Functions\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Start-VcfEdgeAtScale\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Main deployment function that automates the complete vSphere Supervisor deployment process.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Parameters:}\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 4: Deployment\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 .\\Start-VcfEdgeAtScale\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Deployment Parameters:}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 AcceptBadCheckResults} (Switch, optional) - When specified, automatically proceed when vSAN cluster health is red or when vLCM cluster compliance remediation fails (no Y/N prompts).\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 CleanUp} (String, optional) - Cleanup only; no deploy. Must be {\f1 Supervisor}, {\f1 Compute}, {\f1 All}, {\f1 ArgoCD}, or {\f1 Harbor}. {\b Supervisor} disables Supervisor only. {\b Compute} removes VDS, storage, and cluster (fails if Supervisor exists). {\b All} disables Supervisor then removes compute. {\b ArgoCD} removes only the Argo CD supervisor namespace (polls until gone). {\b Harbor} removes only the Harbor Supervisor Service (polls until gone). Confirm with a typed phrase such as {\f1 delete harbor for site1} unless {\f1 -Force} is used with {\f1 common.labenvironment} true (see module help for the exact pattern).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 CollectLogs} (Switch, optional) - Interactive support bundle only: zips default or custom {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}} plus {\b {\f1 Logs}} and {\b {\f1 ServicesYaml}} from the deployment root to {\b {\f1 Join-Path $HOME 'VcfEdgeatScale-logs-<timestamp>.zip'}}. Mutually exclusive with {\b {\f1 -Initialize}}, {\b {\f1 -InitializeTemplatesOnly}}, and {\b {\f1 -Version}}. See {\field{\*\fldinst{HYPERLINK "#support-bundle--collectlogs"}}{\fldrslt{\ul
-Support bundle ({\f1 -CollectLogs})
-}}}
-.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 ComputeOnly} (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying ArgoCD.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 ComputeOnly} (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying Argo CD.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 EdgeSite} (String, optional) - Comma-delimited list of edge site names (e.g. {\f1 "site1,site2"}). Deploy only clusters whose {\f1 edgeSite} matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 Force} (Switch, optional) - When {\f1 common.labenvironment} is true in infrastructure JSON, bypasses the cleanup confirmation prompt when using {\f1 -CleanUp}. Has no effect otherwise; a warning is shown if used without lab.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 Initialize} (Switch, optional) - Interactive layout: creates {\b {\f1 Docs}}, {\b {\f1 Logs}}, {\b {\f1 ServicesYaml}} when missing; copies module YAML and {\b {\f1 Docs}} files with overwrite prompts; seeds or optionally replaces root {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}}; sets {\b {\f1 $env:VcfEdgeatScaleRootDirectory}} for the current session and persists it via {\b {\f1 [System.Environment]::SetEnvironmentVariable}} (User scope, cross-platform) so new sessions inherit it automatically. If {\b {\f1 VcfEdgeatScaleRootDirectory}} already points at a fully initialized tree, reports detection of the variable and asks whether to use a {\b different} directory instead of the default base path prompt. Other deployment switches are ignored except {\b {\f1 LogLevel}} and {\b {\f1 InitializeTemplatesOnly}}.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 InitializeTemplatesOnly} (Switch, optional) - Use with {\b {\f1 -Initialize}}. Refreshes {\b {\f1 ServicesYaml}} and {\b {\f1 Docs}} from {\b {\f1 Templates}} only; does not create or replace root JSON. {\b {\f1 InitializeTemplatesOnly}} without {\b {\f1 -Initialize}} throws.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 InfrastructureJson} (String, optional) - Path to infrastructure configuration JSON file. When omitted (or null/empty), defaults to {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'infrastructure.json'}} (requires {\b {\f1 VcfEdgeatScaleRootDirectory}} except {\b {\f1 -Version}}). {\b Inside} the JSON, {\f1 common.supervisorServices} / {\f1 clusters[].supervisorServices} may use {\b {\f1 parentDirectory}} plus {\b {\f1 argoCdOperatorYamlFileName}}, {\b {\f1 argoCdDeploymentYamlFileName}}, {\b {\f1 harborDataTemplateYamlFileName}}, and {\b {\f1 harborServiceYamlFileName}} (cluster overrides common per key), {\b or} legacy {\b {\f1 argoCdOperatorYamlPath}}, {\b {\f1 argoCdDeploymentYamlPath}}, {\b {\f1 harborDataTemplateYamlPath}}, and {\b {\f1 harborServiceYamlPath}} when the directory + file name style is not used. {\b {\f1 harborConfiguration}} may use {\b {\f1 parentDirectory}} with {\b {\f1 tlsCrt}}, {\b {\f1 tlsKey}}, and {\b {\f1 caCrt}} as file names, {\b or} omit {\b {\f1 parentDirectory}} and supply full paths for those PEM fields. Paths are resolved against the current directory and the infrastructure JSON folder before existence checks.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 InfrastructureJson} (String, optional) - Path to infrastructure configuration JSON file. When omitted (or null/empty), defaults to **{\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'infrastructure.json'}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 LogLevel} (String, optional) - Minimum log level for console output. Valid values: {\f1 DEBUG}, {\f1 INFO}, {\f1 ADVISORY}, {\f1 WARNING}, {\f1 EXCEPTION}, {\f1 ERROR}. Default: {\f1 "INFO"}.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 RollbackOnFailure} (Boolean, optional) - When {\f1 $true}: always rollback on failure (no prompt; for autonomous runs). When {\f1 $false}: never rollback; leave site in current state and continue to next site if any. When omitted: prompt (Y/N/Always). Rollback scope is automatic by failure state (see {\b Rollback behavior} below). {\b Operational guidance:} answer Y (or use {\f1 $true}) before you re-try after a failure so the site is torn back to a consistent state. Use {\f1 $false} or N only for intentional leave-as-is debugging; afterward run the appropriate {\f1 -CleanUp} for that scope and edge site (for example {\f1 -CleanUp Harbor -EdgeSite site1}) before another full deployment.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 SaveHarborYaml} (Switch, optional) - When specified, the per-site Harbor data values YAML generated at runtime is moved to a {\f1 HarborYaml} subdirectory under the module directory instead of being deleted after installation. {\b Warning:} this file contains Harbor passwords and secrets in plain text. A {\f1 [WARNING]} is shown whenever this switch is used. Delete the file immediately after inspecting it.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 SupervisorJson} (String, optional) - Path to supervisor configuration JSON file. When omitted (or null/empty), defaults to {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'supervisor.json'}}.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 ValidateOnly} (Switch, optional) - Run JSON validation (shallow, deeper, network segment uniqueness) and YAML checks where applicable, then exit without connecting to vCenter or deploying. With {\b {\f1 disableArgoCD}} / {\b {\f1 disableHarbor}} on all clusters in scope, Argo- or Harbor-specific rules and YAML checks are skipped; use {\b {\f1 -ValidateOnly -ComputeOnly}} to validate only compute-related JSON. Use to validate configuration files before deployment.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 Version} (Switch, optional) - Display module version and exit.\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\f1 SupervisorJson} (String, optional) - Path to supervisor configuration JSON file. When omitted (or null/empty), defaults to {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'supervisor.json'}}.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Rollback behavior:} Scope follows where the run failed: compute or vSAN before Supervisor \u8594 ? full compute teardown; after compute but before Argo CD \u8594 ? Supervisor disabled only; Argo CD issues \u8594 ? namespace removed, Supervisor kept; Harbor issues \u8594 ? Harbor service removed only. {\f1 -RollbackOnFailure} sets prompt, always, or never.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Re-trying after a failure:} Prefer rolling back first (interactive Y or A, or {\f1 -RollbackOnFailure $true}). Skipping rollback ({\f1 N} or {\f1 -RollbackOnFailure $false}) is for manual inspection only. After debugging, either re-run and choose rollback at the next failure prompt, or force a clean baseline with {\f1 -CleanUp} (same scopes as {\b Cleanup} above): for example {\f1 Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite site1} if only the Argo CD namespace should be removed, {\f1 -CleanUp Harbor} if only Harbor should be removed, {\f1 -CleanUp Supervisor} to disable the supervisor, {\f1 -CleanUp Compute} to remove compute (fails if the supervisor is still enabled), or {\f1 -CleanUp All} for supervisor then compute. Then fix your JSON or YAML and deploy again.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Examples:}\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Basic deployment with default files\line
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Default edge deployment (All edge sites defined in JSON files)\line
 Start-VcfEdgeAtScale\line
 \line
 # Deployment with custom configuration files\line
 Start-VcfEdgeAtScale `\line
-    -InfrastructureJson "config/prod-infrastructure.json" `\line
-    -SupervisorJson "config/prod-supervisor.json"\line
+    -InfrastructureJson "infrastructure-test.json" `\line
+    -SupervisorJson "prod-supervisor-test.json"\line
 \line
 # Deployment with DEBUG logging for troubleshooting\line
 Start-VcfEdgeAtScale -LogLevel DEBUG\line
@@ -210,12 +168,6 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\line
 \line
 # Deploy multiple edge sites in order (comma-delimited; only comma is allowed as separator)\line
 Start-VcfEdgeAtScale -EdgeSite "site1,site2"\line
-\line
-# Deploy specific edge site(s) with custom configuration files\line
-Start-VcfEdgeAtScale `\line
-    -EdgeSite "site2" `\line
-    -InfrastructureJson "./config/infrastructure.json" `\line
-    -SupervisorJson "./config/supervisor.json"\line
 \line
 # Autonomous run: always rollback on failure without prompting\line
 Start-VcfEdgeAtScale -RollbackOnFailure $true\line
@@ -229,10 +181,10 @@ Start-VcfEdgeAtScale -ComputeOnly\line
 # Cleanup supervisor only for site1 (compute remains); you must type "delete supervisor for site1" to confirm\line
 Start-VcfEdgeAtScale -CleanUp Supervisor -EdgeSite "site1"\line
 \line
-# Cleanup ArgoCD namespace only for site1 (supervisor and compute remain); confirm with "delete argocd for site1"\line
+# Cleanup Argo CD namespace only for site1 (supervisor and compute remain); confirm with "delete argocd for site1"\line
 Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\line
 \line
-# Cleanup Harbor Supervisor Service only for site1 (supervisor, ArgoCD, and compute remain); confirm with "delete harbor for site1"\line
+# Cleanup Harbor Supervisor Service only for site1 (supervisor, Argo CD, and compute remain); confirm with "delete harbor for site1"\line
 Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\line
 \line
 # Cleanup compute only for site1 (fails if supervisor is deployed); confirm with "delete compute for site1"\line
@@ -251,77 +203,34 @@ Start-VcfEdgeAtScale -AcceptBadCheckResults\line
 Start-VcfEdgeAtScale -ValidateOnly\line
 \line
 # Or validate explicit paths (VcfEdgeatScaleRootDirectory must still be set; these paths override the default JSON filenames only)\line
-Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "./config/infrastructure.json" -SupervisorJson "./config/supervisor.json"\line
-\line
-# Check module version\line
-Start-VcfEdgeAtScale -Version\line
-\line
-# Support bundle: zip JSON + Logs + ServicesYaml to $HOME (interactive prompts)\line
-Start-VcfEdgeAtScale -CollectLogs\line
-\line
-# ---------------------------------------------------------------------------\line
-# Harbor: pre-set environment variable secrets before running (recommended).\line
-# Each $env: reference in harborConfiguration is resolved from these variables.\line
-# SECRET_KEY must be exactly 16 characters (AES-128 requirement).\line
-# ---------------------------------------------------------------------------\line
-$env:HARBOR_ADMIN_PASSWORD = "MyAdminPassword1"\line
-$env:SECRET_KEY             = "MySecretKey12345"   # exactly 16 characters\line
-$env:DATABASE_PASSWORD      = "MyDatabasePw1"\line
-$env:CORE_SECRET_KEY        = "MyCoreSecret1"\line
-$env:JOBSERVICE_SECRET_KEY  = "MyJobSvcSecret1"\line
-$env:REGISTRY_SECRET_KEY    = "MyRegSecret1"\line
-Start-VcfEdgeAtScale -EdgeSite "site1"\line
-\line
-# Harbor: omit env vars to use just-in-time interactive prompting.\line
-# Any $env: reference that is unset triggers a masked prompt at startup\line
-# (before vCenter connection or any deployment step). The value is cached\line
-# in the process environment for the rest of the run \u8212- only prompted once.\line
-Start-VcfEdgeAtScale -EdgeSite "site1"\line
-# Console output when HARBOR_ADMIN_PASSWORD and SECRET_KEY are unset:\line
-#   [INFO] harborConfiguration.harborAdminPassword references environment variable\line
-#          "HARBOR_ADMIN_PASSWORD" which is not set.\line
-#   Enter value for HARBOR_ADMIN_PASSWORD (input masked): ****\line
-#   [INFO] harborConfiguration.secretKey references environment variable\line
-#          "SECRET_KEY" which is not set.\line
-#   Enter value for SECRET_KEY (input masked): ****************\line
-\line
-# ---------------------------------------------------------------------------\line
-# ArgoCD: roll back the ArgoCD namespace only, fix YAML, and retry.\line
-# Supervisor and Harbor remain intact; their steps are idempotently skipped.\line
-# ---------------------------------------------------------------------------\line
-Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\line
-# ... fix argocd-deployment.yml ...\line
-Start-VcfEdgeAtScale -EdgeSite "site1"\line
-\line
-# ArgoCD: after a successful deployment the console shows the temporary password\line
-# and the command to change it:\line
-#   [INFO] Login as user "admin" using temporary password: vEHJgoj3wGtHQDlI\line
-#   [INFO] To update your password run:\line
-#          "argocd.exe account update-password --server 10.40.12.203 --account admin --insecure"\line
-\line
-# ---------------------------------------------------------------------------\line
-# Harbor: roll back Harbor only, fix configuration, and retry.\line
-# Supervisor and ArgoCD remain intact; their steps are idempotently skipped.\line
-# ---------------------------------------------------------------------------\line
-Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\line
-# ... fix infrastructure.json harborConfiguration ...\line
-Start-VcfEdgeAtScale -EdgeSite "site1"\line
-\line
-# Autonomous run with Harbor and ArgoCD: always rollback on failure, no prompts\line
-Start-VcfEdgeAtScale -RollbackOnFailure $true\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b EdgeSite Parameter Usage:}\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 The {\f1 -EdgeSite} parameter lets you target one or more edge sites from your infrastructure.json instead of processing all clusters. Use a comma-delimited list to deploy multiple sites (e.g. {\f1 -EdgeSite "site1,site2"}). This is useful for the following:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Targeted deployments}: Deploy or redeploy specific edge sites without processing others\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Troubleshooting}: Isolate issues to specific clusters\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Incremental rollouts}: Deploy a subset of sites in a chosen order\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Testing}: Validate configuration for selected sites before deploying all\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b How it works:}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab When {\f1 -EdgeSite} is {\b not specified}: All clusters in the {\f1 clusters[]} array are processed sequentially. The script connects to vCenter once and processes each cluster in order, maintaining the connection between clusters that share the same vCenter FQDN.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab When {\f1 -EdgeSite} {\b is specified}: Only clusters whose {\f1 edgeSite} matches one of the comma-separated values are processed, in the order you list them (e.g. {\f1 -EdgeSite "site2,site1"} deploys site2 then site1).\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Important Notes:}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Use {\b only a comma} to separate site names. Invalid delimiters (e.g. semicolon) cause the workflow to fail.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Each value must exactly match an {\f1 edgeSite} in your infrastructure.json {\f1 clusters[]} array. If any specified site is invalid, the workflow fails with the list of valid values.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab All clusters in the same infrastructure.json share the same vCenter connection (from {\f1 common.vCenterName}), so the connection persists when processing multiple clusters.\sa180\par}
+Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure-test.json" -SupervisorJson "supervisor-test.json"\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Informational: Operational modes\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Most commands may be issued through {\b {\f1 Start-VcfEdgeAtScale}}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Deployment} ({\f1 -EdgeSite}) : Specify one or more EdgeSites\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Validate only} ({\f1 -ValidateOnly}): JSON checks (including network segments) and YAML path checks only; no vCenter session and no deployment.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Compute only} ({\f1 -ComputeOnly}): Cluster, hosts, storage, VDS, and vLCM through remediation; stops before Supervisor, Argo CD, and Harbor. JSON/YAML validation is limited to compute paths (supervisor.json, Argo/Harbor YAML, and {\f1 common.contextName} are not required).\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Cleanup} ({\f1 -CleanUp}): Removes the chosen scope without deploying. Values: {\f1 Supervisor}, {\f1 Compute}, {\f1 All}, {\f1 ArgoCD}, {\f1 Harbor}.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Supervisor:} Disable Supervisor; compute stays.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Compute:} Remove VDS, storage, and cluster; fails if Supervisor is still enabled.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b All:} Disable Supervisor, then remove compute.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b ArgoCD:} Remove the Argo CD supervisor namespace for that cluster; script waits until it is gone.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Harbor:} Remove the Harbor Supervisor Service from the supervisor; script waits until it is gone.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab Typed confirmation is required unless {\f1 -Force} is used with {\f1 common.labenvironment} true (for example {\f1 delete harbor for site1}; use your cleanup scope and edge site name).\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Rollback on failure:} Rollback follows the failure point (compute, Supervisor, Argo CD namespace, or Harbor service). {\f1 -RollbackOnFailure} selects always, never, or prompt (Y/N/Always). For a normal fix-and-retry workflow, choose rollback (Y, A, or {\f1 -RollbackOnFailure $true}) before you change configuration and run again. Use N or {\f1 -RollbackOnFailure $false} only when you deliberately keep a partial deployment open for hands-on debugging; when you are finished, run the matching {\f1 -CleanUp} scope (see {\b Cleanup} above) for that edge site so the next run does not stack on a broken half-state.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Collect logs\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 If you run into a problem and need to share a log bundle with Broadcom, please run the following:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -CollectLogs\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The module prompts whether to use the default JSON files under {\f1 $env:VcfEdgeatScaleRootDirectory} or custom paths, then zips {\f1 infrastructure.json}, {\f1 supervisor.json}, and the {\f1 Logs/} and {\f1 ServicesYaml/} folders from that root into {\b {\f1 $HOME/VcfEdgeatScale-logs-<timestamp>.zip}}.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Check module version\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -Version\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Check for new releases\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 If you install the module through PowerShell Gallery, the module will automatically check for new updates every day it is used, unless the option is disabled in the JSON. Manual checks are available for all modes of installation.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): prompts to run {\f1 Update-Module} automatically if a newer version is available.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Manual install} (git clone / {\f1 Install-VcfEdgeAtScaleModule.ps1}): announces the newer version and shows the {\f1 git pull} + re-run installer steps; no automatic install is attempted.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab If PSGallery cannot be reached (network error, proxy, or air-gap), the check is silently skipped \u8212- it is always non-fatal.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To disable the once-per-day auto-check, set {\f1 common.autoUpdate} to {\f1 false} in {\f1 infrastructure.json}.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 Start-VcfEdgeAtScale -CheckForUpdates\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Show-InfrastructureJsonConfigurationHelp\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Displays a reference table for configuring the {\f1 infrastructure.json} file (Key, Required, Notes).\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Parameters:}\par}
@@ -356,7 +265,7 @@ Show-InfrastructureJsonConfigurationHelp -Filter storagePolicy -Format List\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Storage policy and datastore configuration\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Virtual Distributed Switch (VDS) settings\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Port group and network configuration\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ArgoCD operator and deployment settings\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Argo CD operator and deployment settings\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Show-SupervisorJsonConfigurationHelp\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Displays a reference table for configuring the {\f1 supervisor.json} file (Key, Required, Notes).\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Parameters:}\par}
@@ -392,9 +301,9 @@ Show-SupervisorJsonConfigurationHelp -Filter flb -Format List\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab DNS, NTP, and search domain configuration\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab VKS management and workload network settings\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Configuration Files\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Deployment is driven by two JSON inputs: {\f1 infrastructure.json} (vCenter, clusters, networking, storage, ArgoCD paths) and {\f1 supervisor.json} (supervisor sizing, load balancer, and network IP ranges). Each {\f1 edgeSite} in {\f1 infrastructure.json} {\f1 clusters[]} must have a matching {\f1 edgeSite} in {\f1 supervisor.json} {\f1 siteSpec[]}.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Deployment is driven by two JSON inputs: {\f1 infrastructure.json} (vCenter, clusters, networking, storage, Argo CD paths) and {\f1 supervisor.json} (supervisor sizing, load balancer, and network IP ranges). Each {\f1 edgeSite} in {\f1 infrastructure.json} {\f1 clusters[]} must have a matching {\f1 edgeSite} in {\f1 supervisor.json} {\f1 siteSpec[]}.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 infrastructure.json\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 This file defines vCenter connection, datacenter, and shared naming prefixes; then one or more clusters, each with ESX hosts, storage type, networking segments, and ArgoCD paths. Many fields are {\b optional} and have defaults so you can omit them for a minimal config.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 This file defines vCenter connection, datacenter, and shared naming prefixes; then one or more clusters, each with ESX hosts, storage type, networking segments, and Argo CD paths. Many fields are {\b optional} and have defaults so you can omit them for a minimal config.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Structure:}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 common}} \u8211- Settings used for all clusters (one vCenter, one datacenter, shared prefixes and content library). Prefixes and {\f1 esxUser} are optional; when omitted, defaults apply (see tables below).\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 clusters}} \u8211- Array of cluster objects. Each cluster is identified by {\f1 edgeSite} (must match a site in {\f1 supervisor.json}). Per-cluster you define ESX hosts, storage type, and network segments. {\b {\f1 supervisorServices}} file names, {\b {\f1 parentDirectory}}, or legacy {\b {\f1 *YamlPath}} keys may be defined here to override the common defaults.\sa180\par}
@@ -412,13 +321,13 @@ Broadcom KB 401679
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\f1 Invoke-VsanClusterAlarmCheckAndRemediate} classifies each blocking red alarm with {\b {\f1 Test-VsanTriggeredAlarmIsHclRelated}} (matches {\b HCL}, {\b hardware compatibility}, {\b hardware vSAN support}, and {\b controller firmware/driver/disk mode/on HCL}). When any blocking red alarm is HCL-related, the {\b ERROR/WARNING} banner, {\b {\f1 AcceptBadCheckResults}} message, {\b Y/N} prompt, and the {\f1 Y}-accepted log line all explicitly state that Supervisor enablement is expected to fail until the cluster is HCL-conformant.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab For production-equivalent edge deployments use {\b HCL-listed} storage controllers, firmware revisions, and drivers, and keep {\b {\f1 common.labenvironment}} set to {\b {\f1 false}}. Use {\b {\f1 true}} only for nested/demo environments where HCL conformance is known not to hold and Supervisor enablement is expected to work only because WCP's nested-host path tolerates those signals; do not rely on a successful lab-mode run to predict non-lab-mode behavior.\sa180\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Supervisor service YAML files:} Preferred: under {\f1 supervisorServices}, set {\b {\f1 parentDirectory}} (folder containing the YAML files) and {\b {\f1 argoCdOperatorYamlFileName}}, {\b {\f1 argoCdDeploymentYamlFileName}}, {\b {\f1 harborDataTemplateYamlFileName}}, and {\b {\f1 harborServiceYamlFileName}} (file names only). Define these at {\f1 common} and/or override per {\f1 clusters[].supervisorServices} (cluster wins per key). If a cluster omits a file name, the common value is used when resolving the combined path. {\b Legacy:} omit {\b {\f1 parentDirectory}} (and rely on {\b {\f1 \\*YamlPath}} instead) by setting {\b {\f1 argoCdOperatorYamlPath}}, {\b {\f1 argoCdDeploymentYamlPath}}, {\b {\f1 harborDataTemplateYamlPath}}, and {\b {\f1 harborServiceYamlPath}} to full or JSON-relative paths at {\f1 common} and/or per cluster (cluster overrides common per key). When {\f1 disableArgoCD} is true, Argo paths are not required. When {\f1 disableHarbor} is true, Harbor YAML paths are not required. {\f1 supervisorServices.nameSpacePrefix} defaults to {\f1 argocd} if omitted. {\f1 supervisorServices.vmClass} is optional; when omitted, the script assigns all VM classes reported by vCenter to the ArgoCD namespace.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Disabling supervisor services:} Set {\f1 supervisorServices.disableArgoCD: true} or {\f1 supervisorServices.disableHarbor: true} at {\f1 common} (affects all clusters) or per {\f1 clusters[]} (overrides common for that cluster only). Both default to {\f1 false} (enabled). When {\f1 disableArgoCD} is true, the ArgoCD service, namespace, operator, and instance steps are all skipped and Argo file names do not need to be configured. When {\f1 disableHarbor} is true, Harbor service registration, data values generation, and installation are all skipped; {\f1 harborConfiguration} is not required and Harbor YAML file names do not need to be configured.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Disabling supervisor services:} Set {\f1 supervisorServices.disableArgoCD: true} or {\f1 supervisorServices.disableHarbor: true} at {\f1 common} (affects all clusters) or per {\f1 clusters[]} (overrides common for that cluster only). Both default to {\f1 false} (enabled). When {\f1 disableArgoCD} is true, the Argo CD service, namespace, operator, and instance steps are all skipped and Argo file names do not need to be configured. When {\f1 disableHarbor} is true, Harbor service registration, data values generation, and installation are all skipped; {\f1 harborConfiguration} is not required and Harbor YAML file names do not need to be configured. {\b Service flags also affect the LB virtual server network IP minimum} (see {\f1 flbVirtualServerNetwork.flbNetworkIpAddressCount} in the supervisor.json reference): Harbor enabled requires at least 50 IPs; Argo CD only requires at least 20; neither requires at least 10.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Harbor configuration:} Each cluster needs a {\f1 harborConfiguration} block unless {\f1 disableHarbor} is true.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Hostname:} {\f1 harborConfiguration.hostname} is required (FQDN or IP that DNS accepts) unless {\b {\f1 common.labenvironment}} is {\b {\f1 true}}, Harbor is enabled, and {\b {\f1 tlsCrt}} / {\b {\f1 tlsKey}} are {\b both omitted}\u8212-then the hostname is read from the top-level {\f1 hostname:} line in the Harbor data values template ({\b {\f1 harborDataTemplateYamlFileName}} / {\b {\f1 harborDataTemplateYamlPath}}). You may still set {\b {\f1 hostname}} in JSON to override the template.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Volume sizes:} Optional {\f1 registryVolumeSize}, {\f1 jobserviceVolumeSize}, {\f1 databaseVolumeSize}, {\f1 redisVolumeSize}, {\f1 trivyVolumeSize} use {\f1 <positive integer>Gi} (for example {\f1 10Gi}).\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Secrets:} Optional keys map into the Harbor data values YAML. Prefix with {\f1 $env:VAR} to load at runtime so secrets stay out of JSON.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Prompts:} If {\f1 $env:} is used and the variable is unset, the script asks once during pre-flight (masked input) and caches the value for the process. Plain text in JSON is never prompted for.\par}
-{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b TLS:} {\b {\f1 tlsCrt}} and {\b {\f1 tlsKey}} must be defined {\b together} or {\b both omitted}; defining only one is an error. When using your own PEMs, either set {\b {\f1 harborConfiguration.parentDirectory}} and use {\b {\f1 tlsCrt}} / {\b {\f1 tlsKey}} as {\b file names} under that directory (both required together), with optional {\b {\f1 caCrt}} as a file name when both TLS files are set, {\b or} omit {\b {\f1 parentDirectory}} and set {\b {\f1 tlsCrt}}, {\b {\f1 tlsKey}}, and optional {\b {\f1 caCrt}} to full or infrastructure-relative PEM paths (legacy). Paths are validated before deploy. When {\b {\f1 common.labenvironment}} is {\b {\f1 true}} and {\b both} {\b {\f1 tlsCrt}} and {\b {\f1 tlsKey}} are omitted, the module generates a {\b self-signed} RSA certificate (via .NET, works on Windows and macOS/Linux), injects it into the Harbor data values YAML, and uses the same PEM for Supervisor container-registry trust; post-install {\b Harbor connection details} note that TLS is self-signed for lab.\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b TLS:} {\b {\f1 tlsCrt}} and {\b {\f1 tlsKey}} must be defined {\b together} or {\b both omitted}; defining only one is an error. When using your own PEMs, either set {\b {\f1 harborConfiguration.parentDirectory}} and use {\b {\f1 tlsCrt}} / {\b {\f1 tlsKey}} as {\b file names} under that directory (both required together), with optional {\b {\f1 caCrt}} as a file name when both TLS files are set, {\b or} omit {\b {\f1 parentDirectory}} and set {\b {\f1 tlsCrt}}, {\b {\f1 tlsKey}}, and optional {\b {\f1 caCrt}} to full or infrastructure-relative PEM paths (legacy). Paths are validated before deploy. When {\b {\f1 common.labenvironment}} is {\b {\f1 true}} and {\b both} {\b {\f1 tlsCrt}} and {\b {\f1 tlsKey}} are omitted, the module generates a {\b self-signed} RSA certificate (via .NET, works on Windows and macOS/Linux), injects it into the Harbor data values YAML, and uses the same PEM for Supervisor container-registry trust; post-install {\b Harbor connection details} note that TLS is self-signed for lab. Set {\b {\f1 common.preserveAutoGeneratedKeyCertPair}} to {\b {\f1 true}} to save the generated key and certificate to {\b {\f1 $env:VcfEdgeatScaleRootDirectory/HarborKeyCerts/<edgeSite>/}} (as {\b {\f1 <edgeSite>.key}} / {\b {\f1 <edgeSite>.crt}}) after a successful deployment; on non-Windows the private key is restricted to owner-read-only ({\f1 chmod 0600}). This has no effect when {\f1 tlsCrt}/{\f1 tlsKey} are supplied or when {\f1 labenvironment} is {\f1 false}.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Service YAML:} Download the Harbor Supervisor Service Carvel package from Broadcom; set {\b {\f1 harborServiceYamlFileName}} (with {\b {\f1 parentDirectory}}) under {\f1 supervisorServices}, or use legacy {\b {\f1 harborServiceYamlPath}} / {\b {\f1 harborDataTemplateYamlPath}}.\par}
 {\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\b Order and rollback:} Harbor installs after Argo CD. Failure rolls back Harbor only so you can fix and re-run. {\f1 -CleanUp Harbor} removes Harbor without touching Supervisor or Argo CD.\sa180\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Network segment names} must be lower-case and RFC1123-compliant; they are matched to supervisor.json network references (case-sensitive).\sa180\par}
@@ -533,11 +442,37 @@ Broadcom KB 401679
 \cellx2880\cellx5760\cellx8640
 \trkeep\intbl
 {
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 autoUpdate}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. Default: omitted (auto-check enabled). When {\f1 false}, disables the once-per-day automatic PSGallery version check. The auto-check runs regardless of install source \u8212- PSGallery installs are offered {\f1 Update-Module}; manually installed copies are shown {\f1 git pull} + re-run installer steps. All PSGallery failures are non-fatal. Use {\f1 Start-VcfEdgeAtScale -CheckForUpdates} to check manually at any time.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 labenvironment}\par}
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean lab mode. JSON property name is case-insensitive; {\b {\f1 labenvironment}} matches {\b {\f1 Templates/infrastructure.json}} and {\b {\f1 Docs/infrastructure-config-help.json}}. Default {\f1 false}. When {\f1 true}, silences the vSAN HCL / hardware-compatibility health checks ({\f1 controlleronhcl}, {\f1 controllerdiskmode}, {\f1 controllerfirmware}, {\f1 controllerdriver}, {\f1 hclhostbadstate}) plus transient {\f1 advcfgsync}, and lab-filters the third-party IO filter alarm. This masks the red vSAN alarm signal but does {\b not} change the underlying hardware state; Supervisor enablement (WCP) still enforces cluster/host HCL conformance downstream, so a cluster that deploys cleanly in lab mode may fail to enable Supervisor outside lab mode on identical hardware. Also permits {\f1 -Force} to bypass cleanup confirmation and allows Harbor self-signed TLS when {\f1 tlsCrt}/{\f1 tlsKey} are both omitted. Keep {\f1 false} for production-equivalent deployments; use {\f1 true} only for nested / demo environments. See the {\b Lab environment and the vSAN HCL} bullet above.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 preserveAutoGeneratedKeyCertPair}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. Only meaningful when {\f1 labenvironment} is {\f1 true} and Harbor TLS is auto-generated ({\f1 tlsCrt} and {\f1 tlsKey} both omitted). When {\f1 true}, saves the generated private key as {\f1 <edgeSite>.key} and certificate as {\f1 <edgeSite>.crt} to {\b {\f1 $env:VcfEdgeatScaleRootDirectory/HarborKeyCerts/<edgeSite>/}} after a successful deployment. On non-Windows, the private key is restricted to owner-read-only ({\f1 chmod 0600}). Ignored if {\f1 labenvironment} is {\f1 false} or {\f1 tlsCrt}/{\f1 tlsKey} are supplied. Default {\f1 false} when absent.\par}
 \cell}
 }
 \intbl\row}
@@ -748,7 +683,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. When true, skips ArgoCD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins. Default: false.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. When true, skips Argo CD deployment (service, namespace, operator, instance) for all clusters. Cluster-level override wins. Default: false.\par}
 \cell}
 }
 \intbl\row}
@@ -826,7 +761,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Yes\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 VCF context name used by VCF CLI for ArgoCD.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 VCF context name used by VCF CLI for Argo CD.\par}
 \cell}
 }
 \intbl\row}
@@ -1062,7 +997,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. Overrides {\f1 common.supervisorServices.disableArgoCD} for this cluster only. When true, skips ArgoCD deployment for this cluster. Default: false.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Boolean. Overrides {\f1 common.supervisorServices.disableArgoCD} for this cluster only. When true, skips Argo CD deployment for this cluster. Default: false.\par}
 \cell}
 }
 \intbl\row}
@@ -1088,7 +1023,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 ArgoCD namespace prefix. Omit for default {\f1 argocd}; script appends cluster MoRef for uniqueness.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Argo CD namespace prefix. Omit for default {\f1 argocd}; script appends cluster MoRef for uniqueness.\par}
 \cell}
 }
 \intbl\row}
@@ -1101,7 +1036,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Array of VM class names for ArgoCD namespace. Omit to assign all VM classes from vCenter.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Array of VM class names for the Argo CD namespace. Omit to assign all VM classes from vCenter.\par}
 \cell}
 }
 \intbl\row}
@@ -1746,7 +1681,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Yes\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 IP count for the FLB virtual-server network range; required by shallow validation.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 IP count for the FLB virtual-server network range. {\b Minimum enforced by validation based on enabled services}: Harbor enabled \u8594 ? {\b 50}; Argo CD only \u8594 ? {\b 20}; neither service \u8594 ? {\b 10}.\par}
 \cell}
 }
 \intbl\row}
@@ -1869,7 +1804,7 @@ VMware supervisor content library
 \intbl\row}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Configuration Help}: Run {\f1 Show-SupervisorJsonConfigurationHelp} to view the full reference (Key, Required, Notes). Use {\f1 -Format List} for narrow screens or {\f1 -Format Table} for wide; {\f1 -Filter} for wildcard search on keys.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Harbor and ArgoCD Deployment Notes\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Harbor and Argo CD Deployment Notes\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Harbor: Secret Management and Just-in-Time Environment Variables\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Harbor requires six secrets. Each {\f1 harborConfiguration} secret field supports two modes:\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Plain-text in JSON} \u8211- Value is used as-is. Not recommended for production secrets in version-controlled files.\par}
@@ -1917,36 +1852,36 @@ Exception: Deployment aborted: harborConfiguration.secretKey must be exactly 16 
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Harbor credentials display:} After a successful Harbor deployment, the script always prints the Harbor login details (URL, admin username, and password) directly to the console, regardless of the configured {\f1 LogLevel}. This ensures credentials are never silently swallowed even when running at a high log level.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Supervisor container image registry registration:} After Harbor succeeds, the module registers it on the Supervisor ({\b Supervisor \u8594 ? Configure \u8594 ? Container Registries} in vCenter) using the Harbor VIP, admin login, and optional {\f1 caCrt}, and sets it as the default registry.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 On {\f1 -CleanUp Harbor}, {\f1 -CleanUp Supervisor}, or {\f1 -CleanUp All}, that registration is removed before the Harbor service uninstall. Failures there log as warnings; finish the step in vCenter if needed.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 ArgoCD: Deployment Output, Namespace Uniqueness, and Fallback\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Deployment output:} After a successful ArgoCD instance deployment, the script logs the initial admin credentials and provides the command to change them:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Argo CD: Deployment Output, Namespace Uniqueness, and Fallback\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Deployment output:} After a successful Argo CD instance deployment, the script logs the initial admin credentials and provides the command to change them:\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 [INFO] Login as user "admin" using temporary password: vEHJgoj3wGtHQDlI\line
 [INFO] To update your password run: "argocd.exe account update-password\line
        --server 10.40.12.203 --account admin --insecure"\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Change the password immediately after deployment using the provided command.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Namespace uniqueness:} The ArgoCD namespace in {\f1 argocd-deployment.yml} is automatically suffixed with the cluster MoRef (e.g. {\f1 argocd} \u8594 ? {\f1 argocd-c462}). This prevents conflicts when multiple supervisor clusters share the same vCenter. The base namespace in {\f1 argocd-deployment.yml} must match {\f1 supervisorServices.nameSpacePrefix} in {\f1 infrastructure.json}; the suffix is appended automatically.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b ArgoCD rollback and retry:} If ArgoCD deployment fails (pods do not reach ready state, instance timeout, or YAML misconfiguration), rollback removes only the ArgoCD namespace. The supervisor and Harbor remain intact. To fix the YAML and retry:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # 1. Remove only the ArgoCD namespace; supervisor and Harbor remain intact.\line
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Namespace uniqueness:} The Argo CD namespace in {\f1 argocd-deployment.yml} is automatically suffixed with the cluster MoRef (e.g. {\f1 argocd} \u8594 ? {\f1 argocd-c462}). This prevents conflicts when multiple supervisor clusters share the same vCenter. The base namespace in {\f1 argocd-deployment.yml} must match {\f1 supervisorServices.nameSpacePrefix} in {\f1 infrastructure.json}; the suffix is appended automatically.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Argo CD rollback and retry:} If Argo CD deployment fails (pods do not reach ready state, instance timeout, or YAML misconfiguration), rollback removes only the Argo CD namespace. The supervisor and Harbor remain intact. To fix the YAML and retry:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # 1. Remove only the Argo CD namespace; supervisor and Harbor remain intact.\line
 Start-VcfEdgeAtScale -CleanUp ArgoCD -EdgeSite "site1"\line
 \line
 # 2. Fix your argocd-deployment.yml, then re-run.\line
 #    Supervisor and Harbor steps are idempotently skipped.\line
 Start-VcfEdgeAtScale -EdgeSite "site1"\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Harbor rollback and retry:} Harbor failure rolls back only the Harbor Supervisor Service. The supervisor and ArgoCD remain intact and are idempotently verified (not re-deployed) on retry:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Harbor rollback and retry:} Harbor failure rolls back only the Harbor Supervisor Service. The supervisor and Argo CD remain intact and are idempotently verified (not re-deployed) on retry:\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 # 1. If you declined the rollback prompt or the service is stuck in ERROR state:\line
 Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\line
 \line
 # 2. Fix the issue (see Troubleshooting below), then retry.\line
-#    Supervisor and ArgoCD steps are idempotently skipped.\line
+#    Supervisor and Argo CD steps are idempotently skipped.\line
 Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Autonomous (unattended) runs:} Use {\f1 -RollbackOnFailure $true} to roll back automatically on any failure without prompting (recommended default for unattended pipelines). Use {\f1 -RollbackOnFailure $false} only when you accept a partial deployment and will run scoped {\f1 -CleanUp} yourself before the next attempt. Omit the parameter for an interactive Y/N/Always prompt at each failure.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Logging\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The module provides comprehensive logging with multiple levels:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b DEBUG}: Per-step and per-host sub-operation detail (pNIC adds, vmk0 migration, vSAN witness traffic idempotency skips, supervisor build sub-steps, REST session steps, ArgoCD per-pod status, etc.). Use {\f1 -LogLevel DEBUG} for troubleshooting.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b INFO}: Phase-level milestones visible during a standard deployment (cluster created, hosts added, VDS created, supervisor ready, ArgoCD pods ready, Harbor configured, etc.). Default level.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b ADVISORY}: Important notices that don't indicate problems\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b WARNING}: Warning messages about potential issues\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b EXCEPTION}: Caught exceptions that were handled\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b ERROR}: Error messages indicating failures\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b DEBUG}: Per-step and per-host sub-operation detail (pNIC adds, vmk0 migration, vSAN witness traffic idempotency skips, supervisor build sub-steps, REST session steps, Argo CD per-pod status, etc.). Use {\f1 -LogLevel DEBUG} for troubleshooting.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b INFO}: Phase-level milestones visible during a standard deployment (cluster created, hosts added, VDS created, supervisor ready, Argo CD pods ready, Harbor configured, etc.). Default level.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b ADVISORY}: Important notices that don't indicate problems.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b WARNING}: Warning messages about potential issues.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b EXCEPTION}: Caught exceptions that were handled.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b ERROR}: Error messages indicating failures.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 All levels are always written to the log file regardless of the configured {\f1 -LogLevel}. Console output is filtered to the configured level and above.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Log files are created under {\b {\f1 Join-Path $env:VcfEdgeatScaleRootDirectory 'Logs'}} (not under the module folder) with the naming pattern:\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 <your-base-directory>/Logs/VcfEdgeAtScale-YYYY-MM-DD.log\par}
@@ -2009,7 +1944,7 @@ Enter value for harborConfiguration.secretKey (env:SECRET_KEY): ________________
 {\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab {\b Check the vCenter Events for detailed error text} \u8212- the {\f1 ERROR} message from the script (e.g. {\f1 "OCI Registry"}) identifies the failing component but not the root cause. The full error is in vCenter Events for the supervisor.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 4.\tx360\tab {\b Admission or scheduling:} HA admission can block new VMs even when free capacity looks sufficient. For vSAN OSA/ESA, try {\b {\f1 haPolicy}} in {\f1 infrastructure.json} ({\f1 reservationBased}, {\f1 slotBased}, or {\f1 disabled}) or change HA admission in vCenter, then retry.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b Recovery:}\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Roll back Harbor only (supervisor and ArgoCD remain).\line
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Roll back Harbor only (supervisor and Argo CD remain).\line
 Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite "site1"\line
 \line
 # Fix the issue, then retry.\line
@@ -2023,35 +1958,14 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab {\b VCF.PowerCLI}\par}
 {\pard \ql \f0 \sa180 \li360 \fi0 \f1 Install-Module -Name VCF.PowerCLI\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 External Tools\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl}: Required for ArgoCD operations\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vcf CLI}: Required for supervisor management operations\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl}: Required for Argo CD operations\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vcf CLI}: Required for supervisor management operations\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} (Python 3, no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory. Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, and more) and saves both files.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Environment\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab VMware Cloud Foundation 9.x\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab vCenter Server with administrative access\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab ESX hosts in connected state\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Network connectivity to vCenter and ESX hosts\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Version History\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
- for detailed version history.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.0.3.1000\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Summary aligned with {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
- and {\field{\*\fldinst{HYPERLINK "RELEASE_NOTES.md"}}{\fldrslt{\ul
-RELEASE_NOTES.md
-}}}
-: PowerShell module packaging for VCF 9.x edge Supervisor deployments (multi-site {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}}). Highlights include vLCM catalog workflows, stretched vSAN ESA/OSA, Harbor and Argo CD per site, optional {\b {\f1 -ComputeOnly}}, {\b {\f1 disableArgoCD}} / {\b {\f1 disableHarbor}}, lab-mode behavior ({\b {\f1 common.labenvironment}}), HA policy for vSAN multi-host clusters, VMkernel and witness handling, rollback/cleanup flows, cross-platform {\b {\f1 Import-Module}}, {\b {\f1 -Initialize}} persisting {\b {\f1 VcfEdgeatScaleRootDirectory}} via {\b {\f1 [System.Environment]::SetEnvironmentVariable}}, and {\b {\f1 Templates/*-config-help.json}} shipped under {\b {\f1 Docs/}} for {\b {\f1 Show-*ConfigurationHelp}}. See {\b {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
-} for the authoritative per-release list.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.0.2\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Significant reliability and performance improvements\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Cross-platform compatibility fixes\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Enhanced error handling and logging\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Contributing\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 This module is maintained by Broadcom. For issues, feature requests, or contributions, please refer to the project repository.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 License\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Copyright (c) 2026 Broadcom. All Rights Reserved.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 See the module manifest or LICENSE file for full license details.\par}
@@ -2067,7 +1981,7 @@ VCF Documentation
 }}}
 \sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Support troubleshooting\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Use the {\b log file} under {\f1 logs/} (see {\f1 New-LogFile} / run output for the path). Search the log for the same keywords as the console.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Use the {\b log file} under {\f1 Logs/} (see {\f1 New-LogFile} / run output for the path). Search the log for the same keywords as the console.\par}
 {
 \trowd \trgaph120
 \clbrdrb\brdrs\cellx2880\clbrdrb\brdrs\cellx5760\clbrdrb\brdrs\cellx8640
@@ -2122,7 +2036,7 @@ PASSWORD_HANDLING.md
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 ERROR + WARNING credential lines after {\f1 New-VCenterRestApiSession}\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Wrong SSO password, locked user, or missing API privileges\u8212-not the ESXi root password. Confirm {\f1 common.vCenterUser} and account role.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Wrong SSO password, locked user, or missing API privileges\u8212-not the ESX root password. Confirm {\f1 common.vCenterUser} and account role.\par}
 \cell}
 }
 \intbl\row}
@@ -2148,7 +2062,7 @@ PASSWORD_HANDLING.md
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 DEBUG around {\f1 Get-VcfSdkInitializeCommand}\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\b Import-Module VCF.PowerCLI} in the same session; version must be {\b 9.0+}. Cmdlet names differ slightly between builds; the module resolves them when the SDK is loaded.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Ensure VCF.PowerCLI {\b 9.0+} is installed ({\f1 Install-Module VCF.PowerCLI}), then re-run {\f1 Import-Module VcfEdgeAtScale}. The module loads the required SDK submodule automatically via {\f1 RequiredModules}. Cmdlet names differ slightly between builds; the module resolves them when the SDK is loaded.\par}
 \cell}
 }
 \intbl\row}
@@ -2166,7 +2080,6 @@ PASSWORD_HANDLING.md
 }
 \intbl\row}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Automated {\b smoke tests} (no vCenter): from the module directory run {\f1 Invoke-Pester ./Tests -Output Normal}.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Related Resources\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cloud-foundation.html"}}{\fldrslt{\ul
 VMware Cloud Foundation Documentation
@@ -2177,61 +2090,10 @@ Single-Node vSphere Supervisor Design Guidance
 }}}
 \par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/using-argo-cd-service/argocd-custom-resrouce-reference.html"}}{\fldrslt{\ul
-ArgoCD Service Documentation
+Argo CD Service Documentation
 }}}
 \sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Execution Steps\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 1. Install VCF.PowerCLI Module\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Install the required PowerCLI module for VCF.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 2. Install module and lay out configuration\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Recommended:} Install {\b VcfEdgeAtScale} per {\field{\*\fldinst{HYPERLINK "#installation"}}{\fldrslt{\ul
-Installation
-}}}
-, run {\b {\f1 Import-Module VcfEdgeAtScale}}, then run {\b {\f1 Start-VcfEdgeAtScale -Initialize}} (see {\field{\*\fldinst{HYPERLINK "#getting-started"}}{\fldrslt{\ul
-Getting started
-}}}
-). That creates {\b {\f1 ServicesYaml}}, {\b {\f1 Docs}}, {\b {\f1 Logs}}, copies module YAML and documentation, seeds or offers to replace root {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}}, and prints how to set {\b {\f1 VcfEdgeatScaleRootDirectory}}.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 To refresh only shipped YAML and {\b {\f1 Docs}} files on an existing base directory without touching your JSON, use {\b {\f1 Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly}}.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Alternate:} If you cannot run interactively, create the same folder layout manually and copy files from the module {\b {\f1 Templates}} directory next to {\b {\f1 VcfEdgeAtScale.psm1}}, then set {\b {\f1 VcfEdgeatScaleRootDirectory}} to the folder that contains {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}}.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 For sample JSON and {\b {\f1 Start-VcfEdgeAtScale}} usage, see {\field{\*\fldinst{HYPERLINK "EXAMPLE.md"}}{\fldrslt{\ul
-EXAMPLE.md
-}}}
-.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 3. Configure infrastructure.json\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Open {\f1 infrastructure.json} and review all the fields, updating as required for your environment. {\b Accuracy here is crucial for successful deployment.}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Set {\f1 supervisorServices.parentDirectory} and {\f1 supervisorServices.argoCdOperatorYamlFileName} / {\f1 argoCdDeploymentYamlFileName} to your copies of the operator YAML and {\f1 argocd-deployment.yml} unless Argo CD is disabled ({\f1 supervisorServices.disableArgoCD}), or use legacy {\f1 argoCdOperatorYamlPath} / {\f1 argoCdDeploymentYamlPath} with full paths.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Configure Harbor template paths and {\f1 harborConfiguration} unless Harbor is disabled ({\f1 supervisorServices.disableHarbor}); use {\f1 *YamlFileName} + {\f1 parentDirectory} or legacy {\f1 harborDataTemplateYamlPath} / {\f1 harborServiceYamlPath}.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Argo CD namespace:} The base namespace in {\f1 argocd-deployment.yml} must match {\f1 supervisorServices.nameSpacePrefix} (default {\f1 argocd}). During deployment the script appends the cluster MoRef (e.g. {\f1 argocd} \u8594 ? {\f1 argocd-c462}) so multiple supervisors on one vCenter do not collide. Edit {\f1 argocd-deployment.yml} only when you need a non-default instance spec; see {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vsphere-supervisor-services-and-standalone-components/latest/using-supervisor-services/using-argo-cd-service/argocd-custom-resrouce-reference.html"}}{\fldrslt{\ul
-Argo CD service documentation
-}}}
-.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Quick Reference}: Use the built-in helper function to view the configuration reference table:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Auto-detects best format based on terminal width\line
-Show-InfrastructureJsonConfigurationHelp\line
-\line
-# Or specify format explicitly\line
-Show-InfrastructureJsonConfigurationHelp -Format List    # For narrow screens\line
-Show-InfrastructureJsonConfigurationHelp -Format Table     # For wide screens\line
-Show-InfrastructureJsonConfigurationHelp -Format GridView # Interactive (Windows only)\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Alternatively, refer to the table in {\f1 Admin.Guide.Single.Node.Supervisor.rtf} for detailed configuration guidance.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Optional:} Run {\f1 Start-VcfEdgeAtScale -ValidateOnly} to validate JSON and YAML paths without connecting to vCenter. See {\field{\*\fldinst{HYPERLINK "EXAMPLE.md"}}{\fldrslt{\ul
-EXAMPLE.md
-}}}
- for sample output.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 4. Configure supervisor.json\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Open {\f1 supervisor.json} and review all the fields, updating as required for your environment.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 {\b Quick Reference}: Use the built-in helper function to view the configuration reference table:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Auto-detects best format based on terminal width\line
-Show-SupervisorJsonConfigurationHelp\line
-\line
-# Or specify format explicitly\line
-Show-SupervisorJsonConfigurationHelp -Format List    # For narrow screens\line
-Show-SupervisorJsonConfigurationHelp -Format Table     # For wide screens\line
-Show-SupervisorJsonConfigurationHelp -Format GridView # Interactive (Windows only)\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Alternatively, refer to the table in {\f1 Admin.Guide.Single.Node.Supervisor.rtf} for detailed configuration guidance.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 5. Argo CD operator YAML (optional)\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 If Broadcom publishes a newer Argo CD operator package than the template ({\f1 1.1.0-25100889.yml}), download it from the product documentation and set {\f1 supervisorServices.argoCdOperatorYamlFileName} in {\f1 infrastructure.json} to that file name (under {\f1 parentDirectory}), or set {\f1 supervisorServices.argoCdOperatorYamlPath} to the full path.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 6. Install VCF CLI\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Install VCF CLI\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Install the VCF CLI per Broadcom: {\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt{\ul
 Installing and Using VCF CLI v9
 }}}
@@ -2249,6 +2111,9 @@ Kubernetes install tools
 ) and the {\b VCF CLI} ({\field{\*\fldinst{HYPERLINK "https://techdocs.broadcom.com/us/en/vmware-cis/vcf/vcf-9-0-and-later/9-0/building-your-cloud-applications/getting-started-with-the-tools-for-building-applications/installing-and-using-vcf-cli-v9.html"}}{\fldrslt{\ul
 Installing and Using VCF CLI v9
 }}}
-) before you run the module (see step 6).\par}
+) before you run the module (see {\field{\*\fldinst{HYPERLINK "#install-vcf-cli"}}{\fldrslt{\ul
+Install VCF CLI
+}}}
+ above).\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 \bullet \tx360\tab {\b Platforms:} Tested on Windows and macOS with PowerShell 7.4+.\sa180\par}
 }

@@ -1,5 +1,97 @@
 # Usage Examples
 
+## Manual installation of module
+
+```Powershell
+$tempDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()))
+$fullPath = Join-Path -Path $tempDir -ChildPath "VcfEdgeAtScale.zip"
+Invoke-WebRequest -Uri "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale/releases/latest/download/VcfEdgeAtScale.zip" -OutFile $fullPath
+Expand-Archive -Path $fullPath -DestinationPath $tempDir
+cd $tempDir
+pwsh -ExecutionPolicy Bypass -File .\Install-VcfEdgeAtScaleModule.ps1
+PS C:\Users\Administrator\AppData\Local\Temp\518be7b1-f3a2-47cc-928a-9f34d15c13a3> pwsh -Executionpolicy Bypass -File .\Install-VcfEdgeAtScaleModule.ps1
+
+VcfEdgeAtScale Module Installer
+================================
+
+PREREQUISITE: VCF.PowerCLI 9.0 or newer must be installed before importing this module.
+
+Source      : PS C:\Users\Administrator\AppData\Local\Temp\518be7b1-f3a2-47cc-928a-9f34d15c13a3
+Destination : C:\Users\Administrator\Documents\PowerShell\Modules\VcfEdgeAtScale
+
+  Copying VcfEdgeAtScale.psd1...
+  Copying VcfEdgeAtScale.psm1...
+  Copying PSScriptAnalyzerSettings.psd1...
+  Copying Private...
+  Copying Templates...
+  Copying Tools...
+Unblocking installed module files (Windows execution policy)...
+
+Validating module manifest...
+Importing module into current session...
+          Welcome to VCF PowerCLI!
+
+Log in to a vCenter Server or ESX host:              Connect-VIServer
+To find out what commands are available, type:       Get-VICommand
+To show searchable help for all PowerCLI commands:   Get-PowerCLIHelp
+Once you've connected, display all virtual machines: Get-VM
+If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
+
+       Copyright (c) Broadcom. All Rights Reserved.
+
+
+  Module loaded (version 1.0.3.1002).
+
+Auto-load on every session
+  Add the following line to your PowerShell profile (C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
+    Import-Module VcfEdgeAtScale
+
+Add this line to your profile now? (Y/N, Enter=no): Y
+Added 'Import-Module VcfEdgeAtScale' to C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1.
+  The module will load automatically in every new PowerShell session.
+
+Installation complete.
+  Start-VcfEdgeAtScale -Initialize
+```
+
+## Example of initializing the script's configuration directory
+
+```Powershell
+PS C:\Users\Administrator> Start-VcfEdgeAtScale -Initialize
+
+VcfEdgeAtScale initialize
+  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace.
+
+  Default base directory:  C:\Users\Administrator\VCFEdgeAtScale
+
+Press Enter to use the default, or type a full directory path:
+
+  Supervisor service YAML (ServicesYaml)
+    Copied: 1.1.0-25100889.yml
+    Copied: argocd-deployment.yml
+    Copied: harbor-data-values-v2.14.2.yml
+    Copied: legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
+
+  Documentation (Docs)
+    Copied: EXAMPLE.rtf
+    Copied: README.rtf
+    Copied: infrastructure-config-help.json
+    Copied: supervisor-config-help.json
+
+  Root JSON files
+    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).
+    Copied supervisor.json to deployment root.
+
+=== Initialize summary ===
+  Deployment root: C:\Users\Administrator\VCFEdgeAtScale
+  Base directory: created (it did not exist before).
+  Subdirectories created: Docs, Logs, ServicesYaml.
+  See sections above for YAML, Docs, and JSON actions.
+  Optional Docs sources may show WARNING if your module install is missing RTF/help files.
+  Root JSON: created or refreshed per your answers above.
+  VcfEdgeatScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
+```
+
 ## Show parameters for Start-VcfEdgeAtScale
 
 ```Powershell
@@ -231,46 +323,6 @@ clusters[].networking.networkingVmKernelInterfaces[].vlanId  Conditional VLAN ID
 clusters[].networking.networkingVmKernelInterfaces[].netmask Conditional IPv4 netmask for the VMkernel (e.g. 255.255.255.0).
 clusters[].networking.networkingVmKernelInterfaces[].ipList  Conditional Array of exactly two unique IPv4 addresses (order aligns with esxHosts order).
 clusters[].networking.networkingVmKernelInterfaces[].gateway Conditional Optional. Used on the vSAN Witness entry only: IPv4 gateway applied via esxcli after the VMkernel exists.
-
-
-```
-
-## Example of initializing the script's configuration directory
-
-```Powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Initialize
-
-VcfEdgeAtScale initialize
-  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace.
-
-  Default base directory:  C:\Users\Administrator\VCFEdgeAtScale
-
-Press Enter to use the default, or type a full directory path:
-
-  Supervisor service YAML (ServicesYaml)
-    Copied: 1.1.0-25100889.yml
-    Copied: argocd-deployment.yml
-    Copied: harbor-data-values-v2.14.2.yml
-    Copied: legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml
-
-  Documentation (Docs)
-    Copied: EXAMPLE.rtf
-    Copied: README.rtf
-    Copied: infrastructure-config-help.json
-    Copied: supervisor-config-help.json
-
-  Root JSON files
-    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).
-    Copied supervisor.json to deployment root.
-
-=== Initialize summary ===
-  Deployment root: C:\Users\Administrator\VCFEdgeAtScale
-  Base directory: created (it did not exist before).
-  Subdirectories created: Docs, Logs, ServicesYaml.
-  See sections above for YAML, Docs, and JSON actions.
-  Optional Docs sources may show WARNING if your module install is missing RTF/help files.
-  Root JSON: created or refreshed per your answers above.
-  VcfEdgeatScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
 ```
 
 ## Example of single edge side deployment (four vNICs, vSAN-OSA, two VKS networks)
@@ -535,4 +587,26 @@ To confirm cleanup, type exactly (or copy/paste): delete supervisor for localdis
 [INFO] Deactivating supervisor on cluster "cluster-localdisk-edge2" (ID: domain-c4000)... fully deactivated after 550 seconds. You can retry deployment.
 [INFO] Supervisor deactivated on cluster "cluster-localdisk-edge2". Compute (VDS, vSAN/VMFS, cluster) remains.
 [INFO] CleanUp (Supervisor) completed. Exiting without deployment.
+```
+
+## Example of creating a log bundle
+
+```Powershell
+PS C:\Users\Administrator> start-VcfEdgeAtScale -CollectLogs
+
+Default JSON files under deployment root:
+  C:\Users\Administrator\VCFEdgeAtScale\infrastructure.json
+  C:\Users\Administrator\VCFEdgeAtScale\supervisor.json
+Use these two files in the zip? (Y/n): y
+
+CollectLogs finished. Archive saved to:
+  C:\Users\Administrator\VcfEdgeatScale-logs-20260508-073118.zip
+PS C:\Users\Administrator>
+```
+
+## Example of check the module version
+
+```Powershell
+PS C:\Users\Administrator> start-VcfEdgeAtScale -Version
+[INFO] VcfEdgeAtScale version: 1.0.3.1002
 ```
