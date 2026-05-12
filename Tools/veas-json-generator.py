@@ -58,7 +58,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1009"
+UI_VERSION = "1.0.3.1010"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -82,6 +82,9 @@ _DEFAULT_WORKLOAD_SERVICE_COUNT = 512
 # ceiling). Values outside this range pass the power-of-two check but produce unusable or
 # absurdly large service CIDRs at deployment time.
 _MIN_WORKLOAD_SERVICE_COUNT = 256
+# Seconds to wait before opening the browser after the HTTP server starts, giving
+# the server time to bind and begin accepting connections before the first request.
+_BROWSER_OPEN_DELAY_SECONDS = 0.8
 _MAX_WORKLOAD_SERVICE_COUNT = 65536
 # VMkernel MTU bounds. 1500 is standard Ethernet; 9190 is the VMware jumbo-frame ceiling.
 # Management and vSAN Witness VMkernels are always 1500 regardless of this setting.
@@ -1361,7 +1364,7 @@ def _load_html_template() -> bytes:
     same directory. Run 'Start-VcfEdgeAtScale -Initialize' to install it into
     the deployment Tools directory if it is missing.
     """
-    template_path = Path(__file__).parent / _TEMPLATE_FILE
+    template_path = SCRIPT_DIR / _TEMPLATE_FILE
     if not template_path.is_file():
         raise FileNotFoundError(
             f"UI template not found at {template_path}. "
@@ -1555,11 +1558,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
         if path == "/":
             try:
                 body = _load_html_template()
-            except FileNotFoundError as exc:
-                self.send_json(503, {"error": str(exc)})
-                return
             except OSError as exc:
-                self.send_json(503, {"error": f"Could not read UI template: {exc}"})
+                self.send_json(503, {"error": str(exc)})
                 return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -1967,7 +1967,7 @@ def main():
 
     if not args.no_browser:
         def _open_browser():
-            time.sleep(0.8)
+            time.sleep(_BROWSER_OPEN_DELAY_SECONDS)
             webbrowser.open(browser_url)
         threading.Thread(target=_open_browser, daemon=True).start()
 

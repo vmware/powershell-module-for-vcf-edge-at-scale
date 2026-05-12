@@ -68,16 +68,6 @@
             "name": "mgmtnetwork",
             "vlanId": "303",
             "gateway": "10.30.13.1/24"
-          },
-          {
-            "name": "vmotionnetwork",
-            "vlanId": "304",
-            "gateway": "10.30.14.1/24"
-          },
-          {
-            "name": "vsannetwork",
-            "vlanId": "305",
-            "gateway": "10.30.15.1/24"
           }
         ],
         "networkingVmKernelInterfaces": [
@@ -95,10 +85,10 @@
           },
           {
             "service": "vSAN Witness",
-            "vlanId": "302",
+            "vlanId": "306",
             "netmask": "255.255.255.0",
-            "gateway": "10.30.12.1",
-            "ipList": ["10.30.12.12", "10.30.12.13"]
+            "gateway": "10.30.16.1",
+            "ipList": ["10.30.16.12", "10.30.16.13"]
           }
         ]
       }
