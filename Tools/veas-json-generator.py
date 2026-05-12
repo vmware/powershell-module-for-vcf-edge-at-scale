@@ -36,6 +36,7 @@ import io
 import ipaddress
 import json
 import os
+import errno
 import re
 import socket
 import ssl
@@ -56,7 +57,8 @@ SCRIPT_DIR = Path(__file__).parent.resolve()
 _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
-UI_VERSION = "1.0.3.1003"
+# Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
+UI_VERSION = "1.0.3.1009"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -1556,6 +1558,9 @@ class ConfigHandler(BaseHTTPRequestHandler):
             except FileNotFoundError as exc:
                 self.send_json(503, {"error": str(exc)})
                 return
+            except OSError as exc:
+                self.send_json(503, {"error": f"Could not read UI template: {exc}"})
+                return
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(body)))
@@ -1933,7 +1938,7 @@ def main():
     try:
         server = HTTPServer((args.host, args.port), ConfigHandler)
     except OSError as exc:
-        if exc.errno == 48 or exc.errno == 98:  # EADDRINUSE (macOS=48, Linux=98)
+        if exc.errno == errno.EADDRINUSE:
             print(
                 f"ERROR: Port {args.port} is already in use.\n"
                 f"  Another instance of this server may already be running.\n"
