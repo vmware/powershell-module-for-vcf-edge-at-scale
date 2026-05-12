@@ -403,7 +403,7 @@ Function Invoke-SupervisorOnlyRollback {
 
     $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -RollbackContext "supervisor-only rollback (cluster `"$ClusterName`")" -SingleSite:$SingleSite.IsPresent
     if ($rollbackDecision -eq "DoNotRollback") {
-        throw $Script:RollbackSkippedContinueToNextSiteMessage
+        throw [RollbackSkippedException]::new()
     }
     $Script:RollbackAttempted = $true
     Write-LogMessage -Type INFO -Message "Starting supervisor-only rollback for cluster `"$ClusterName`" (disabling supervisor; compute/vSAN/VDS unchanged)."
@@ -465,7 +465,7 @@ Function Invoke-ArgoCDOnlyRollback {
 
     $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -RollbackContext "ArgoCD-only rollback (cluster `"$ClusterName`")" -ForcePrompt
     if ($rollbackDecision -eq "DoNotRollback") {
-        throw $Script:RollbackSkippedContinueToNextSiteMessage
+        throw [RollbackSkippedException]::new()
     }
     $Script:RollbackAttempted = $true
     Write-LogMessage -Type INFO -Message "Starting ArgoCD-only rollback for cluster `"$ClusterName`" (removing namespace `"$ArgoCDNamespace`"; supervisor left intact)."
@@ -966,7 +966,7 @@ Function Invoke-HarborOnlyRollback {
 
     $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "Harbor-only rollback (cluster `"$ClusterName`")" -SingleSite:$SingleSite.IsPresent
     if ($rollbackDecision -eq "DoNotRollback") {
-        throw $Script:RollbackSkippedContinueToNextSiteMessage
+        throw [RollbackSkippedException]::new()
     }
     $Script:RollbackAttempted = $true
     Write-LogMessage -Type INFO -Message "Starting Harbor-only rollback for cluster `"$ClusterName`" (removing service `"$Service`" from supervisor; supervisor and Argo CD left intact)."
@@ -3015,8 +3015,9 @@ Function Invoke-SupervisorCreation {
         Complete supervisor specification object from Initialize-VcenterNamespaceManagementSupervisorsEnableOnComputeClusterSpec.
         This object must include control plane, and workloads.
 
-        .PARAMETER VcenterInsecurePassword
-        vCenter password as a string for REST when resolving an existing supervisor ID (overridden by Script:VcenterInsecurePassword when set).
+        .PARAMETER VcenterCredential
+        Optional PSCredential for REST when resolving an existing supervisor ID (used when supervisor already exists).
+        Defaults to $Script:VcenterCredential when not supplied (standard deployment flow).
 
         .PARAMETER InsecureTls
         Switch to bypass SSL certificate validation for vCenter REST API connections.
@@ -3029,13 +3030,13 @@ Function Invoke-SupervisorCreation {
         • ErrorMessage (String): Error details if Success is $false, $null if successful
 
         .EXAMPLE
-        $result = Invoke-SupervisorCreation -ClusterId "domain-c8" -ClusterName "Cluster01" -SupervisorName "supervisor-01" -SupervisorSpec $spec -VcenterInsecurePassword $pass
+        $result = Invoke-SupervisorCreation -ClusterId "domain-c8" -ClusterName "Cluster01" -SupervisorName "supervisor-01" -SupervisorSpec $spec -VcenterCredential $cred
         if ($result.Success) {
             Write-LogMessage -Type INFO -Message "Supervisor ID: $($result.SupervisorId)"
         }
 
         .EXAMPLE
-        $result = Invoke-SupervisorCreation -ClusterId $ClusterId -ClusterName $ClusterName -SupervisorName $SupervisorName -SupervisorSpec $spec -VcenterInsecurePassword $vcPass -InsecureTls
+        $result = Invoke-SupervisorCreation -ClusterId $ClusterId -ClusterName $ClusterName -SupervisorName $SupervisorName -SupervisorSpec $spec -VcenterCredential $cred -InsecureTls
         if ($result.IsExisting) {
             Write-LogMessage -Type INFO -Message "Using existing supervisor: $($result.SupervisorId)"
         }
@@ -3062,7 +3063,7 @@ Function Invoke-SupervisorCreation {
         [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCustomObject]$SupervisorSpec,
-        [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Invoke-SupervisorCreation function..."
@@ -3117,12 +3118,12 @@ Function Invoke-SupervisorCreation {
         if ($errorMessage -match "already has Workloads enabled") {
             Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" already has supervisor enabled. Retrieving existing supervisor ID..."
 
-            # Build parameters for Get-SupervisorId. Use script-scoped password when set (main deployment flow) so all paths use the same value; otherwise use parameter.
-            $passwordForGetSupervisorId = if ($null -ne $Script:VcenterInsecurePassword) { $Script:VcenterInsecurePassword } else { $VcenterInsecurePassword }
+            # Build parameters for Get-SupervisorId. Use script-scoped credential when set (main deployment flow).
+            $effectiveCredential = if ($null -ne $Script:VcenterCredential) { $Script:VcenterCredential } else { $VcenterCredential }
             $getSupervisorParams = @{
                 supervisorName = $SupervisorName
                 VcenterUser = $Script:VCenterUser
-                VcenterInsecurePassword = $passwordForGetSupervisorId
+                VcenterCredential = $effectiveCredential
                 silence = $true
             }
 
@@ -3597,18 +3598,6 @@ Function Add-Supervisor {
 
         When omitted, certificate validation follows vCenter and PowerCLI defaults.
 
-        .PARAMETER VcenterInsecurePassword
-        Optional vCenter password string for Get-SupervisorId when resolving an existing supervisor ID.
-
-        When a supervisor already exists:
-        - The function catches the "already has Workloads enabled" error from the API
-        - Calls Get-SupervisorId with this password to retrieve the existing supervisor's ID
-        - Returns the existing supervisor ID instead of failing
-
-        If not provided and a supervisor already exists, the function will not be able to retrieve
-        the existing supervisor ID and will exit with an error. This password is used for REST API
-        authentication to vCenter's namespace management endpoints.
-
         .PARAMETER SingleSite
         When set, the rollback prompt on supervisor timeout shows only Y/N (no A=always), since there is no next site.
 
@@ -3620,10 +3609,10 @@ Function Add-Supervisor {
         and check interval of 15 seconds. SSL certificate validation is enforced (secure default).
 
         .EXAMPLE
-        $supervisorId = Add-Supervisor -ClusterId $ClusterId -ClusterName $ClusterName -InfrastructureJson $SupervisorJson -StoragePolicyId $policyId -VcenterInsecurePassword $vcPassword
+        $supervisorId = Add-Supervisor -ClusterId $ClusterId -ClusterName $ClusterName -InfrastructureJson $SupervisorJson -StoragePolicyId $policyId -VcenterCredential $cred
 
         Creates a supervisor and captures the returned supervisor ID for use in subsequent operations
-        such as namespace creation or ArgoCD deployment. Includes vCenter password to handle cases where
+        such as namespace creation or ArgoCD deployment. Includes vCenter credential to handle cases where
         a supervisor already exists on the cluster. If supervisor exists, retrieves and returns its ID.
 
         .EXAMPLE
@@ -3634,15 +3623,15 @@ Function Add-Supervisor {
         frequent status updates to reduce API load.
 
         .EXAMPLE
-        $supervisorId = Add-Supervisor -ClusterId $ClusterId -ClusterName $ClusterName -InfrastructureJson $SupervisorJson -InsecureTls -StoragePolicyId $policyId -VcenterInsecurePassword $password
+        $supervisorId = Add-Supervisor -ClusterId $ClusterId -ClusterName $ClusterName -InfrastructureJson $SupervisorJson -InsecureTls -StoragePolicyId $policyId -VcenterCredential $cred
 
-        Creates a supervisor in a lab environment with SSL certificate validation bypassed. The -insecureTls
+        Creates a supervisor in a lab environment with SSL certificate validation bypassed. The -InsecureTls
         flag is passed to Get-SupervisorId when checking for existing supervisors. This is useful for
         development environments with self-signed certificates but should NOT be used in production.
 
         .EXAMPLE
         try {
-            $supervisorId = Add-Supervisor -ClusterId $cluster -ClusterName $name -InfrastructureJson $config -StoragePolicyId $policy -VcenterInsecurePassword $pass
+            $supervisorId = Add-Supervisor -ClusterId $cluster -ClusterName $name -InfrastructureJson $config -StoragePolicyId $policy -VcenterCredential $cred
         } catch {
             Write-LogMessage -Type ERROR -Message "Failed to create supervisor: $($_.Exception.Message)"
         }
@@ -3709,7 +3698,7 @@ Function Add-Supervisor {
         [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$MgmtIpAssignmentMode="STATIC",
         [Parameter(Mandatory = $false)] [ValidateSet("STATIC")] [String]$PrimaryWorkloadIpAssignmentMode="STATIC",
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
-        [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-Supervisor function..."
@@ -3783,7 +3772,7 @@ Function Add-Supervisor {
             ClusterName = $ClusterName
             SupervisorName = $SupervisorName
             SupervisorSpec = $supervisorSpec
-            VcenterInsecurePassword = $VcenterInsecurePassword
+            VcenterCredential = $VcenterCredential
             InsecureTls = $InsecureTls
         }
         $creationResult = Invoke-SupervisorCreation @creationParams
@@ -3833,7 +3822,7 @@ Function Add-Supervisor {
             Write-LogMessage -Type ERROR -Message "Supervisor did not become ready within $TotalWaitTime seconds."
             $deactivateDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "supervisor deactivation (cluster `"$ClusterName`") - deactivate supervisor to leave cluster in a clean state for retry" -SingleSite:$SingleSite.IsPresent
             if ($deactivateDecision -eq "DoNotRollback") {
-                throw $Script:RollbackSkippedContinueToNextSiteMessage
+                throw [RollbackSkippedException]::new()
             }
             Write-LogMessage -Type INFO -Message "Deactivating supervisor on cluster `"$ClusterName`" to leave cluster in a clean state for retry."
             $disableResult = Disable-SupervisorOnCluster -ClusterId $ClusterId -ClusterName $ClusterName -SupervisorId $supervisorId -SuppressConfirm
@@ -9067,13 +9056,17 @@ Function New-VCenterRestApiSession {
         • Detailed error logging for troubleshooting
 
         IMPORTANT - Password validation:
-        • Supply VcenterPassword (SecureString) and/or VcenterInsecurePassword (String). If both are missing or empty, the function returns Success = $false (no Basic auth "user:" call).
+        • Supply VcenterPassword (SecureString), VcenterCredential (PSCredential), or VcenterInsecurePassword (String). Priority: VcenterPassword > VcenterCredential > VcenterInsecurePassword. If all are missing or empty, the function returns Success = $false (no Basic auth "user:" call).
         • A null or empty effective password would produce Basic auth "user:" and cause 401 from vCenter; that case is rejected before Invoke-RestMethod.
     #>
 
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('UsePSCredentialType', '')]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential,
         [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$VcenterInsecurePassword,
         [Parameter(Mandatory = $false)] [SecureString]$VcenterPassword,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterUser
@@ -9136,14 +9129,14 @@ Function New-VCenterRestApiSession {
             }
         }
 
-        $plainForAuth = Get-VcenterRestApiPlainPassword -VcenterPassword $VcenterPassword -VcenterInsecurePassword $VcenterInsecurePassword
+        $plainForAuth = Get-VcenterRestApiPlainPassword -VcenterPassword $VcenterPassword -VcenterCredential $VcenterCredential -VcenterInsecurePassword $VcenterInsecurePassword
         if ([string]::IsNullOrWhiteSpace($plainForAuth)) {
-            Write-LogMessage -Type ERROR -Message "No vCenter password supplied to New-VCenterRestApiSession. Provide -VcenterPassword (SecureString) or -VcenterInsecurePassword (String)."
+            Write-LogMessage -Type ERROR -Message "No vCenter password supplied to New-VCenterRestApiSession. Provide -VcenterCredential (PSCredential), -VcenterPassword (SecureString), or -VcenterInsecurePassword (String)."
             return [PSCustomObject]@{
                 Success = $false
                 SessionHeaders = $null
                 SessionId = $null
-                ErrorMessage = "No vCenter password supplied. Provide VcenterPassword or VcenterInsecurePassword."
+                ErrorMessage = "No vCenter password supplied. Provide VcenterCredential, VcenterPassword, or VcenterInsecurePassword."
             }
         }
 
@@ -9785,12 +9778,16 @@ Function Get-SupervisorId {
         Invoke-RestMethod
     #>
 
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('UsePSCredentialType', '')]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=5,
         [Parameter(Mandatory = $false)] [Switch]$InsecureTls,
         [Parameter(Mandatory = $false)] [Switch]$Silence,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=3600,
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential,
         [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword,
         [Parameter(Mandatory = $false)] [SecureString]$VcenterPassword,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VcenterUser
@@ -9820,14 +9817,15 @@ Function Get-SupervisorId {
             return $null
         }
 
-        # Use script-scoped password when set (main deployment flow). That value was derived via Marshal from the
+        # Use script-scoped credential when set (main deployment flow). That value was derived via Marshal from the
         # PSCredential that succeeded for Connect-Vcenter. Do NOT use GetNetworkCredential().Password—it can return
         # empty or wrong encoding on some platforms and cause 401 Unauthorized. See PASSWORD_HANDLING.md.
-        $hasScriptPassword = ($null -ne $Script:VcenterInsecurePassword -and $Script:VcenterInsecurePassword -ne "")
-        if (-not $hasScriptPassword) {
+        $effectiveCredential = if ($null -ne $Script:VcenterCredential) { $Script:VcenterCredential } else { $VcenterCredential }
+        $hasCredential = ($null -ne $effectiveCredential)
+        if (-not $hasCredential) {
             $resolvedPlain = Get-VcenterRestApiPlainPassword -VcenterPassword $VcenterPassword -VcenterInsecurePassword $VcenterInsecurePassword
             if ([String]::IsNullOrWhiteSpace($resolvedPlain)) {
-                Write-LogMessage -Type ERROR -Message "No vCenter password available for REST API session. Set Script:VcenterInsecurePassword from Connect-Vcenter, or pass -VcenterPassword (SecureString) or -VcenterInsecurePassword."
+                Write-LogMessage -Type ERROR -Message "No vCenter password available for REST API session. Set Script:VcenterCredential from Connect-Vcenter, or pass -VcenterCredential (PSCredential), -VcenterPassword (SecureString), or -VcenterInsecurePassword."
                 return $null
             }
         }
@@ -9842,8 +9840,8 @@ Function Get-SupervisorId {
             InsecureTls = $InsecureTls
             VcenterUser = $VcenterUser
         }
-        if ($hasScriptPassword) {
-            $sessionParams.VcenterInsecurePassword = $Script:VcenterInsecurePassword
+        if ($hasCredential) {
+            $sessionParams.VcenterCredential = $effectiveCredential
         }
         elseif ($null -ne $VcenterPassword) {
             $sessionParams.VcenterPassword = $VcenterPassword
@@ -10093,6 +10091,9 @@ Function Get-OrCreateSupervisor {
         Get-StoragePolicyId
     #>
 
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('UsePSCredentialType', '')]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
@@ -10104,26 +10105,27 @@ Function Get-OrCreateSupervisor {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyId,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorName,
-        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential,
+        [Parameter(Mandatory = $false)] [AllowNull()] [AllowEmptyString()] [String]$VcenterInsecurePassword
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-OrCreateSupervisor function..."
 
-    # Use script-scoped password when set (main deployment flow). Same reason as Get-SupervisorId—avoids 401 from wrong encoding. See PASSWORD_HANDLING.md.
-    $passwordToUse = if ($null -ne $Script:VcenterInsecurePassword -and $Script:VcenterInsecurePassword -ne "") { $Script:VcenterInsecurePassword } else { $VcenterInsecurePassword }
+    # Use script-scoped credential when set (main deployment flow). Same reason as Get-SupervisorId—avoids 401 from wrong encoding. See PASSWORD_HANDLING.md.
+    $effectiveCredential = if ($null -ne $Script:VcenterCredential) { $Script:VcenterCredential } else { $VcenterCredential }
 
     # Check if supervisor already exists, if not create it.
     if ($InsecureTls) {
-        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -insecureTls)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -insecureTls -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
+        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterCredential $effectiveCredential -insecureTls)) {
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterCredential $effectiveCredential -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -insecureTls -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
         } else {
-            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -silence -insecureTls
+            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterCredential $effectiveCredential -silence -insecureTls
         }
     } else {
-        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse)) {
-            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterInsecurePassword $passwordToUse -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
+        if (-not (Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterCredential $effectiveCredential)) {
+            $supervisorId = Add-Supervisor -infrastructureJson $SupervisorJson -storagePolicyId $StoragePolicyId -clusterId $ClusterId -clusterName $ClusterName -supervisorName $SupervisorName -VcenterCredential $effectiveCredential -edgeSite $EdgeSite -networkSegments $NetworkSegments -SingleSite:$SingleSite.IsPresent -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix
         } else {
-            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $passwordToUse -silence
+            $supervisorId = Get-SupervisorId -supervisorName $SupervisorName -VcenterUser $Script:VCenterUser -VcenterCredential $effectiveCredential -silence
         }
     }
 
@@ -11178,6 +11180,7 @@ Function Update-HarborYamlContent {
     #>
 
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
     Param (
         [Parameter(Mandatory = $false)] [String]$CaCrtPath,
         [Parameter(Mandatory = $false)] [String]$CoreSecret,
@@ -11435,6 +11438,7 @@ Function New-HarborDataValuesFile {
     #>
 
     [CmdletBinding()]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
     Param (
         [Parameter(Mandatory = $false)] [String]$CaCrtPath,
         [Parameter(Mandatory = $false)] [String]$CoreSecret,

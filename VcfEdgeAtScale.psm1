@@ -82,8 +82,11 @@ $Script:CleanUpOnly = $false
 $Script:RollbackOnFailurePreference = $null
 # When user chooses "Always" at the prompt, no further prompts for remaining sites; always rollback. Reset at start of each run.
 $Script:RollbackAlwaysFromPrompt = $false
-# Exception message thrown when user chooses No (or preference is never); caught by main loop to continue to next site.
-$Script:RollbackSkippedContinueToNextSiteMessage = "Rollback skipped by user; continue to next site."
+# Typed exception thrown when user chooses No (or preference is never); caught by main loop to continue to next site.
+# Using a class instead of a string sentinel makes the control flow refactor-safe and type-checkable.
+class RollbackSkippedException : System.Exception {
+    RollbackSkippedException() : base("Rollback skipped by user; continue to next site.") {}
+}
 # Set when Invoke-VsanDeploymentRollback (or other rollback) is entered so the main catch does not prompt/run rollback again.
 $Script:RollbackAttempted = $false
 # Set when rollback fails (e.g. Remove-Cluster failed); main catch rethrows immediately so the script fails exit.
@@ -100,17 +103,35 @@ $Script:InfrastructureJsonParentForPathResolution = $null
 $Script:NewLogFileCreatedThisSession = $false
 
 # =============================================================================
-# ADDING A NEW SUPERVISOR SERVICE (e.g. "Velero", "Cert-Manager")
-# When adding a third supervisor service alongside ArgoCD and Harbor, touch ALL of:
-#   1. VcfEdgeAtScale.psm1      — Add $Script:<Service>PhaseStarted = $false here
-#   2. Private/Validation.ps1   — Get-EffectiveSupervisorServiceFlag ValidateSet: add "disable<Service>"
-#   3. Private/Validation.ps1   — Get-EffectiveSupervisorServicesYamlPath ValidateSet: add YAML path property names
-#   4. Private/Validation.ps1   — Invoke-VcfEdgeAtScaleCleanup ValidateSet: add "<Service>" cleanup scope
-#   5. Private/Validation.ps1   — Initialize-VcfEdgeAtScale: add deployment block and rollback branch
-#   6. Private/EntryPoints.ps1  — Start-VcfEdgeAtScale ValidateSet: add "<Service>" to -CleanUp
-#   7. Private/EntryPoints.ps1  — Start-VcfEdgeAtScale: add YAML preflight validation for new service
-#   8. VcfEdgeAtScale.psm1      — Add $Script:ArgoCD<Service>*TimeoutSeconds constants if timeouts are configurable
+# SUPERVISOR SERVICE REGISTRY
+# Central definition of all supervisor services. When adding a new service (e.g. "Velero"),
+# add an entry here and update the functions listed in each property's inline comment.
+# This replaces the previous 8-step manual checklist.
+#
+# Properties per service:
+#   DisableFlag      — string used in infrastructure JSON and Get-EffectiveSupervisorServiceFlag ValidateSet
+#   YamlPathProperty — logical YAML path property name for Get-EffectiveSupervisorServicesYamlPath ValidateSet
+#   CleanupScope     — scope name used in Invoke-VcfEdgeAtScaleCleanup and Start-VcfEdgeAtScale ValidateSet
+#   PhaseStarted     — script-scope boolean flag name (see companion $Script: declarations above)
+#
+# Wiring status: DisableFlag, YamlPathProperty, CleanupScope, PhaseStarted are currently read by
+# per-service code paths. Tracked as code review item C3 — future refactor will drive all
+# dispatch loops from this table to fully eliminate the per-service boilerplate.
 # =============================================================================
+$Script:SupervisorServiceRegistry = [ordered]@{
+    ArgoCD = @{
+        DisableFlag      = "disableArgoCD"
+        YamlPathProperty = "argoCDDeploymentYamlPath"
+        CleanupScope     = "ArgoCD"
+        PhaseStarted     = "ArgoCDPhaseStarted"
+    }
+    Harbor = @{
+        DisableFlag      = "disableHarbor"
+        YamlPathProperty = "harborServiceYamlPath"
+        CleanupScope     = "Harbor"
+        PhaseStarted     = "HarborPhaseStarted"
+    }
+}
 
 # ArgoCD deployment timeout defaults (used by Add-ArgoCDInstance when no TimeoutConfig key is supplied).
 $Script:ArgoCDAuthTimeoutSeconds = 60

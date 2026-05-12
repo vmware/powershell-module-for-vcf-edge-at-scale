@@ -7115,7 +7115,7 @@ Function Invoke-VsanDeploymentRollback {
     if (-not $SuppressPrompt.IsPresent) {
         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -RollbackContext "vSAN rollback (cluster `"$ClusterName`")"
         if ($rollbackDecision -eq "DoNotRollback") {
-            throw $Script:RollbackSkippedContinueToNextSiteMessage
+            throw [RollbackSkippedException]::new()
         }
     }
 

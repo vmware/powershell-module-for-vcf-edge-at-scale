@@ -320,7 +320,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
             # Resolve supervisor ID and Harbor service identifier.
             $harborSupervisorId = $null
             try {
-                $harborSupervisorId = Get-SupervisorId -supervisorName (Get-SupervisorNameFromPrefix -SupervisorNamePrefix $SupervisorNamePrefix -EdgeSite $currentEdgeSite) -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $Script:VcenterInsecurePassword -InsecureTls -Silence -ErrorAction Stop
+                $harborSupervisorId = Get-SupervisorId -supervisorName (Get-SupervisorNameFromPrefix -SupervisorNamePrefix $SupervisorNamePrefix -EdgeSite $currentEdgeSite) -VcenterUser $Script:VCenterUser -VcenterCredential $Script:VcenterCredential -InsecureTls -Silence -ErrorAction Stop
             } catch {
                 Write-LogMessage -Type WARNING -Message "Could not determine supervisor ID for cluster `"$clusterName`" (edgeSite `"$currentEdgeSite`"): $($_.Exception.Message). Skipping Harbor cleanup."
                 continue
@@ -358,7 +358,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                 # Remove supervisor services before deactivating — Harbor first (owns PVCs), then ArgoCD.
                 $allSupervisorId = $null
                 try {
-                    $allSupervisorId = Get-SupervisorId -supervisorName (Get-SupervisorNameFromPrefix -SupervisorNamePrefix $SupervisorNamePrefix -EdgeSite $currentEdgeSite) -VcenterUser $Script:VCenterUser -VcenterInsecurePassword $Script:VcenterInsecurePassword -InsecureTls -Silence -ErrorAction Stop
+                    $allSupervisorId = Get-SupervisorId -supervisorName (Get-SupervisorNameFromPrefix -SupervisorNamePrefix $SupervisorNamePrefix -EdgeSite $currentEdgeSite) -VcenterUser $Script:VCenterUser -VcenterCredential $Script:VcenterCredential -InsecureTls -Silence -ErrorAction Stop
                 } catch {
                     Write-LogMessage -Type WARNING -Message "All cleanup: could not resolve supervisor ID for `"$clusterName`" (edgeSite `"$currentEdgeSite`"): $($_.Exception.Message). Skipping service pre-removal."
                 }
@@ -926,7 +926,9 @@ Function Get-EffectiveSupervisorServiceFlag {
         The common section of infrastructure JSON (for supervisorServices fallback).
 
         .PARAMETER FlagName
-        The boolean flag property name to resolve. Must be one of: disableArgoCD, disableHarbor.
+        The boolean flag property name to resolve. Valid values are derived from
+        $Script:SupervisorServiceRegistry — currently: disableArgoCD, disableHarbor.
+        Add new entries to the registry in VcfEdgeAtScale.psm1 to extend the valid set.
 
         .OUTPUTS
         [bool] $true if the service should be skipped; $false if enabled (default when unset).
@@ -944,7 +946,11 @@ Function Get-EffectiveSupervisorServiceFlag {
     Param (
         [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$Cluster,
         [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$CommonData,
-        [Parameter(Mandatory = $true)] [ValidateSet("disableArgoCD", "disableHarbor")] [String]$FlagName
+        [Parameter(Mandatory = $true)] [ValidateScript({
+            $validFlags = $Script:SupervisorServiceRegistry.Values | ForEach-Object { $_.DisableFlag }
+            if ($_ -in $validFlags) { $true }
+            else { throw "FlagName must be one of: $($validFlags -join ', '). Got: '$_'." }
+        })] [String]$FlagName
     )
 
     if ($Cluster -and $Cluster.supervisorServices -and $null -ne $Cluster.supervisorServices.$FlagName) {
@@ -1295,7 +1301,7 @@ Function Invoke-ArgoCDDeploymentPhase {
 
     # Validate required keys upfront so a typo in the caller fails with a clear message
     # rather than a cryptic null-value error deep inside the deployment sequence.
-    $requiredKeys = @("ArgoCdDeploymentYamlPath", "ArgoCDyaml", "ArgocdNameSpace", "ClusterId", "ClusterName", "ContextName", "StoragePolicyId", "SupervisorId", "VcenterInsecurePassword")
+    $requiredKeys = @("ArgoCdDeploymentYamlPath", "ArgoCDyaml", "ArgocdNameSpace", "ClusterId", "ClusterName", "ContextName", "StoragePolicyId", "SupervisorId", "VcenterCredential")
     foreach ($key in $requiredKeys) {
         if (-not $Context.ContainsKey($key) -or $null -eq $Context[$key]) {
             throw "Invoke-ArgoCDDeploymentPhase: required context key '$key' is missing or null."
@@ -1312,7 +1318,7 @@ Function Invoke-ArgoCDDeploymentPhase {
     $contextName              = $Context.ContextName
     $storagePolicyId             = $Context.StoragePolicyId
     $supervisorId                = $Context.SupervisorId
-    $vcenterInsecurePassword     = $Context.VcenterInsecurePassword
+    $vcenterCredential           = $Context.VcenterCredential
     # InsecureTls: currently always $true in the ArgoCD deployment path (unlike Harbor which respects the parameter).
     # Defaults to $true when the key is absent so omitting it from the context preserves current behaviour rather
     # than silently disabling TLS and causing authentication failures with a self-signed vCenter certificate.
@@ -1323,8 +1329,8 @@ Function Invoke-ArgoCDDeploymentPhase {
     Remove-Item env:\KUBECTL_VSPHERE_PASSWORD -ErrorAction SilentlyContinue
 
     try {
-        $env:VCF_CLI_VSPHERE_PASSWORD = $vcenterInsecurePassword
-        $env:KUBECTL_VSPHERE_PASSWORD = $vcenterInsecurePassword
+        $env:VCF_CLI_VSPHERE_PASSWORD = Get-VcenterRestApiPlainPassword -VcenterCredential $vcenterCredential
+        $env:KUBECTL_VSPHERE_PASSWORD = $env:VCF_CLI_VSPHERE_PASSWORD
         Write-LogMessage -Type DEBUG -Message "Set environment variables for VCF CLI and kubectl password-less access."
         # Create ArgoCD Operator. Create the ArgoCD workload namespace before installing the operator
         # so reconciliation can find it (avoids "Required namespace does not exist" when the operator
@@ -1341,7 +1347,7 @@ Function Invoke-ArgoCDDeploymentPhase {
         $supervisorControlPlaneVmIp = Get-SupervisorControlPlaneIp -ClusterName $clusterName
         $ctxResult = Set-VCFContextCreate -ContextName $contextName -Endpoint $supervisorControlPlaneVmIp -Namespace $argocdNameSpace -SsoUsername $Script:VCenterUser -InsecureTls:$insecureTlsArgoCD
         # Note: $Script:VCenterUser is still read from script scope — it is the SSO username, not a secret.
-        # Only $Script:VcenterInsecurePassword (the credential) is passed through the context object.
+        # VcenterCredential is passed through the context object; the plain password is extracted only at env-var assignment.
         if ($ctxResult -and -not $ctxResult.Success) {
             throw "Deployment failed. VCF context switch failed. Check logs for details."
         }
@@ -1353,8 +1359,8 @@ Function Invoke-ArgoCDDeploymentPhase {
         # Always cleanup environment variables, even on errors.
         Remove-Item env:\VCF_CLI_VSPHERE_PASSWORD -ErrorAction SilentlyContinue
         Remove-Item env:\KUBECTL_VSPHERE_PASSWORD -ErrorAction SilentlyContinue
-        # Zero the local plaintext credential copy so it does not linger in memory after the function returns.
-        $vcenterInsecurePassword = $null
+        # $vcenterCredential is a local reference only; $Script:VcenterCredential is cleared
+        # at the end of the full deployment run in Initialize-VcfEdgeAtScale's finally block.
     }
 
     return $argocdVmClass
@@ -1576,7 +1582,7 @@ Function Initialize-VcfEdgeAtScale {
             }
         }
 
-        Set-ScriptVcenterPasswordFromCredential -Credential $vCenterCredential
+        Set-ScriptVcenterCredential -Credential $vCenterCredential
 
         # When -CleanUp is set, run the cleanup workflow and exit without deploying.
         if ($CleanUp -in @("Supervisor", "Compute", "All", "ArgoCD", "Harbor")) {
@@ -2272,9 +2278,10 @@ Function Initialize-VcfEdgeAtScale {
             $supervisorCreatedThisSite = $false
             $supervisorCreationAttemptedThisSite = $false
             # Get or create supervisor using the new function (with EdgeSite and network segments for gateway mapping).
-            # Pass Script:VcenterInsecurePassword explicitly so REST API always uses the Marshal-derived password that succeeded for Connect-Vcenter. See PASSWORD_HANDLING.md.
+            # Pass Script:VcenterCredential so REST API always uses the PSCredential that succeeded for Connect-Vcenter.
+            # See PASSWORD_HANDLING.md.
             $supervisorCreationAttemptedThisSite = $true
-            $supervisorId = Get-OrCreateSupervisor -StoragePolicyId $storagePolicyId -SupervisorName $Script:SupervisorName -VcenterInsecurePassword $Script:VcenterInsecurePassword -SupervisorJson $SupervisorJson -ClusterId $clusterId -ClusterName $clusterName -EdgeSite $currentEdgeSite -NetworkSegments $networkSegments -SingleSite:($clustersToProcess.Count -eq 1) -InsecureTls
+            $supervisorId = Get-OrCreateSupervisor -StoragePolicyId $storagePolicyId -SupervisorName $Script:SupervisorName -VcenterCredential $Script:VcenterCredential -SupervisorJson $SupervisorJson -ClusterId $clusterId -ClusterName $clusterName -EdgeSite $currentEdgeSite -NetworkSegments $networkSegments -SingleSite:($clustersToProcess.Count -eq 1) -InsecureTls
             $supervisorCreatedThisSite = $true
 
             # Deploy ArgoCD — extracted to Invoke-ArgoCDDeploymentPhase for readability.
@@ -2290,7 +2297,7 @@ Function Initialize-VcfEdgeAtScale {
                     InsecureTls              = $true  # ArgoCD path is currently always InsecureTls; stored for forward compatibility
                     StoragePolicyId          = $storagePolicyId
                     SupervisorId             = $supervisorId
-                    VcenterInsecurePassword  = $Script:VcenterInsecurePassword
+                    VcenterCredential        = $Script:VcenterCredential
                 }
                 $argocdVmClass = Invoke-ArgoCDDeploymentPhase -Context $argoCDContext
             } else {
@@ -2331,11 +2338,10 @@ Function Initialize-VcfEdgeAtScale {
             # Note: We do NOT disconnect from vCenter between clusters when they share the same vCenter FQDN
             # (all clusters use $Script:vCenterName from common.vCenterName). Disconnection only occurs in the
             # finally block, which handles: final cluster, single cluster (EdgeSite specified), and error cases.
+            } catch [RollbackSkippedException] {
+                Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                continue
             } catch {
-                if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                    Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                    continue
-                }
                 if ($Script:RollbackFailed) {
                     Write-LogMessage -Type ERROR -Message "Rollback failed for edgeSite `"$currentEdgeSite`"; exiting with failure (no second rollback prompt)."
                     throw
@@ -2354,11 +2360,10 @@ Function Initialize-VcfEdgeAtScale {
                             Write-LogMessage -Type INFO -Message "Harbor deployment failure for edgeSite `"$currentEdgeSite`"; rollback decision required (Harbor-only: remove service, supervisor and ArgoCD left intact for idempotent retry)."
                             try {
                                 Invoke-HarborOnlyRollback -ClusterName $clusterName -Service $harborServiceName -SingleSite:($clustersToProcess.Count -eq 1) -SupervisorId $supervisorId
+                            } catch [RollbackSkippedException] {
+                                Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                                continue
                             } catch {
-                                if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                                    Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                                    continue
-                                }
                                 throw
                             }
                         } else {
@@ -2369,22 +2374,20 @@ Function Initialize-VcfEdgeAtScale {
                         Write-LogMessage -Type INFO -Message "ArgoCD deployment failure for edgeSite `"$currentEdgeSite`"; rollback decision required (ArgoCD-only: remove namespace, supervisor left intact for idempotent retry)."
                         try {
                             Invoke-ArgoCDOnlyRollback -ArgoCDNamespace $argocdNameSpace -ClusterName $clusterName -SupervisorId $supervisorId
+                        } catch [RollbackSkippedException] {
+                            Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                            continue
                         } catch {
-                            if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                                Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                                continue
-                            }
                             throw
                         }
                     } else {
                         Write-LogMessage -Type INFO -Message "Supervisor deployment failure for edgeSite `"$currentEdgeSite`"; running supervisor-only rollback (compute/vSAN/VDS left intact)."
                         try {
                             Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1) -SupervisorId $supervisorId
+                        } catch [RollbackSkippedException] {
+                            Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                            continue
                         } catch {
-                            if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                                Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                                continue
-                            }
                             throw
                         }
                     }
@@ -2393,11 +2396,10 @@ Function Initialize-VcfEdgeAtScale {
                     Write-LogMessage -Type INFO -Message "Supervisor creation failed for edgeSite `"$currentEdgeSite`" (compute passed); running supervisor-only rollback (compute/vSAN/VDS left intact)."
                     try {
                         Invoke-SupervisorOnlyRollback -ClusterId $clusterId -ClusterName $clusterName -SingleSite:($clustersToProcess.Count -eq 1) -SupervisorId $supervisorId
+                    } catch [RollbackSkippedException] {
+                        Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                        continue
                     } catch {
-                        if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                            Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                            continue
-                        }
                         throw
                     }
                 } else {
@@ -2405,7 +2407,7 @@ Function Initialize-VcfEdgeAtScale {
                     if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "vSAN deployment failure (edgeSite `"$currentEdgeSite`")" -SingleSite:($clustersToProcess.Count -eq 1)
                         if ($rollbackDecision -eq "DoNotRollback") {
-                            throw $Script:RollbackSkippedContinueToNextSiteMessage
+                            throw [RollbackSkippedException]::new()
                         }
                         $deploymentFailureMessage = $_.Exception.Message
                         $vsanRollbackCompleted = $false
@@ -2482,11 +2484,10 @@ Function Initialize-VcfEdgeAtScale {
                             }
                             Write-LogMessage -Type INFO -Message "Complete rollback finished for edgeSite `"$currentEdgeSite`" (VDS and cluster removed)."
                             $vsanRollbackCompleted = $true
+                        } catch [RollbackSkippedException] {
+                            Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                            continue
                         } catch {
-                            if ($_.Exception.Message -eq $Script:RollbackSkippedContinueToNextSiteMessage) {
-                                Write-LogMessage -Type WARNING -Message "Skipping rollback for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
-                                continue
-                            }
                             throw
                         }
                         # Rollback succeeded; throw a clean message describing what failed and what to fix.
@@ -2497,7 +2498,7 @@ Function Initialize-VcfEdgeAtScale {
                         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "deployment failure (edgeSite `"$currentEdgeSite`"); compute rollback" -SingleSite:($clustersToProcess.Count -eq 1)
                         $restoreResult = $null
                         if ($rollbackDecision -eq "DoNotRollback") {
-                            throw $Script:RollbackSkippedContinueToNextSiteMessage
+                            throw [RollbackSkippedException]::new()
                         }
                         Write-LogMessage -Type INFO -Message "Running complete rollback for edgeSite `"$currentEdgeSite`" (VMFS: remove VDS, datastore, cluster)."
                         $nicListForRestore = Get-EffectiveNicListForCluster -Cluster $cluster -CommonNicList $inputData.common.nicList
@@ -2561,9 +2562,8 @@ Function Initialize-VcfEdgeAtScale {
             $esxPasswords.Clear()
         }
 
-        # Zero out the plaintext vCenter password held in script scope so it does not persist
-        # beyond this run; it is re-derived from the credential on the next invocation.
-        $Script:VcenterInsecurePassword = $null
+        # Clear the stored vCenter credential so it does not persist beyond this run.
+        $Script:VcenterCredential = $null
     }
 }
 Function ConvertFrom-Yaml {
@@ -2612,7 +2612,7 @@ Function ConvertFrom-Yaml {
     [OutputType([System.Object[]])]
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [ValidateNotNullOrEmpty()] [string]$YamlContent
+        [Parameter(Mandatory = $true, ValueFromPipeline = $true)] [AllowEmptyString()] [string]$YamlContent
     )
 
     begin {

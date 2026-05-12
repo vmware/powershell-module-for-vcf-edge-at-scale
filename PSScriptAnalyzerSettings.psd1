@@ -3,10 +3,9 @@
     #
     # PSAvoidUsingConvertToSecureStringWithPlainText / PSAvoidUsingPlainTextForPassword /
     # PSAvoidUsingUsernameAndPasswordParams / UsePSCredentialType:
-    #   Suppressed globally because PSScriptAnalyzer settings files do not support per-function
-    #   scope. The intentional usages are ConvertTo-SecureStringForCredential and
-    #   Get-VcenterRestApiPlainPassword, which must handle plain-text credentials by design.
-    #   All other functions use SecureString or PSCredential objects.
+    #   These rules are now suppressed per-function using [Diagnostics.CodeAnalysis.SuppressMessageAttribute]
+    #   on the 7 functions that legitimately handle plain-text credentials or YAML password fields.
+    #   See each function's declaration in Private/Logging.ps1 and Private/Supervisor.ps1.
     #
     # PSAvoidUsingWriteHost:
     #   Suppressed because Write-LogMessage uses Write-Host for console color output and
@@ -36,14 +35,10 @@
     #   This is intentional and documented in those functions' comment-based help.
     ExcludeRules = @(
         'PSAvoidGlobalVars',
-        'PSAvoidUsingConvertToSecureStringWithPlainText',
-        'PSAvoidUsingPlainTextForPassword',
-        'PSAvoidUsingUsernameAndPasswordParams',
         'PSAvoidUsingWriteHost',
         'PSReviewUnusedParameter',
         'PSUseBOMForUnicodeEncodedFile',
         'PSUseShouldProcessForStateChangingFunctions',
-        'PSUseSingularNouns',
-        'UsePSCredentialType'
+        'PSUseSingularNouns'
     )
 }

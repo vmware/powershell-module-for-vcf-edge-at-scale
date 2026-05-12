@@ -159,32 +159,53 @@ Function Get-VcenterRestApiPlainPassword {
 
     <#
         .SYNOPSIS
-        Resolves the password string for vCenter REST Basic authentication from optional SecureString or string inputs.
+        Resolves the password string for vCenter REST Basic authentication from optional SecureString, PSCredential, or string inputs.
 
         .DESCRIPTION
-        When both VcenterPassword and VcenterInsecurePassword are supplied, VcenterPassword takes precedence.
+        Priority order: VcenterPassword (SecureString) > VcenterCredential (PSCredential) > VcenterInsecurePassword (String).
         The returned value is intended for immediate Basic auth encoding only and is not written to the log.
+        Uses SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR so the plain text exists only on the stack
+        for the duration of this call.
+
+        .PARAMETER VcenterCredential
+        Optional PSCredential; password is extracted via BSTR and zeroed immediately after use.
 
         .PARAMETER VcenterInsecurePassword
-        Optional password as a string.
+        Optional password as a plain string (legacy fallback — avoid in new call sites).
 
         .PARAMETER VcenterPassword
         Optional password as SecureString.
 
         .OUTPUTS
-        String, or $null if neither source yields a non-empty password.
+        String, or $null if no source yields a non-empty password.
 
         .NOTES
-        Uses SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR for the SecureString path.
+        Uses SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR for the SecureString and PSCredential paths.
     #>
 
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '')]
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('UsePSCredentialType', '')]
     Param (
+        [Parameter(Mandatory = $false)] [PSCredential]$VcenterCredential,
         [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$VcenterInsecurePassword,
         [Parameter(Mandatory = $false)] [SecureString]$VcenterPassword
     )
 
     if ($null -ne $VcenterPassword) {
         $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($VcenterPassword)
+        try {
+            return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+        }
+        finally {
+            if ($bstr -ne [IntPtr]::Zero) {
+                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+            }
+        }
+    }
+
+    if ($null -ne $VcenterCredential) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($VcenterCredential.Password)
         try {
             return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
         }
@@ -208,37 +229,33 @@ Function ConvertTo-SecureStringForCredential {
         Builds a SecureString from a string for PSCredential construction.
     #>
 
+    [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '')]
     Param (
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$PlainText
     )
 
     return ConvertTo-SecureString -String $PlainText -AsPlainText -Force
 }
-Function Set-ScriptVcenterPasswordFromCredential {
+Function Set-ScriptVcenterCredential {
 
     <#
         .SYNOPSIS
-        Copies the password from a PSCredential into Script:VcenterInsecurePassword.
+        Stores the vCenter PSCredential in script scope for use by REST API callers.
 
         .DESCRIPTION
-        Decodes the credential password with SecureStringToCoTaskMemUnicode and PtrToStringUni so Script-scoped
-        callers and REST Basic auth receive the same material as after Connect-Vcenter.
+        Stores the PSCredential object in $Script:VcenterCredential. REST API callers (Get-SupervisorId, etc.)
+        extract the plain password on demand via Get-VcenterRestApiPlainPassword, which uses BSTR extraction
+        and zeroes the memory immediately after use. This avoids holding a plain-text password in script scope.
 
         .PARAMETER Credential
-        vCenter PSCredential whose password is copied to Script:VcenterInsecurePassword.
+        vCenter PSCredential to store.
     #>
 
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCredential]$Credential
     )
 
-    $decodedPasswordInterimStep = [System.Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($Credential.Password)
-    try {
-        $Script:VcenterInsecurePassword = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($decodedPasswordInterimStep)
-    }
-    finally {
-        [System.Runtime.InteropServices.Marshal]::ZeroFreeCoTaskMemUnicode($decodedPasswordInterimStep)
-    }
+    $Script:VcenterCredential = $Credential
 }
 Function Test-LogLevel {
 
@@ -1466,14 +1483,9 @@ Function Invoke-VcenterReconnectIfNeeded {
     Write-LogMessage -Type INFO -Message "vCenter session lost or expired: $($connectionTest.ErrorMessage). Attempting to reconnect to `"$Script:vCenterName`"..."
 
     $vCenterCredential = $null
-    # Prefer password from initial Connect-Vcenter (Script:VcenterInsecurePassword).
-    if (-not [String]::IsNullOrWhiteSpace($Script:VcenterInsecurePassword) -and -not [String]::IsNullOrWhiteSpace($Script:VCenterUser)) {
-        try {
-            $securePass = ConvertTo-SecureStringForCredential -PlainText $Script:VcenterInsecurePassword
-            $vCenterCredential = New-Object System.Management.Automation.PSCredential($Script:VCenterUser, $securePass)
-        } catch {
-            $vCenterCredential = $null
-        }
+    # Prefer credential from initial Connect-Vcenter (Script:VcenterCredential).
+    if ($null -ne $Script:VcenterCredential) {
+        $vCenterCredential = $Script:VcenterCredential
     }
     # Else try environment variable.
     if (-not $vCenterCredential -and -not [String]::IsNullOrWhiteSpace($env:VCENTER_COMMON_PASSWORD) -and -not [String]::IsNullOrWhiteSpace($Script:VCenterUser)) {
@@ -1488,7 +1500,7 @@ Function Invoke-VcenterReconnectIfNeeded {
         try {
             Disconnect-Vcenter -AllServers -Silence
             Connect-Vcenter -ServerName $Script:vCenterName -ServerCredential $vCenterCredential -ServerType "vCenter"
-            Set-ScriptVcenterPasswordFromCredential -Credential $vCenterCredential
+            Set-ScriptVcenterCredential -Credential $vCenterCredential
             Write-LogMessage -Type INFO -Message "Reconnected to vCenter `"$Script:vCenterName`" using stored credentials."
             return
         } catch {
@@ -1501,7 +1513,7 @@ Function Invoke-VcenterReconnectIfNeeded {
     $vCenterCredential = New-Object System.Management.Automation.PSCredential($Script:VCenterUser, $vCenterPass)
     Disconnect-Vcenter -AllServers -Silence
     Connect-Vcenter -ServerName $Script:vCenterName -ServerCredential $vCenterCredential -ServerType "vCenter"
-    Set-ScriptVcenterPasswordFromCredential -Credential $vCenterCredential
+    Set-ScriptVcenterCredential -Credential $vCenterCredential
     Write-LogMessage -Type INFO -Message "Reconnected to vCenter `"$Script:vCenterName`" using prompted credentials."
 }
 Function Disconnect-Vcenter {
