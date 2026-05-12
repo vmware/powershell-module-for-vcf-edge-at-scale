@@ -3310,6 +3310,92 @@ Function ConvertTo-YamlValue {
         return $Value.ToString()
     }
 }
+Function Test-EsxHostUniqueness {
+
+    <#
+        .SYNOPSIS
+        Validates that no ESX host (FQDN or IP) appears in more than one edge site in infrastructure.json.
+
+        .DESCRIPTION
+        Iterates all clusters[].esxHosts entries and checks for duplicate values across clusters.
+        Each physical ESX host must belong to exactly one edge site; sharing a host between sites
+        indicates a misconfiguration that would cause vCenter and vSAN operations to fail.
+
+        .PARAMETER InputData
+        The parsed infrastructure.json data object containing cluster configurations.
+
+        .EXAMPLE
+        $inputData = ConvertFrom-JsonSafely -JsonFilePath "infrastructure.json"
+        $result = Test-EsxHostUniqueness -InputData $inputData
+        if (-not $result.IsValid) {
+            Write-Error "ESX host uniqueness validation failed: $($result.ErrorMessage)"
+        }
+
+        .OUTPUTS
+        PSCustomObject with properties:
+        - IsValid      : Boolean — $true when all ESX hosts are unique across sites.
+        - ErrorMessage : String — details about any duplicate hosts found.
+        - DuplicateHosts : Array of duplicate ESX host names.
+
+        .NOTES
+        Private helper. Called from Initialize-VcfEdgeAtScale before deployment begins.
+        Comparison is case-insensitive to catch duplicates that differ only in case.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object]$InputData
+    )
+
+    $validationResult = [PSCustomObject]@{
+        IsValid        = $true
+        ErrorMessage   = $null
+        DuplicateHosts = @()
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Entered Test-EsxHostUniqueness function..."
+
+    try {
+        $hostSiteMap = @{}
+        $duplicateHosts = [System.Collections.Generic.List[String]]::new()
+
+        foreach ($cluster in @($InputData.clusters)) {
+            if (-not $cluster -or -not $cluster.esxHosts) {
+                continue
+            }
+            $site = $cluster.edgeSite
+            foreach ($esxHostName in @($cluster.esxHosts)) {
+                if ([String]::IsNullOrWhiteSpace([String]$esxHostName)) {
+                    continue
+                }
+                $hostKey = ([String]$esxHostName).ToLowerInvariant()
+                if ($hostSiteMap.ContainsKey($hostKey)) {
+                    $firstSite = $hostSiteMap[$hostKey]
+                    if (-not $duplicateHosts.Contains($hostKey)) {
+                        $duplicateHosts.Add($hostKey)
+                    }
+                    Write-LogMessage -Type ERROR -Message "Duplicate ESX host found: '$esxHostName' appears in both edgeSite '$firstSite' and '$site'. Each ESX host must be unique across all edge sites."
+                } else {
+                    $hostSiteMap[$hostKey] = $site
+                }
+            }
+        }
+
+        if ($duplicateHosts.Count -gt 0) {
+            $validationResult.IsValid = $false
+            $validationResult.DuplicateHosts = $duplicateHosts.ToArray()
+            $validationResult.ErrorMessage = "Found $($duplicateHosts.Count) duplicate ESX host(s): $($duplicateHosts -join ', '). Each ESX host must appear in exactly one edge site."
+            Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "ESX host uniqueness validation failed: $($validationResult.ErrorMessage)"
+        } else {
+            Write-LogMessage -Type DEBUG -Message "ESX host uniqueness validation passed."
+        }
+    } catch {
+        $validationResult.IsValid = $false
+        $validationResult.ErrorMessage = "Error during ESX host uniqueness validation: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $validationResult.ErrorMessage
+    }
+
+    return $validationResult
+}
 Function Get-NetworkSegmentDetailsFromInputData {
     <#
         .SYNOPSIS
@@ -3580,7 +3666,7 @@ Function Get-VcfEdgeAtScaleConfigUiVersion {
         Full path to the veas-json-generator.py file to inspect.
 
         .OUTPUTS
-        [String] Version string (e.g. "1.0.3.1002"), or $null if not found.
+        [String] Version string (e.g. "1.0.3.1003"), or $null if not found.
 
         .EXAMPLE
         Get-VcfEdgeAtScaleConfigUiVersion -FilePath "C:\Users\Admin\VCFEdgeAtScale\Tools\veas-json-generator.py"
@@ -3684,6 +3770,131 @@ Function Sync-VcfEdgeAtScaleConfigUiTool {
     } catch {
         Write-LogMessage -Type WARNING -Message "Config UI tool sync failed: $($_.Exception.Message)"
         Write-Host "  Config UI tool could not be auto-updated. To copy manually, run:" -ForegroundColor Yellow
+        Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
+    }
+}
+Function Get-VcfEdgeAtScaleUiTemplateVersion {
+
+    <#
+        .SYNOPSIS
+        Returns the VEAS-UI-VERSION string embedded in a veas-ui.html file.
+
+        .DESCRIPTION
+        Reads the first line matching the pattern <!-- VEAS-UI-VERSION: ... --> in the specified
+        file and returns the version value. Returns $null when the file is unreadable or contains
+        no matching line.
+
+        .PARAMETER FilePath
+        Full path to the veas-ui.html file to inspect.
+
+        .OUTPUTS
+        [String] Version string (e.g. "1.0.3.1003"), or $null if not found.
+
+        .EXAMPLE
+        Get-VcfEdgeAtScaleUiTemplateVersion -FilePath "C:\VCFEdgeAtScale\Tools\veas-ui.html"
+
+        Returns the VEAS-UI-VERSION value from the specified file.
+
+        .NOTES
+        Private helper. Used by Sync-VcfEdgeAtScaleUiTemplate to compare source and destination
+        HTML template versions before deciding whether to copy.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FilePath
+    )
+
+    try {
+        $lineMatch = Select-String -LiteralPath $FilePath -Pattern 'VEAS-UI-VERSION:\s*([\d.]+)' -ErrorAction Stop
+        if ($null -ne $lineMatch) {
+            return $lineMatch.Matches[0].Groups[1].Value
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Get-VcfEdgeAtScaleUiTemplateVersion: could not read '${FilePath}': $($_.Exception.Message)"
+    }
+    return $null
+}
+Function Sync-VcfEdgeAtScaleUiTemplate {
+
+    <#
+        .SYNOPSIS
+        Copies the UI HTML template from the newly installed module to the deployment root Tools directory when the versions differ.
+
+        .DESCRIPTION
+        After a module upgrade, locates the newest installed VcfEdgeAtScale module via Get-Module -ListAvailable,
+        reads the VEAS-UI-VERSION from its veas-ui.html, and compares it to the version in the user's
+        deployment root Tools directory. If they differ the new file is copied automatically with no user prompt.
+
+        The sync is silently skipped when:
+        - UserBaseDirectory is not set or does not exist.
+        - The template is absent from the deployment root (the user has not run -Initialize yet).
+        - The source file is missing from the newly installed module.
+
+        Unlike veas-json-generator.py, the HTML template is always silently overwritten because it
+        is a versioned UI asset that is not edited by the operator.
+
+        .PARAMETER UserBaseDirectory
+        Path to the operator's deployment base directory (typically $env:VcfEdgeatScaleRootDirectory).
+        Pass an empty string or omit to skip the sync.
+
+        .EXAMPLE
+        Sync-VcfEdgeAtScaleUiTemplate -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
+
+        Checks whether the deployed UI template matches the installed module version and copies it if not.
+
+        .NOTES
+        Private helper. Invoked from Invoke-VcfEdgeAtScaleUpdateCheck after a successful Update-Module call.
+        Uses Write-Host for user-visible output because the caller assigns function output to $null.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$UserBaseDirectory
+    )
+
+    $uiTemplateFileName = "veas-ui.html"
+
+    $latestInstalledModule = Get-Module -ListAvailable -Name "VcfEdgeAtScale" |
+        Sort-Object -Property Version -Descending |
+        Select-Object -First 1
+    if ($null -eq $latestInstalledModule) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: VcfEdgeAtScale module not found via Get-Module -ListAvailable."
+        return
+    }
+
+    $moduleToolsPath = Join-Path -Path $latestInstalledModule.ModuleBase -ChildPath "Tools"
+    $sourcePath = Join-Path -Path $moduleToolsPath -ChildPath $uiTemplateFileName
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: source not found at $sourcePath."
+        return
+    }
+
+    if ([String]::IsNullOrWhiteSpace($UserBaseDirectory) -or -not (Test-Path -LiteralPath $UserBaseDirectory -PathType Container)) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: deployment root is not set or does not exist."
+        return
+    }
+
+    $deploymentToolsPath = Join-Path -Path $UserBaseDirectory -ChildPath "Tools"
+    $destPath = Join-Path -Path $deploymentToolsPath -ChildPath $uiTemplateFileName
+    if (-not (Test-Path -LiteralPath $destPath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "UI template not present in deployment root; skipping auto-sync. Run Start-VcfEdgeAtScale -Initialize to install it."
+        return
+    }
+
+    $sourceVersion = Get-VcfEdgeAtScaleUiTemplateVersion -FilePath $sourcePath
+    $destVersion = Get-VcfEdgeAtScaleUiTemplateVersion -FilePath $destPath
+    if ($sourceVersion -eq $destVersion) {
+        Write-LogMessage -Type DEBUG -Message "UI template is current (version $sourceVersion); no sync needed."
+        return
+    }
+
+    Write-LogMessage -Type INFO -Message "Updating UI template: version $destVersion → $sourceVersion."
+    try {
+        Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force -ErrorAction Stop
+        Write-LogMessage -Type INFO -Message "UI template updated to $sourceVersion at $destPath."
+        Write-Host "  UI template updated: $uiTemplateFileName ($destVersion → $sourceVersion)" -ForegroundColor Green
+    } catch {
+        Write-LogMessage -Type WARNING -Message "UI template sync failed: $($_.Exception.Message)"
+        Write-Host "  UI template could not be auto-updated. To copy manually, run:" -ForegroundColor Yellow
         Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
     }
 }
@@ -3814,6 +4025,7 @@ Function Invoke-VcfEdgeAtScaleUpdateCheck {
         Update-Module -Name "VcfEdgeAtScale" -Force -ErrorAction Stop
         Write-LogMessage -Type INFO -Message "VcfEdgeAtScale $latestVersion installed successfully."
         Sync-VcfEdgeAtScaleConfigUiTool -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
+        Sync-VcfEdgeAtScaleUiTemplate -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
         Write-Host ""
         Write-Host "Update complete. Open a new PowerShell window (or run 'Remove-Module VcfEdgeAtScale; Import-Module VcfEdgeAtScale') to use the new version." -ForegroundColor Green
         Write-Host ""

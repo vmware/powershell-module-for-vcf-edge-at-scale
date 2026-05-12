@@ -2,7 +2,7 @@
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
-{\pard \qc \f0 \sa180 \li0 \fi0 \b \fs36 VcfEdgeAtScale \u8212- VCF Edge at Scale\par}
+{\pard \qc \f0 \sa180 \li0 \fi0 \b \fs36 VcfEdgeAtScale \u8212- README\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 VcfEdgeAtScale \u8212- VCF Edge at Scale\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\field{\*\fldinst{HYPERLINK "https://github.com/PowerShell/PowerShell"}}{\fldrslt{\ul
@@ -51,13 +51,16 @@ Python
 }}}
 \sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 1: Installation\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: PowerShell Gallery\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Install-Module -Name VcfEdgeAtScale\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Clone from GitHub and install manually\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Open a PowerShell 7.4+ prompt (pwsh on macOS/Linux, PowerShell 7 on Windows)\line
 git clone https://github.com/vmware/powershell-module-for-vcf-edge-at-scale.git\line
 cd powershell-module-for-vcf-edge-at-scale/VcfEdgeAtScale\line
 pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 3: Download latest release from GitHub and install manually\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 $tempDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()))\line
 $fullPath = Join-Path -Path $tempDir -ChildPath "VcfEdgeAtScale.zip"\line
@@ -86,17 +89,15 @@ pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}} at the base (full init only, unless you decline replacement when they already exist)\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 ServicesYaml/}} \u8212- {\f1 1.1.0-25100889.yml}, {\f1 argocd-deployment.yml}, {\f1 harbor-data-values-v2.14.2.yml}, {\f1 legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Docs/}} \u8212- {\f1 infrastructure-config-help.json}, {\f1 supervisor-config-help.json}, {\f1 README.rtf}, {\f1 EXAMPLE.rtf}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Tools/}} \u8212- {\f1 veas-json-generator.py} \u8212- a stdlib-only Python 3 web UI for building and validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Tools/}} \u8212- {\f1 veas-json-generator.py} + {\f1 veas-ui.html} \u8212- a stdlib-only Python 3 web UI for building and validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Logs/}} \u8212- daily deployment logs once you run {\b {\f1 Start-VcfEdgeAtScale}} (not created by init alone beyond the empty folder)\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 3: Customize JSON files\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The initialization function copies templated supervisor and infrastructure JSON files into place, but they must be customized for your specific edge site locations.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: Guided generation\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Change to your VcfEdgeatScaleRootDirectory directory.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 python3 Tools/veas-json-generator.py}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open a browser and point it to {\field{\*\fldinst{HYPERLINK "http://127.0.0.1:8000"}}{\fldrslt{\ul
-http://127.0.0.1:8000
-}}}
-\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 python3 Tools/veas-json-generator.py} \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To use a different port: {\f1 python3 Tools/veas-json-generator.py --port 8081}\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To suppress the automatic browser open (headless / SSH environments): add {\f1 --no-browser}\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Follow the on-screen instructions.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Modify JSON files by hand\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open {\f1 $env:VcfEdgeatScaleRootDirectory/infrastructure.json} and {\f1 $env:VcfEdgeatScaleRootDirectory/supervisor.json} in the editor of your choice.\par}
@@ -236,7 +237,7 @@ Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure-test.json
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Check for new releases\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The module automatically checks for new versions once per day when used. The behaviour differs by install source:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): when a newer version is available, you are prompted to run {\f1 Update-Module} automatically (default Y). After a successful update the config UI tool ({\f1 veas-json-generator.py}) is also updated in your deployment root.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PSGallery install} ({\f1 Install-Module}): when a newer version is available, you are prompted to run {\f1 Update-Module} automatically (default Y). After a successful update both {\f1 veas-json-generator.py} and {\f1 veas-ui.html} are synced to your deployment root if their versions differ.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Manual / GitHub install} (git clone + {\f1 Install-VcfEdgeAtScaleModule.ps1}): announces the newer version and shows the manual update steps ({\f1 git pull} + re-run installer); no automatic install is attempted.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped \u8212- it is always non-fatal.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Disable automatic daily checks by setting {\f1 "autoUpdate": false} in {\f1 common} of your {\f1 infrastructure.json}.\sa180\par}
@@ -1983,7 +1984,7 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 External Tools\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl}: Required for Argo CD operations\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vcf CLI}: Required for supervisor management operations\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} (Python 3, no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory. Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, and more) and saves both files.\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} + {\b veas-ui.html} (Python 3, no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically. Pass {\f1 --no-browser} to suppress auto-open in headless or SSH environments. Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more) and saves both files.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Environment\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab VMware Cloud Foundation 9.x\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab vCenter Server with administrative access\par}
@@ -1994,12 +1995,17 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 CHANGELOG.md
 }}}
  for detailed version history.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1002 (current)\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1003 (current)\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
 CHANGELOG.md
 }}}
  for the authoritative per-release list. Recent additions include:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 veas-json-generator.py}} copied to {\b {\f1 Tools/}} by {\f1 -Initialize}: a stdlib-only Python 3 web UI for building and step-validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON.\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Template split}: The HTML/JS/CSS frontend has been extracted from {\f1 veas-json-generator.py} into a standalone {\f1 veas-ui.html} file. Both files are deployed to {\f1 Tools/} by {\f1 -Initialize} and synced on module upgrade.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Browser auto-open}: {\f1 python3 veas-json-generator.py} now opens a browser tab automatically on startup. Use {\f1 --no-browser} to suppress in headless environments.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VDS name accuracy}: The topology diagram now correctly renders VDS names using the configured {\f1 vdsNamePrefix} and edge site name (e.g. {\f1 VDS-vsan-edge1-sw1} / {\f1 -sw2} for 4-NIC).\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PNG export fix}: The PNG download now rasterises correctly at all scale factors.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Cross-site ESX host uniqueness}: Both the Python validator and the PowerShell module now reject duplicate ESX host entries across edge sites before any deployment begins.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Clone feature improvements}: Auto-generated network names are RFC1123-compliant; cloned sites omit source ESX hostnames, gateway addresses, and VMkernel IPs; a banner guides the user through required post-clone edits.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1001\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Added update feature\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1000\par}

@@ -74,7 +74,7 @@
           "primaryWorkloadNetworkName": "primaryworkloadnetwork-2",
           "primaryWorkloadNetworkStartingIp": "10.40.10.101",
           "primaryWorkloadNetworkIPCount": 100,
-          "workloadServiceStartIp": "10.97.0.0",
+          "workloadServiceStartIp": "10.98.0.0",
           "workloadServiceCount": 512
         }
       }

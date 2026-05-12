@@ -68,20 +68,30 @@
             "name": "mgmtnetwork",
             "vlanId": "303",
             "gateway": "10.30.13.1/24"
+          },
+          {
+            "name": "vmotionnetwork",
+            "vlanId": "304",
+            "gateway": "10.30.14.1/24"
+          },
+          {
+            "name": "vsannetwork",
+            "vlanId": "305",
+            "gateway": "10.30.15.1/24"
           }
         ],
         "networkingVmKernelInterfaces": [
           {
             "service": "vMotion",
-            "vlanId": "300",
+            "vlanId": "304",
             "netmask": "255.255.255.0",
-            "ipList": ["10.30.10.12", "10.30.10.13"]
+            "ipList": ["10.30.14.12", "10.30.14.13"]
           },
           {
             "service": "vSAN",
-            "vlanId": "301",
+            "vlanId": "305",
             "netmask": "255.255.255.0",
-            "ipList": ["10.30.11.12", "10.30.11.13"]
+            "ipList": ["10.30.15.12", "10.30.15.13"]
           },
           {
             "service": "vSAN Witness",

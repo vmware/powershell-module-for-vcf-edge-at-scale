@@ -362,6 +362,23 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
         }
     }
 
+    # Copy the UI HTML template (veas-ui.html) alongside the Python tool.
+    # This file is a versioned UI asset and is always silently overwritten — it is not
+    # edited by the operator, so no overwrite prompt is needed.
+    $uiTemplateFileName = "veas-ui.html"
+    $uiTemplateSourcePath = Join-Path -Path $moduleToolsPath -ChildPath $uiTemplateFileName
+    if (-not (Test-Path -LiteralPath $uiTemplateSourcePath -PathType Leaf)) {
+        Write-Warning "Optional UI template '$uiTemplateFileName' is not in the module Tools folder (source not found at $uiTemplateSourcePath). Skipping this copy; Initialize continues. $templateRestoreHint"
+    } else {
+        $uiTemplateDestinationPath = Join-Path -Path $toolsDirectory -ChildPath $uiTemplateFileName
+        try {
+            Copy-Item -LiteralPath $uiTemplateSourcePath -Destination $uiTemplateDestinationPath -Force -ErrorAction Stop
+            Write-Host "    Copied: $uiTemplateFileName" -ForegroundColor Green
+        } catch {
+            Write-Warning "Skipping UI template copy '$uiTemplateFileName' after error: $($_.Exception.Message) $templateRestoreHint"
+        }
+    }
+
     $infrastructureDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "infrastructure.json"
     $supervisorDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "supervisor.json"
     $infrastructureTemplatePath = Join-Path -Path $templatesPath -ChildPath "infrastructure.json"
@@ -1332,6 +1349,17 @@ Function Start-VcfEdgeAtScale {
         $networkValidationElapsed = (Get-Date) - $networkValidationStartTime
         $totalElapsed = (Get-Date) - $validationStartTime
         Write-LogMessage -Type DEBUG -Message "Network segment name validation completed for $siteIndication in $($networkValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+
+        # ESX host uniqueness validation: each ESX host must appear in exactly one edge site.
+        Write-LogMessage -Type DEBUG -Message "Validating ESX host uniqueness across all clusters..."
+        $esxHostValidationResult = Test-EsxHostUniqueness -InputData $inputData
+        if (-not $esxHostValidationResult.IsValid) {
+            Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
+            Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate ESX hosts. Each host must belong to exactly one edge site."
+            throw "[E-ESXHOST-001] ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
+        } else {
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "ESX host uniqueness validation passed."
+        }
 
         # Complete validation (only reached if all validations passed).
         $validationEndTime = Get-Date

@@ -755,7 +755,7 @@ Function New-LogFile {
 
         .DESCRIPTION
         The New-LogFile function establishes the logging infrastructure for the VcfEdgeAtScale module by creating
-        a daily log file under the module root or an optional deployment root. The function creates
+        a daily log file under an optional deployment root, or the user's local application data directory when no root is specified. The function creates
         one log file using the format yyyy-MM-dd, ensuring logs are organized chronologically.
         If the log directory doesn't exist, it will be created automatically. When a new log file
         is created, the function automatically calls Get-EnvironmentSetup to record system
@@ -766,19 +766,19 @@ Function New-LogFile {
         - $Script:LogFile: Full path to the current log file
 
         .PARAMETER BaseDirectory
-        Optional root directory under which the log folder is created (joined with Directory). When omitted, PSScriptRoot is used so logs remain under the module path.
+        Optional root directory under which the log folder is created (joined with Directory). When omitted, the platform-appropriate user local application data directory is used (e.g. ~/.local/share/VcfEdgeAtScale on macOS/Linux, %LOCALAPPDATA%\VcfEdgeAtScale on Windows).
 
         .PARAMETER Prefix
         Specifies the prefix for the log file name. The final log file will be named
         "{Prefix}-{yyyy-MM-dd}.log". Default value is "VcfEdgeAtScale".
 
         .PARAMETER Directory
-        Specifies the directory name segment where log files are stored, relative to BaseDirectory when set, otherwise relative to the module script root.
+        Specifies the directory name segment where log files are stored, relative to BaseDirectory when set, otherwise relative to the user local application data directory.
         The directory will be created if it doesn't exist. Default value is "logs".
 
         .EXAMPLE
         New-LogFile
-        Creates a log file with default settings: "logs/VcfEdgeAtScale-2024-01-15.log"
+        Creates a log file under the user's local application data directory: "~/.local/share/VcfEdgeAtScale/logs/VcfEdgeAtScale-2024-01-15.log"
 
         .EXAMPLE
         New-LogFile -Directory "audit" -Prefix "SecurityAudit"
@@ -804,7 +804,10 @@ Function New-LogFile {
     $fileTimeStamp = Get-Date -Format "yyyy-MM-dd"
 
     # Set script-scoped variables for log directory and file paths.
-    $logParentPath = $PSScriptRoot
+    # Default to the user's local application data directory so logs are never written into
+    # the module installation folder (which may be read-only and is not a user data location).
+    $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
+    $logParentPath = Join-Path $localAppData "VcfEdgeAtScale"
     if (-not [String]::IsNullOrWhiteSpace($BaseDirectory)) {
         $logParentPath = $BaseDirectory
     }

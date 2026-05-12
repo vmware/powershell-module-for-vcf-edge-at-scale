@@ -24,11 +24,15 @@ The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF f
 
 ## Step 1: Installation
 
+<a id="install-psgallery"></a>
+
 ### Option 1: PowerShell Gallery
 
 ```text
 Install-Module -Name VcfEdgeAtScale
 ```
+
+<a id="install-github-clone"></a>
 
 ### Option 2: Clone from GitHub and install manually
 
@@ -38,6 +42,8 @@ git clone https://github.com/vmware/powershell-module-for-vcf-edge-at-scale.git
 cd powershell-module-for-vcf-edge-at-scale/VcfEdgeAtScale
 pwsh -ExecutionPolicy Bypass -File .\Install-VcfEdgeAtScaleModule.ps1
 ```
+
+<a id="install-github-release"></a>
 
 ### Option 3: Download latest release from GitHub and install manually
 
@@ -82,7 +88,7 @@ After **`Start-VcfEdgeAtScale -Initialize`** (or **`-Initialize -InitializeTempl
 - **`infrastructure.json`** / **`supervisor.json`** at the base (full init only, unless you decline replacement when they already exist)
 - **`ServicesYaml/`** — `1.1.0-25100889.yml`, `argocd-deployment.yml`, `harbor-data-values-v2.14.2.yml`, `legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml`
 - **`Docs/`** — `infrastructure-config-help.json`, `supervisor-config-help.json`, `README.rtf`, `EXAMPLE.rtf`
-- **`Tools/`** — `veas-json-generator.py` — a stdlib-only Python 3 web UI for building and validating `infrastructure.json` and `supervisor.json` without hand-editing JSON
+- **`Tools/`** — `veas-json-generator.py` + `veas-ui.html` — a stdlib-only Python 3 web UI for building and validating `infrastructure.json` and `supervisor.json` without hand-editing JSON
 - **`Logs/`** — daily deployment logs once you run **`Start-VcfEdgeAtScale`** (not created by init alone beyond the empty folder)
 
 ## Step 3: Customize JSON files
@@ -92,8 +98,9 @@ The initialization function copies templated supervisor and infrastructure JSON 
 ### Option 1: Guided generation
 
 - Change to your VcfEdgeatScaleRootDirectory directory.
-- Run `python3 Tools/veas-json-generator.py`
-- Open a browser and point it to http://127.0.0.1:8000
+- Run `python3 Tools/veas-json-generator.py` — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically.
+- To use a different port: `python3 Tools/veas-json-generator.py --port 8081`
+- To suppress the automatic browser open (headless / SSH environments): add `--no-browser`
 - Follow the on-screen instructions.
 
 ### Option 2: Modify JSON files by hand
@@ -275,7 +282,7 @@ Start-VcfEdgeAtScale -Version
 > [!NOTE]
 > The module automatically checks for new versions once per day when used. The behaviour differs by install source:
 >
-> - **PSGallery install** (`Install-Module`): when a newer version is available, you are prompted to run `Update-Module` automatically (default Y). After a successful update the config UI tool (`veas-json-generator.py`) is also updated in your deployment root.
+> - **PSGallery install** (`Install-Module`): when a newer version is available, you are prompted to run `Update-Module` automatically (default Y). After a successful update both `veas-json-generator.py` and `veas-ui.html` are synced to your deployment root if their versions differ.
 > - **Manual / GitHub install** (git clone + `Install-VcfEdgeAtScaleModule.ps1`): announces the newer version and shows the manual update steps (`git pull` + re-run installer); no automatic install is attempted.
 > - If PSGallery cannot be reached (network error, proxy, air-gap), the check is silently skipped — it is always non-fatal.
 > - Disable automatic daily checks by setting `"autoUpdate": false` in `common` of your `infrastructure.json`.
@@ -837,7 +844,7 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 
 - **kubectl**: Required for Argo CD operations
 - **vcf CLI**: Required for supervisor management operations
-- **veas-json-generator.py** (Python 3, no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory. Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, and more) and saves both files.
+- **veas-json-generator.py** + **veas-ui.html** (Python 3, no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically. Pass `--no-browser` to suppress auto-open in headless or SSH environments. Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more) and saves both files.
 
 ### Environment
 
@@ -850,11 +857,16 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
-### Version 1.0.3.1002 (current)
+### Version 1.0.3.1003 (current)
 
 See [CHANGELOG.md](CHANGELOG.md) for the authoritative per-release list. Recent additions include:
 
-- **`veas-json-generator.py`** copied to **`Tools/`** by `-Initialize`: a stdlib-only Python 3 web UI for building and step-validating `infrastructure.json` and `supervisor.json` without hand-editing JSON.
+- **Template split**: The HTML/JS/CSS frontend has been extracted from `veas-json-generator.py` into a standalone `veas-ui.html` file. Both files are deployed to `Tools/` by `-Initialize` and synced on module upgrade.
+- **Browser auto-open**: `python3 veas-json-generator.py` now opens a browser tab automatically on startup. Use `--no-browser` to suppress in headless environments.
+- **VDS name accuracy**: The topology diagram now correctly renders VDS names using the configured `vdsNamePrefix` and edge site name (e.g. `VDS-vsan-edge1-sw1` / `-sw2` for 4-NIC).
+- **PNG export fix**: The PNG download now rasterises correctly at all scale factors.
+- **Cross-site ESX host uniqueness**: Both the Python validator and the PowerShell module now reject duplicate ESX host entries across edge sites before any deployment begins.
+- **Clone feature improvements**: Auto-generated network names are RFC1123-compliant; cloned sites omit source ESX hostnames, gateway addresses, and VMkernel IPs; a banner guides the user through required post-clone edits.
 
 ### Version 1.0.3.1001
 

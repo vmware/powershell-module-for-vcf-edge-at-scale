@@ -2473,9 +2473,9 @@ Function Get-SupervisorConfigurationFromJson {
             mgmtNetworkName = $siteSpec.mgmtNetworkSpec.mgmtNetworkName
             mgmtNetworkStartingIp = $siteSpec.mgmtNetworkSpec.mgmtNetworkStartingIp
             mgmtNetworkIPCount = $siteSpec.mgmtNetworkSpec.mgmtNetworkIPCount
-            mgmtNetworkDnsServers = $commonSpec.DnsServers
-            mgmtNetworkNtpServers = $commonSpec.NetworkNtpServers
-            mgmtNetworkSearchDomains = $commonSpec.NetworkSearchDomains
+            mgmtNetworkDnsServers = $commonSpec.dnsServers
+            mgmtNetworkNtpServers = $commonSpec.networkNtpServers
+            mgmtNetworkSearchDomains = $commonSpec.networkSearchDomains
         }
         $mgmtNetwork = Get-ManagementNetworkConfig -DisableSupervisorNetworkVanityPrefix:$DisableSupervisorNetworkVanityPrefix -Gateway $mgmtNetworkGateway -Spec $mgmtNetworkSpec
 
@@ -2488,9 +2488,9 @@ Function Get-SupervisorConfigurationFromJson {
             primaryWorkloadNetworkName = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkName
             primaryWorkloadNetworkStartingIp = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp
             primaryWorkloadNetworkIPCount = $siteSpec.primaryWorkloadNetwork.primaryWorkloadNetworkIPCount
-            workloadDnsServers = $commonSpec.DnsServers
-            workloadNtpServers = $commonSpec.NetworkNtpServers
-            primaryWorkloadNetworkSearchDomains = $commonSpec.NetworkSearchDomains
+            workloadDnsServers = $commonSpec.dnsServers
+            workloadNtpServers = $commonSpec.networkNtpServers
+            primaryWorkloadNetworkSearchDomains = $commonSpec.networkSearchDomains
             workloadServiceStartIp = $siteSpec.primaryWorkloadNetwork.workloadServiceStartIp
             workloadServiceCount = $siteSpec.primaryWorkloadNetwork.workloadServiceCount
         }
@@ -2509,9 +2509,9 @@ Function Get-SupervisorConfigurationFromJson {
             flbVipStartIP = $siteSpec.foundationLoadBalancerComponents.flbVipStartIP
             flbVipIPCount = $siteSpec.foundationLoadBalancerComponents.flbVipIPCount
             flbProvider = $FlbProvider
-            flbDnsServers = $commonSpec.DnsServers
-            flbNtpServers = $commonSpec.NetworkNtpServers
-            flbSearchDomains = $commonSpec.NetworkSearchDomains
+            flbDnsServers = $commonSpec.dnsServers
+            flbNtpServers = $commonSpec.networkNtpServers
+            flbSearchDomains = $commonSpec.networkSearchDomains
             flbManagementNetwork = [PSCustomObject]@{
                 flbNetworkIpAssignmentMode = $FlbNetworkIpAssignmentMode
                 flbNetworkName = $siteSpec.foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName
@@ -13408,9 +13408,9 @@ Function Test-JsonShallowValidation {
         "commonSupervisorSpec.flbAvailability",          # FLB availability configuration
         "commonSupervisorSpec.flbSize",                  # FLB size (small/medium/large)
         "commonSupervisorSpec.flbNetworkType",           # FLB network type
-        "commonSupervisorSpec.NetworkSearchDomains",     # Network search domains (shared)
-        "commonSupervisorSpec.NetworkNtpServers",        # Network NTP servers (shared)
-        "commonSupervisorSpec.DnsServers",               # DNS servers (shared)
+        "commonSupervisorSpec.networkSearchDomains",     # Network search domains (shared)
+        "commonSupervisorSpec.networkNtpServers",        # Network NTP servers (shared)
+        "commonSupervisorSpec.dnsServers",               # DNS servers (shared)
 
         # Site-Specific Supervisor Configuration
         "siteSpec",                                  # Array of site-specific configurations
@@ -15493,16 +15493,16 @@ Function Test-JsonDnsServers {
     $validationFailures = 0
 
     $ipv4regexPattern = '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
-    if ($SupervisorData.commonSupervisorSpec -and $SupervisorData.commonSupervisorSpec.DnsServers) {
-        $dnsServers = $SupervisorData.commonSupervisorSpec.DnsServers
+    if ($SupervisorData.commonSupervisorSpec -and $SupervisorData.commonSupervisorSpec.dnsServers) {
+        $dnsServers = $SupervisorData.commonSupervisorSpec.dnsServers
         $dnsServerCount = $dnsServers.Count
         if ($dnsServerCount -eq 0 -or $dnsServerCount -gt 3) {
-            Write-LogMessage -Type ERROR -Message "DNS server array 'commonSupervisorSpec.DnsServers' must have at least 1 server and at most 3 servers. Current count: $dnsServerCount."
+            Write-LogMessage -Type ERROR -Message "DNS server array 'commonSupervisorSpec.dnsServers' must have at least 1 server and at most 3 servers. Current count: $dnsServerCount."
             $validationFailures++
         } else {
             foreach ($dnsServerEntry in $dnsServers) {
                 if ($dnsServerEntry -notmatch $ipv4regexPattern) {
-                    Write-LogMessage -Type ERROR -Message "DNS server `"$dnsServerEntry`" in commonSupervisorSpec.DnsServers is not a valid IPv4 address."
+                    Write-LogMessage -Type ERROR -Message "DNS server `"$dnsServerEntry`" in commonSupervisorSpec.dnsServers is not a valid IPv4 address."
                     $validationFailures++
                 }
             }

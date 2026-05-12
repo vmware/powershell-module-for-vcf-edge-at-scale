@@ -40,7 +40,7 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
        Copyright (c) Broadcom. All Rights Reserved.
 
 
-  Module loaded (version 1.0.3.1002).
+  Module loaded (version 1.0.3.1003).
 
 Auto-load on every session
   Add the following line to your PowerShell profile (C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
@@ -78,6 +78,10 @@ Press Enter to use the default, or type a full directory path:
     Copied: infrastructure-config-help.json
     Copied: supervisor-config-help.json
 
+  Tools
+    Copied: veas-json-generator.py  (run: python3 "C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py")
+    Copied: veas-ui.html
+
   Root JSON files
     Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).
     Copied supervisor.json to deployment root.
@@ -105,8 +109,8 @@ SYNOPSIS
 
 
 SYNTAX
-    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-CollectLogs] [-ComputeOnly]
-    [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [-Initialize]
+    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [-CheckForUpdates] [[-CleanUp] <String>] [-CollectLogs]
+    [-ComputeOnly] [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [-Initialize]
     [-InitializeTemplatesOnly] [[-InfrastructureJson] <String>] [[-LogLevel] <String>] [[-RollbackOnFailure]
     <Nullable`1>] [-SaveHarborYaml] [[-SupervisorJson] <String>] [-ValidateOnly] [-Version] [<CommonParameters>]
 
@@ -414,28 +418,25 @@ Id VMHostName                    CanonicalName       CapacityGB Model           
 [INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
 [INFO] All 5 ArgoCD pods are ready.
 
----------------------------------------
-[INFO] To login to ArgoCD:
+[INFO] ╔═══════════════════════════════════════╗
+[INFO]   ArgoCD Login
 [INFO]    Go to https://10.40.12.203/
 [INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx
 [INFO]    To update your password run: "argocd.exe account update-password --server 10.40.12.203 --account admin --insecure"
-
----------------------------------------
+[INFO] ╚═══════════════════════════════════════╝
 [INFO] Created temporary Harbor data values file for edge site "vsan-edge1" (hostname: "harbor-site1.example.com", storageClass: "supervisor-vsan-edge1")
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
 [INFO] Harbor service install request submitted. Waiting for configuration to complete.
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "0612c330-c930-4187-9a58-655191f7a94e".
 [INFO] Harbor Supervisor Service installed successfully for edge site "vsan-edge1" (hostname: "harbor-site1.example.com").
-
----------------------------------------
-[INFO] Harbor is deployed for cluster "cluster-vsan-edge1" — connection details:
+[INFO] ╔═══════════════════════════════════════╗
+[INFO]   Harbor — cluster-vsan-edge1
 [INFO]   Username : admin
 [INFO]   Password : xxxxxxxxxxxxxxxxx
 [INFO]   Namespace: svc-harbor-4laok
 [INFO]   URL      : https://10.40.12.204
-[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.40.12.204 (Harbor load balancer external IP).
-
----------------------------------------
+[INFO]   DNS      : Create a record pointing "harbor-site1.example.com" to 10.40.12.204 (Harbor load balancer external IP).
+[INFO] ╚═══════════════════════════════════════╝
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (endpoint: "10.40.12.204")...
 [INFO] Harbor container image registry "harbor" registered on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (id: "2669572d-5cc2-4d78-b84d-19848e34e0bf", endpoint: "10.40.12.204").
 [INFO] Completed deployment for cluster with edgeSite: vsan-edge1
@@ -521,26 +522,25 @@ VCF91       9.1.0.0.25370933
 [INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).
 [INFO] All 5 ArgoCD pods are ready.
 
----------------------------------------
-[INFO] To login to ArgoCD:
+[INFO] ╔═══════════════════════════════════════╗
+[INFO]   ArgoCD Login
 [INFO]    Go to https://10.50.12.203/
 [INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx
 [INFO]    To update your password run: "argocd.exe account update-password --server 10.50.12.203 --account admin --insecure"
-
----------------------------------------
+[INFO] ╚═══════════════════════════════════════╝
 [INFO] Created temporary Harbor data values file for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com", storageClass: "supervisor-localdisk-edge2")
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.
 [INFO] Harbor service install request submitted. Waiting for configuration to complete.
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce".
 [INFO] Harbor Supervisor Service installed successfully for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com").
-
----------------------------------------
-[INFO] Harbor is deployed for cluster "cluster-localdisk-edge2" — connection details:
+[INFO] ╔═══════════════════════════════════════╗
+[INFO]   Harbor — cluster-localdisk-edge2
 [INFO]   Username : admin
 [INFO]   Password : xxxxxxxxxxxxxx
 [INFO]   Namespace: svc-harbor-ecpka
 [INFO]   URL      : https://10.50.12.204
-[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.50.12.204 (Harbor load balancer external IP).
+[INFO]   DNS      : Create a record pointing "harbor-site1.example.com" to 10.50.12.204 (Harbor load balancer external IP).
+[INFO] ╚═══════════════════════════════════════╝
 
 ---------------------------------------
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (endpoint: "10.50.12.204")...
@@ -571,8 +571,6 @@ delete argocd for localdisk-edge2
 ## Example cleaning up Supervisor
 
 ```Powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor
-
 PS C:\Users\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor
 
 [INFO] Processing 1 edge site(s): localdisk-edge2...
@@ -608,5 +606,5 @@ PS C:\Users\Administrator>
 
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -Version
-[INFO] VcfEdgeAtScale version: 1.0.3.1002
+[INFO] VcfEdgeAtScale version: 1.0.3.1003
 ```

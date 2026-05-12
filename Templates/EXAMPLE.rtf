@@ -2,7 +2,7 @@
 {\colortbl;\red255\green0\blue0;\red0\green0\blue255;}
 \widowctrl\hyphauto
 
-{\pard \qc \f0 \sa180 \li0 \fi0 \b \fs36 VcfEdgeAtScale Example\par}
+{\pard \qc \f0 \sa180 \li0 \fi0 \b \fs36 VcfEdgeAtScale \u8212- Examples\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel0 \b \fs36 Usage Examples\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Manual installation of module\par}
@@ -43,7 +43,7 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity\line
        Copyright (c) Broadcom. All Rights Reserved.\line
 \line
 \line
-  Module loaded (version 1.0.3.1002).\line
+  Module loaded (version 1.0.3.1003).\line
 \line
 Auto-load on every session\line
   Add the following line to your PowerShell profile (C:\\Users\\Administrator\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1):\line
@@ -77,6 +77,10 @@ Press Enter to use the default, or type a full directory path:\line
     Copied: infrastructure-config-help.json\line
     Copied: supervisor-config-help.json\line
 \line
+  Tools\line
+    Copied: veas-json-generator.py  (run: python3 "C:\\Users\\Administrator\\VCFEdgeAtScale\\Tools\\veas-json-generator.py")\line
+    Copied: veas-ui.html\line
+\line
   Root JSON files\line
     Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).\line
     Copied supervisor.json to deployment root.\line
@@ -100,8 +104,8 @@ SYNOPSIS\line
 \line
 \line
 SYNTAX\line
-    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [[-CleanUp] <String>] [-CollectLogs] [-ComputeOnly]\line
-    [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [-Initialize]\line
+    Start-VcfEdgeAtScale [-AcceptBadCheckResults] [-CheckForUpdates] [[-CleanUp] <String>] [-CollectLogs]\line
+    [-ComputeOnly] [[-DelayBeforeAddingNextHostSeconds] <Int32>] [[-EdgeSite] <String>] [-Force] [-Initialize]\line
     [-InitializeTemplatesOnly] [[-InfrastructureJson] <String>] [[-LogLevel] <String>] [[-RollbackOnFailure]\line
     <Nullable`1>] [-SaveHarborYaml] [[-SupervisorJson] <String>] [-ValidateOnly] [-Version] [<CommonParameters>]\line
 \line
@@ -396,28 +400,25 @@ Id VMHostName                    CanonicalName       CapacityGB Model           
 [INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).\line
 [INFO] All 5 ArgoCD pods are ready.\line
 \line
----------------------------------------\line
-[INFO] To login to ArgoCD:\line
+[INFO] \u9556 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9559 ?\line
+[INFO]   ArgoCD Login\line
 [INFO]    Go to https://10.40.12.203/\line
 [INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx\line
 [INFO]    To update your password run: "argocd.exe account update-password --server 10.40.12.203 --account admin --insecure"\line
-\line
----------------------------------------\line
+[INFO] \u9562 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9565 ?\line
 [INFO] Created temporary Harbor data values file for edge site "vsan-edge1" (hostname: "harbor-site1.example.com", storageClass: "supervisor-vsan-edge1")\line
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.\line
 [INFO] Harbor service install request submitted. Waiting for configuration to complete.\line
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "0612c330-c930-4187-9a58-655191f7a94e".\line
 [INFO] Harbor Supervisor Service installed successfully for edge site "vsan-edge1" (hostname: "harbor-site1.example.com").\line
-\line
----------------------------------------\line
-[INFO] Harbor is deployed for cluster "cluster-vsan-edge1" \u8212- connection details:\line
+[INFO] \u9556 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9559 ?\line
+[INFO]   Harbor \u8212- cluster-vsan-edge1\line
 [INFO]   Username : admin\line
 [INFO]   Password : xxxxxxxxxxxxxxxxx\line
 [INFO]   Namespace: svc-harbor-4laok\line
 [INFO]   URL      : https://10.40.12.204\line
-[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.40.12.204 (Harbor load balancer external IP).\line
-\line
----------------------------------------\line
+[INFO]   DNS      : Create a record pointing "harbor-site1.example.com" to 10.40.12.204 (Harbor load balancer external IP).\line
+[INFO] \u9562 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9565 ?\line
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (endpoint: "10.40.12.204")...\line
 [INFO] Harbor container image registry "harbor" registered on supervisor "0612c330-c930-4187-9a58-655191f7a94e" for cluster "cluster-vsan-edge1" (id: "2669572d-5cc2-4d78-b84d-19848e34e0bf", endpoint: "10.40.12.204").\line
 [INFO] Completed deployment for cluster with edgeSite: vsan-edge1\line
@@ -495,26 +496,25 @@ VCF91       9.1.0.0.25370933\line
 [INFO] ArgoCD operator webhook service is ready with 1 endpoint(s).\line
 [INFO] All 5 ArgoCD pods are ready.\line
 \line
----------------------------------------\line
-[INFO] To login to ArgoCD:\line
+[INFO] \u9556 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9559 ?\line
+[INFO]   ArgoCD Login\line
 [INFO]    Go to https://10.50.12.203/\line
 [INFO]    Login as user "admin" using temporary password: xxxxxxxxxxxx\line
 [INFO]    To update your password run: "argocd.exe account update-password --server 10.50.12.203 --account admin --insecure"\line
-\line
----------------------------------------\line
+[INFO] \u9562 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9565 ?\line
 [INFO] Created temporary Harbor data values file for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com", storageClass: "supervisor-localdisk-edge2")\line
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is already registered globally on this vCenter. Skipping re-registration.\line
 [INFO] Harbor service install request submitted. Waiting for configuration to complete.\line
 [INFO] Harbor service "harbor.tanzu.vmware.com" version "2.14.2+vmware.2-vks.1" is CONFIGURED on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce".\line
 [INFO] Harbor Supervisor Service installed successfully for edge site "localdisk-edge2" (hostname: "harbor-site1.example.com").\line
-\line
----------------------------------------\line
-[INFO] Harbor is deployed for cluster "cluster-localdisk-edge2" \u8212- connection details:\line
+[INFO] \u9556 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9559 ?\line
+[INFO]   Harbor \u8212- cluster-localdisk-edge2\line
 [INFO]   Username : admin\line
 [INFO]   Password : xxxxxxxxxxxxxx\line
 [INFO]   Namespace: svc-harbor-ecpka\line
 [INFO]   URL      : https://10.50.12.204\line
-[INFO] DNS: Create a record pointing "harbor-site1.example.com" to 10.50.12.204 (Harbor load balancer external IP).\line
+[INFO]   DNS      : Create a record pointing "harbor-site1.example.com" to 10.50.12.204 (Harbor load balancer external IP).\line
+[INFO] \u9562 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9552 ?\u9565 ?\line
 \line
 ---------------------------------------\line
 [INFO] Registering Harbor as container image registry "harbor" on supervisor "d6ed32b3-bef9-4578-af54-397b79d758ce" for cluster "cluster-localdisk-edge2" (endpoint: "10.50.12.204")...\line
@@ -538,8 +538,6 @@ delete argocd for localdisk-edge2\line
 [INFO] CleanUp (ArgoCD) completed. Exiting without deployment\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Example cleaning up Supervisor\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 PS C:\\Users\\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor\line
-\line
-PS C:\\Users\\Administrator> Start-VcfEdgeAtScale -Edgesite localdisk-edge2 -Cleanup Supervisor\line
 \line
 [INFO] Processing 1 edge site(s): localdisk-edge2...\line
 [INFO] Beginning workflow for edgeSite: "localdisk-edge2".\line
@@ -566,5 +564,5 @@ CollectLogs finished. Archive saved to:\line
 PS C:\\Users\\Administrator>\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Example of check the module version\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 PS C:\\Users\\Administrator> start-VcfEdgeAtScale -Version\line
-[INFO] VcfEdgeAtScale version: 1.0.3.1002\par}
+[INFO] VcfEdgeAtScale version: 1.0.3.1003\par}
 }
