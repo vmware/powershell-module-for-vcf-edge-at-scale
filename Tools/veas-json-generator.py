@@ -32,11 +32,11 @@
 import argparse
 import concurrent.futures
 import datetime
+import errno
 import io
 import ipaddress
 import json
 import os
-import errno
 import re
 import socket
 import ssl
@@ -46,6 +46,7 @@ import time
 import traceback
 import webbrowser
 import zipfile
+from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from urllib.parse import urlparse
@@ -58,7 +59,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1010"
+UI_VERSION = "1.0.3.1003"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -82,10 +83,10 @@ _DEFAULT_WORKLOAD_SERVICE_COUNT = 512
 # ceiling). Values outside this range pass the power-of-two check but produce unusable or
 # absurdly large service CIDRs at deployment time.
 _MIN_WORKLOAD_SERVICE_COUNT = 256
+_MAX_WORKLOAD_SERVICE_COUNT = 65536
 # Seconds to wait before opening the browser after the HTTP server starts, giving
 # the server time to bind and begin accepting connections before the first request.
 _BROWSER_OPEN_DELAY_SECONDS = 0.8
-_MAX_WORKLOAD_SERVICE_COUNT = 65536
 # VMkernel MTU bounds. 1500 is standard Ethernet; 9190 is the VMware jumbo-frame ceiling.
 # Management and vSAN Witness VMkernels are always 1500 regardless of this setting.
 _MIN_VMK_MTU = 1500
@@ -135,7 +136,16 @@ def is_valid_rfc1123(value):
 
 
 def is_valid_fqdn_or_ip(value):
-    return bool(FQDN_OR_IPV4_RE.match(str(value).strip()))
+    """Returns True when value is a valid FQDN or IPv4 address.
+
+    Strings containing only digits and dots are treated as IPv4 attempts and must
+    pass strict IPv4 validation. This prevents all-digit labels like "10.0.0.12345"
+    from slipping through as technically valid (but nonsensical) FQDNs.
+    """
+    val = str(value).strip()
+    if re.match(r'^[\d.]+$', val):
+        return is_valid_ipv4(val)
+    return bool(FQDN_OR_IPV4_RE.match(val))
 
 
 def is_valid_netmask(value):
@@ -178,7 +188,7 @@ def is_power_of_two(n):
         return False
 
 
-def validate_vlan_id(value, field_path):
+def validate_vlan_id(value, field_path: str) -> str | None:
     """Returns an error string if the VLAN ID is invalid, else None."""
     try:
         vid = int(value)
@@ -189,8 +199,8 @@ def validate_vlan_id(value, field_path):
     return None
 
 
-def _validate_common(common, errors):
-    """Validates the infrastructure.common block, appending errors in place."""
+def _validate_common(common: dict, errors: list[str], warnings: list[str]) -> None:
+    """Validates the infrastructure.common block, appending errors and warnings in place."""
     vc_name = common.get("vCenterName", "")
     if not vc_name:
         errors.append("infrastructure.common.vCenterName: required field is missing or empty.")
@@ -216,8 +226,8 @@ def _validate_common(common, errors):
         )
 
     if not common.get("contextName"):
-        errors.append(
-            "[WARNING] infrastructure.common.contextName: not set. "
+        warnings.append(
+            "infrastructure.common.contextName: not set. "
             "Required unless all clusters disable all supervisor services (ArgoCD and Harbor)."
         )
 
@@ -262,7 +272,7 @@ def _validate_common(common, errors):
                 errors.append(f"infrastructure.common.{mtu_key}: must be an integer.")
 
 
-def _validate_harbor(harbor, prefix, errors):
+def _validate_harbor(harbor: dict, prefix: str, errors: list[str]) -> None:
     """Validates a harborConfiguration block, appending errors in place."""
     hostname = harbor.get("hostname", "")
     if hostname and not is_valid_fqdn_or_ip(hostname):
@@ -296,7 +306,7 @@ def _validate_harbor(harbor, prefix, errors):
             )
 
 
-def _validate_vmk_interfaces(vmk_interfaces, storage_type, prefix, errors, segment_vlans=None):
+def _validate_vmk_interfaces(vmk_interfaces, storage_type: str, prefix: str, errors: list[str], segment_vlans: set[str] | None = None) -> None:
     """
     Validates networkingVmKernelInterfaces for a vSAN cluster, appending errors in place.
     segment_vlans: set of VLAN IDs (as strings) already occupied by networkSegments; when
@@ -360,7 +370,7 @@ def _validate_vmk_interfaces(vmk_interfaces, storage_type, prefix, errors, segme
             )
 
 
-def _validate_networking(networking, storage_type, prefix, errors):
+def _validate_networking(networking: dict, storage_type: str | None, prefix: str, errors: list[str]) -> tuple[list[str], dict[str, str]]:
     """
     Validates a cluster's networking block, appending errors in place.
     Returns (seg_names, seg_gw_map) for the cluster's segments (both empty on validation failure).
@@ -369,10 +379,10 @@ def _validate_networking(networking, storage_type, prefix, errors):
     seg_names = []
     seg_gw_map = {}
 
+    seen_vlans: set[str] = set()
     if not isinstance(segments, list) or len(segments) == 0:
         errors.append(f"{prefix}.networking.networkSegments: must be a non-empty array.")
     else:
-        seen_vlans = set()
         for seg_idx, seg in enumerate(segments):
             seg_name = seg.get("name", "")
             seg_label = f'"{seg_name}"' if seg_name else str(seg_idx)
@@ -399,7 +409,11 @@ def _validate_networking(networking, storage_type, prefix, errors):
                 seen_vlans.add(vid)
 
             gw = seg.get("gateway", "")
-            if not is_valid_cidr(gw):
+            if not gw:
+                errors.append(
+                    f"{seg_prefix}.gateway: required field is missing or empty."
+                )
+            elif not is_valid_cidr(gw):
                 errors.append(
                     f"{seg_prefix}.gateway: must be a valid CIDR (e.g. 10.0.0.1/24), got '{gw}'."
                 )
@@ -415,9 +429,25 @@ def _validate_networking(networking, storage_type, prefix, errors):
     return seg_names, seg_gw_map
 
 
-def _validate_cluster(cluster, idx, common, common_nic_list, errors):
+def _resolve_bool(cluster: dict, common: dict, key: str) -> bool:
     """
-    Validates a single cluster entry, appending errors in place.
+    Resolves a boolean flag from cluster supervisorServices, then common supervisorServices.
+    A JSON null value (Python None) is treated as absent — not as False — so that a null
+    entry does not override an explicit True at the common level, and does not silently
+    disable a service the user intended to keep enabled.
+    """
+    cluster_svcs = cluster.get("supervisorServices", {}) or {}
+    common_svcs = common.get("supervisorServices", {}) or {}
+    for svcs in (cluster_svcs, common_svcs):
+        val = svcs.get(key)
+        if val is not None:
+            return bool(val)
+    return False
+
+
+def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: list[str], warnings: list[str]) -> tuple[str | None, list[str], dict[str, str]]:
+    """
+    Validates a single cluster entry, appending errors and warnings in place.
     Returns (edge_site, seg_names, seg_gw_map); edge_site is None on fatal cluster error.
     """
     if not isinstance(cluster, dict):
@@ -467,7 +497,10 @@ def _validate_cluster(cluster, idx, common, common_nic_list, errors):
                 f"{prefix}.storagePolicy.storagePolicyRule: only valid value is 'Fully initialized'."
             )
 
-    if isinstance(esx_hosts, list) and storage_type in ("VMFS", "vSAN-OSA", "vSAN-ESA"):
+    # Only check per-storage-type host counts when the array is non-empty.
+    # An empty array is already reported above; emitting a count error on top would
+    # produce two errors for the same field (e.g. "must be non-empty" + "VMFS requires 1").
+    if isinstance(esx_hosts, list) and len(esx_hosts) > 0 and storage_type in ("VMFS", "vSAN-OSA", "vSAN-ESA"):
         if storage_type == "VMFS":
             if len(esx_hosts) != 1:
                 errors.append(f"{prefix}.esxHosts: VMFS requires exactly 1 host, got {len(esx_hosts)}.")
@@ -513,8 +546,8 @@ def _validate_cluster(cluster, idx, common, common_nic_list, errors):
         lab_hostname_fallback = lab_mode and not has_tls_crt and not has_tls_key
         if not has_hostname:
             if lab_hostname_fallback:
-                errors.append(
-                    f"[WARNING] {prefix}.harborConfiguration.hostname: not set; "
+                warnings.append(
+                    f"{prefix}.harborConfiguration.hostname: not set; "
                     "lab mode is enabled so hostname will be read from the Harbor data-values YAML template at runtime."
                 )
             else:
@@ -527,24 +560,44 @@ def _validate_cluster(cluster, idx, common, common_nic_list, errors):
     return edge_site, seg_names, seg_gw_map
 
 
-def validate_infrastructure(infra):
+@dataclass
+class InfraValidationResult:
+    """Structured result returned by validate_infrastructure.
+
+    Separating these four values into named fields avoids the positional-index
+    guessing game that a 4-tuple imposes on every call site.
+    """
+
+    errors: list[str]
+    warnings: list[str]
+    cluster_segment_names: dict[str, list[str]]
+    cluster_segment_gateways: dict[str, dict[str, str]]
+
+    @property
+    def passed(self) -> bool:
+        """True when no blocking errors were found."""
+        return not bool(self.errors)
+
+
+def validate_infrastructure(infra: dict) -> InfraValidationResult:
     """
     Validates an infrastructure dict against all known rules.
-    Returns (errors, cluster_segment_names, cluster_segment_gateways).
+    Returns an InfraValidationResult; .errors block generation, .warnings are advisory.
     """
-    errors = []
+    errors: list[str] = []
+    warnings: list[str] = []
 
     common = infra.get("common")
     if not isinstance(common, dict):
         errors.append("infrastructure: missing or invalid 'common' object.")
-        return errors, {}, {}
+        return InfraValidationResult(errors=errors, warnings=warnings, cluster_segment_names={}, cluster_segment_gateways={})
 
-    _validate_common(common, errors)
+    _validate_common(common, errors, warnings)
 
     clusters = infra.get("clusters")
     if not isinstance(clusters, list) or len(clusters) == 0:
         errors.append("infrastructure.clusters: must be a non-empty array.")
-        return errors, {}, {}
+        return InfraValidationResult(errors=errors, warnings=warnings, cluster_segment_names={}, cluster_segment_gateways={})
 
     seen_edge_sites = set()
     cluster_segment_names = {}
@@ -552,7 +605,7 @@ def validate_infrastructure(infra):
 
     for idx, cluster in enumerate(clusters):
         edge_site, seg_names, seg_gw_map = _validate_cluster(
-            cluster, idx, common, common.get("nicList"), errors
+            cluster, idx, common, common.get("nicList"), errors, warnings
         )
         if edge_site:
             if edge_site in seen_edge_sites:
@@ -593,26 +646,19 @@ def validate_infrastructure(infra):
             else:
                 seen_esx_hosts[host_key] = site
 
-    return errors, cluster_segment_names, cluster_segment_gateways
+    return InfraValidationResult(
+        errors=errors,
+        warnings=warnings,
+        cluster_segment_names=cluster_segment_names,
+        cluster_segment_gateways=cluster_segment_gateways,
+    )
 
 
-def _resolve_bool(cluster, common, key):
-    """
-    Resolves a boolean flag from cluster supervisorServices, then common supervisorServices.
-    A JSON null value (Python None) is treated as absent — not as False — so that a null
-    entry does not override an explicit True at the common level, and does not silently
-    disable a service the user intended to keep enabled.
-    """
-    cluster_svcs = cluster.get("supervisorServices", {}) or {}
-    common_svcs = common.get("supervisorServices", {}) or {}
-    for svcs in (cluster_svcs, common_svcs):
-        val = svcs.get(key)
-        if val is not None:
-            return bool(val)
-    return False
-
-
-def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gateways=None):
+def validate_supervisor(
+    supervisor: dict,
+    cluster_segment_names: dict[str, list[str]],
+    cluster_segment_gateways: dict[str, dict[str, str]] | None = None,
+) -> tuple[list[str], list[str]]:
     """
     Validates a supervisor dict against all known rules.
     cluster_segment_names: dict of {edgeSite: [segment_name, ...]} from infrastructure validation.
@@ -697,7 +743,7 @@ def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gatew
             )
         for name in sorted(infra_edge_sites - sup_edge_sites):
             warnings.append(
-                f"[WARNING] supervisor.siteSpec: infrastructure edgeSite '{name}' has no matching "
+                f"supervisor.siteSpec: infrastructure edgeSite '{name}' has no matching "
                 f"supervisor siteSpec entry. Supervisor configuration for this site will be empty."
             )
 
@@ -797,9 +843,11 @@ def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gatew
                         )
 
                     # Starting IP must fall within the gateway CIDR for this segment.
+                    # Skip the cross-check when either side is empty — the empty-field
+                    # validator already covers that case and we must not block mid-edit.
                     site_gateways = cluster_segment_gateways.get(edge_site, {})
-                    if net_name and net_name in site_gateways and is_valid_ipv4(start_ip):
-                        cidr = site_gateways[net_name]
+                    cidr = site_gateways.get(net_name, "") if net_name else ""
+                    if cidr and is_valid_cidr(cidr) and start_ip and is_valid_ipv4(start_ip):
                         if not is_ip_in_cidr(start_ip, cidr):
                             errors.append(
                                 f"{prefix}.foundationLoadBalancerComponents.{net_key}"
@@ -826,11 +874,15 @@ def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gatew
             mgmt_start = mgmt.get("mgmtNetworkStartingIp", "")
             if not is_valid_ipv4(mgmt_start):
                 errors.append(f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: must be a valid IPv4 address.")
-            elif mgmt_name and mgmt_name in site_gateways and not is_ip_in_cidr(mgmt_start, site_gateways[mgmt_name]):
-                errors.append(
-                    f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: '{mgmt_start}' is not within "
-                    f"the gateway subnet {site_gateways[mgmt_name]} for segment '{mgmt_name}'."
-                )
+            else:
+                # Skip the cross-check when the gateway CIDR is empty — the empty-field
+                # validator already covers that case and we must not block mid-edit.
+                mgmt_cidr = site_gateways.get(mgmt_name, "") if mgmt_name else ""
+                if mgmt_cidr and is_valid_cidr(mgmt_cidr) and not is_ip_in_cidr(mgmt_start, mgmt_cidr):
+                    errors.append(
+                        f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: '{mgmt_start}' is not within "
+                        f"the gateway subnet {mgmt_cidr} for segment '{mgmt_name}'."
+                    )
 
             try:
                 mgmt_count = int(mgmt.get("mgmtNetworkIPCount", 0))
@@ -859,11 +911,15 @@ def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gatew
                 errors.append(
                     f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp: must be a valid IPv4 address."
                 )
-            elif pwn_name and pwn_name in site_gateways and not is_ip_in_cidr(pwn_start, site_gateways[pwn_name]):
-                errors.append(
-                    f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp: '{pwn_start}' is not within "
-                    f"the gateway subnet {site_gateways[pwn_name]} for segment '{pwn_name}'."
-                )
+            else:
+                # Skip the cross-check when the gateway CIDR is empty — the empty-field
+                # validator already covers that case and we must not block mid-edit.
+                pwn_cidr = site_gateways.get(pwn_name, "") if pwn_name else ""
+                if pwn_cidr and is_valid_cidr(pwn_cidr) and not is_ip_in_cidr(pwn_start, pwn_cidr):
+                    errors.append(
+                        f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp: '{pwn_start}' is not within "
+                        f"the gateway subnet {pwn_cidr} for segment '{pwn_name}'."
+                    )
 
             try:
                 pwn_ip_count = int(pwn.get("primaryWorkloadNetworkIPCount", 0))
@@ -919,24 +975,24 @@ def validate_supervisor(supervisor, cluster_segment_names, cluster_segment_gatew
     return errors, warnings
 
 
-
 # ---------------------------------------------------------------------------
 # Per-step validation message formatters (PS-style [ERROR]/[WARNING]/[INFO])
 # ---------------------------------------------------------------------------
 
-def _fmt(error_str):
+def _tag_error(error_str: str) -> str:
     """Converts a plain error string to a PS-style [ERROR] message.
 
-    Strings that already carry a PS-style prefix ([ERROR], [WARNING], [INFO])
-    are passed through unchanged so pre-tagged messages (e.g. lab-mode warnings
-    emitted directly by validation helpers) are not double-prefixed.
+    Strings that already carry a [ERROR] or [WARNING] prefix are passed through
+    unchanged so pre-tagged messages (e.g. lab-mode warnings emitted directly by
+    validation helpers) are not double-prefixed. [INFO] messages are never passed
+    through this function — they are built separately in the message formatters.
     """
-    if error_str.startswith(("[ERROR]", "[WARNING]", "[INFO]")):
+    if error_str.startswith(("[ERROR]", "[WARNING]")):
         return error_str
     return f"[ERROR] {error_str}"
 
 
-def _validate_step1_messages(infra, base_dir=None):
+def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[str]:
     """
     Validates only Step 1 (Common Settings) fields and returns PS-style messages.
     Delegates validation logic to _validate_common so rules are defined once.
@@ -945,11 +1001,13 @@ def _validate_step1_messages(infra, base_dir=None):
     """
     common = infra.get("common", {})
 
-    # Collect errors from the shared validator; strip the "infrastructure.common." prefix
-    # for the condensed step-1 display (the user is already looking at the common settings form).
-    raw_errors = []
-    _validate_common(common, raw_errors)
-    messages = [_fmt(e).replace("infrastructure.common.", "common.") for e in raw_errors]
+    # Collect errors and warnings from the shared validator; strip the "infrastructure.common."
+    # prefix for the condensed step-1 display (the user is already on the common settings form).
+    raw_errors: list[str] = []
+    raw_warnings: list[str] = []
+    _validate_common(common, raw_errors, raw_warnings)
+    messages = [_tag_error(e).replace("infrastructure.common.", "common.") for e in raw_errors]
+    messages += [f"[WARNING] {w}".replace("infrastructure.common.", "common.") for w in raw_warnings]
 
     # Add [INFO] confirmations for each field that produced no error.
     def _no_error(*substrings):
@@ -1018,7 +1076,7 @@ def _validate_step1_messages(infra, base_dir=None):
     return messages
 
 
-def _format_infra_messages(errors, infra):
+def _format_infra_messages(errors: list[str], infra: dict) -> list[str]:
     """
     Converts infrastructure validation errors into PS-style messages,
     adding INFO confirmations for each cluster that has no errors of its own.
@@ -1027,7 +1085,7 @@ def _format_infra_messages(errors, infra):
     have errors, so the user can see which sites are already valid while
     fixing the others.
     """
-    messages = [_fmt(e) for e in errors]
+    messages = [_tag_error(e) for e in errors]
     clusters = infra.get("clusters", [])
     for cluster in clusters:
         site = cluster.get("edgeSite", "?")
@@ -1048,7 +1106,7 @@ def _format_infra_messages(errors, infra):
 # JSON builder helpers
 # ---------------------------------------------------------------------------
 
-def _iget(d, key, default=None):
+def _iget(d, key: str, default=None):
     """Case-insensitive dict lookup — tries the exact key first, then lowercased comparison.
 
     The supervisor.json spec uses camelCase keys but some real-world files use PascalCase
@@ -1066,20 +1124,20 @@ def _iget(d, key, default=None):
     return default
 
 
-def _to_str_list(value):
+def _to_str_list(value) -> list[str]:
     """Converts a comma-separated string or list to a list of stripped strings."""
     if isinstance(value, list):
-        return [str(v).strip() for v in value if str(v).strip()]
+        return [s for v in value if (s := str(v).strip())]
     return [s.strip() for s in str(value).split(",") if s.strip()]
 
 
-def _add_optional_str(target, source, key):
+def _add_optional_str(target: dict, source: dict, key: str) -> None:
     val = _iget(source, key, "")
     if val:
         target[key] = val
 
 
-def _add_optional_bool(target, source, key):
+def _add_optional_bool(target: dict, source: dict, key: str) -> None:
     """
     Writes key → bool into target if the source contains a recognizable boolean value.
     Crucially, explicit False IS written (not silently dropped) so that a cluster-level
@@ -1098,7 +1156,7 @@ def _add_optional_bool(target, source, key):
         target[key] = False
 
 
-def _safe_int(value, default=0):
+def _safe_int(value, default: int = 0) -> int:
     """Converts value to int, returning default on failure.
 
     Prevents cryptic build errors when a numeric field contains a non-numeric
@@ -1114,7 +1172,7 @@ def _safe_int(value, default=0):
 # JSON builders (dict → clean JSON structure)
 # ---------------------------------------------------------------------------
 
-def build_infrastructure(data):
+def build_infrastructure(data: dict) -> dict:
     """Builds a clean infrastructure dict from the validated form data dict."""
     common = data.get("common") or {}
 
@@ -1171,7 +1229,7 @@ def build_infrastructure(data):
     return {"common": common_obj, "clusters": clusters_out}
 
 
-def _build_cluster_obj(cluster):
+def _build_cluster_obj(cluster: dict) -> dict:
     """Builds a single cluster entry dict from raw form data.
 
     Called by build_infrastructure for each element of the clusters array.
@@ -1276,7 +1334,7 @@ def _build_cluster_obj(cluster):
     return cluster_obj
 
 
-def build_supervisor(data):
+def build_supervisor(data: dict) -> dict:
     """Builds a clean supervisor dict from the validated form data dict."""
     common_spec = data.get("commonSupervisorSpec", {})
 
@@ -1342,7 +1400,9 @@ def build_supervisor(data):
                 "primaryWorkloadNetworkStartingIp": _iget(pwn_spec, "primaryWorkloadNetworkStartingIp", ""),
                 "primaryWorkloadNetworkIPCount": _safe_int(_iget(pwn_spec, "primaryWorkloadNetworkIPCount", 0)),
                 "workloadServiceStartIp": _iget(pwn_spec, "workloadServiceStartIp", ""),
-                "workloadServiceCount": _safe_int(_iget(pwn_spec, "workloadServiceCount", _DEFAULT_WORKLOAD_SERVICE_COUNT), default=_DEFAULT_WORKLOAD_SERVICE_COUNT),
+                "workloadServiceCount": _safe_int(
+                    _iget(pwn_spec, "workloadServiceCount", _DEFAULT_WORKLOAD_SERVICE_COUNT)
+                ),
             },
         }
         sites_out.append(site_obj)
@@ -1378,7 +1438,7 @@ def _load_html_template() -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _check_host_https(host, timeout=_CONNECTIVITY_TIMEOUT):
+def _check_host_https(host: str, timeout: float = _CONNECTIVITY_TIMEOUT) -> dict[str, object]:
     """
     Probes host:443 with a TLS 1.2 handshake (as required by vCenter 9.0+).
     Certificate validation and hostname checking are disabled — self-signed
@@ -1396,6 +1456,7 @@ def _check_host_https(host, timeout=_CONNECTIVITY_TIMEOUT):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         with socket.create_connection((host, 443), timeout=timeout) as sock:
             with ctx.wrap_socket(sock, server_hostname=host):
@@ -1425,7 +1486,7 @@ def _check_host_https(host, timeout=_CONNECTIVITY_TIMEOUT):
         return {"host": host, "reachable": False, "latency_ms": None, "error": str(exc)}
 
 
-def _build_and_validate(payload):
+def _build_and_validate(payload: dict) -> tuple[dict, dict, list[str], list[str]]:
     """
     Builds infrastructure and supervisor dicts from a raw payload dict, then
     runs full validation (infrastructure, supervisor, cross-file).
@@ -1449,31 +1510,29 @@ def _build_and_validate(payload):
         raise ValueError(f"Failed to build supervisor: {type(exc).__name__}: {exc}") from exc
 
     try:
-        infra_errors, cluster_segment_names, cluster_segment_gateways = validate_infrastructure(infra_built)
+        infra_result = validate_infrastructure(infra_built)
     except Exception as exc:
         traceback.print_exc()
         raise ValueError(f"Failed to validate infrastructure: {type(exc).__name__}: {exc}") from exc
 
     try:
-        sup_errors, sup_warnings = validate_supervisor(sup_built, cluster_segment_names, cluster_segment_gateways)
+        sup_errors, sup_warnings = validate_supervisor(
+            sup_built,
+            infra_result.cluster_segment_names,
+            infra_result.cluster_segment_gateways,
+        )
     except Exception as exc:
         traceback.print_exc()
         raise ValueError(f"Failed to validate supervisor: {type(exc).__name__}: {exc}") from exc
 
-    # Separate pre-tagged [WARNING]/[INFO] strings from true [ERROR] strings.
-    # validate_infrastructure() may emit [WARNING]-prefixed strings (e.g. lab-mode
-    # hostname advisory) mixed into its errors list; these must not block generate/save.
-    infra_true_errors   = [e for e in infra_errors if not e.startswith(("[WARNING]", "[INFO]"))]
-    infra_warnings_list = [e for e in infra_errors if e.startswith(("[WARNING]", "[INFO]"))]
-
-    all_errors   = infra_true_errors + sup_errors
-    all_warnings = infra_warnings_list + [f"[WARNING] {w}" for w in sup_warnings]
+    all_errors   = infra_result.errors + sup_errors
+    all_warnings = [f"[WARNING] {w}" for w in infra_result.warnings + sup_warnings]
     return infra_built, sup_built, all_errors, all_warnings
 
 
 class ConfigHandler(BaseHTTPRequestHandler):
 
-    # Set by main() before the server starts; avoids a mutable module-level global.
+    # Default base directory; overridden per-instance via _make_handler().
     base_dir: Path = _DEFAULT_BASE_DIR
 
     def log_message(self, fmt, *args):
@@ -1572,7 +1631,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self._handle_templates()
 
         elif path == "/info":
-            base_dir = self.__class__.base_dir
+            base_dir = self.base_dir
             self.send_json(200, {
                 "version": UI_VERSION,
                 "base_dir": str(base_dir),
@@ -1604,7 +1663,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
     def _handle_templates(self):
         """Returns the infrastructure.json and supervisor.json from the resolved base directory."""
-        base_dir = self.__class__.base_dir
+        base_dir = self.base_dir
         infra_path = base_dir / "infrastructure.json"
         sup_path = base_dir / "supervisor.json"
         try:
@@ -1740,18 +1799,28 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
         try:
             if step == 1:
-                messages = _validate_step1_messages(infra_built, base_dir=self.__class__.base_dir)
+                messages = _validate_step1_messages(infra_built, base_dir=self.base_dir)
             elif step == 2:
-                infra_errors, cluster_segment_names, _ = validate_infrastructure(infra_built)
-                messages = _format_infra_messages(infra_errors, infra_built)
+                infra_result = validate_infrastructure(infra_built)
+                messages = (
+                    _format_infra_messages(infra_result.errors, infra_built)
+                    + [f"[WARNING] {w}" for w in infra_result.warnings]
+                )
             elif step == 3:
                 # Validate infrastructure first so those errors are also surfaced on Step 3,
                 # then pass the segment maps through to supervisor validation.
-                infra_errors, cluster_segment_names, cluster_segment_gateways = validate_infrastructure(infra_built)
-                sup_errors, sup_warnings = validate_supervisor(sup_built, cluster_segment_names, cluster_segment_gateways)
+                # Use _format_infra_messages (same as step 2) so that per-site INFO
+                # confirmations appear even when there are supervisor errors to fix.
+                infra_result = validate_infrastructure(infra_built)
+                sup_errors, sup_warnings = validate_supervisor(
+                    sup_built,
+                    infra_result.cluster_segment_names,
+                    infra_result.cluster_segment_gateways,
+                )
                 messages = (
-                    [_fmt(e) for e in infra_errors + sup_errors]
-                    + [f"[WARNING] {w}" for w in sup_warnings]
+                    _format_infra_messages(infra_result.errors, infra_built)
+                    + [_tag_error(e) for e in sup_errors]
+                    + [f"[WARNING] {w}" for w in infra_result.warnings + sup_warnings]
                 )
             else:
                 messages = ["[ERROR] Unknown step."]
@@ -1843,7 +1912,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self.send_json(422, {"errors": all_errors + all_warnings})
             return
 
-        base_dir = self.__class__.base_dir
+        base_dir = self.base_dir
         timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
         infra_path = base_dir / "infrastructure.json"
         sup_path = base_dir / "supervisor.json"
@@ -1872,16 +1941,19 @@ class ConfigHandler(BaseHTTPRequestHandler):
                         raise
                     backups.append(str(backup_path))
 
-            # Write new files atomically via sibling temp files.
-            # Each tmp file is cleaned up immediately if replace() fails so no
-            # orphaned .tmp files are left on disk after a partial write.
+            # Write new files atomically via sibling temp files with owner-only permissions.
+            # os.open with O_CREAT | O_EXCL | mode 0o600 ensures no world-readable window
+            # between creation and write — the same pattern used for backup files above.
+            # Each tmp file is cleaned up if replace() fails so no orphaned files remain.
             for dest_path, content in (
                 (infra_path, json.dumps(infra_built, indent=2)),
                 (sup_path, json.dumps(sup_built, indent=2)),
             ):
                 tmp_path = dest_path.with_name(dest_path.name + ".tmp")
                 try:
-                    tmp_path.write_text(content, encoding="utf-8")
+                    fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    with os.fdopen(fd, "wb") as tf:
+                        tf.write(content.encode("utf-8"))
                     tmp_path.replace(dest_path)
                 except OSError:
                     tmp_path.unlink(missing_ok=True)
@@ -1897,6 +1969,17 @@ class ConfigHandler(BaseHTTPRequestHandler):
             "backups": backups,
             "warnings": all_warnings,
         })
+
+
+def _make_handler(configured_base_dir: Path) -> type:
+    """Returns a ConfigHandler subclass with base_dir bound at class creation time.
+
+    Using a subclass avoids mutating ConfigHandler itself, so each call produces
+    an independent handler class — safe for testing and multi-server scenarios.
+    """
+    class _Handler(ConfigHandler):
+        base_dir = configured_base_dir
+    return _Handler
 
 
 # ---------------------------------------------------------------------------
@@ -1933,10 +2016,8 @@ def main():
     else:
         base_dir = _FALLBACK_TEMPLATES_DIR
 
-    ConfigHandler.base_dir = base_dir
-
     try:
-        server = HTTPServer((args.host, args.port), ConfigHandler)
+        server = HTTPServer((args.host, args.port), _make_handler(base_dir))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             print(
@@ -1957,7 +2038,7 @@ def main():
     url = f"http://{args.host}:{args.port}"
     browser_url = f"http://{browser_host}:{args.port}"
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on  {url}")
+    print(f"Listening on {url}")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")
