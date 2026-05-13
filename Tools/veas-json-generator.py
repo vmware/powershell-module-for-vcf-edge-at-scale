@@ -27,8 +27,11 @@
 # Usage:
 #   python3 veas-json-generator.py [--port PORT] [--base-dir DIR]
 #   Default port: 8080
-#   Default base-dir: ~/VCFEdgeAtScale (the directory created by Start-VcfEdgeAtScale -Initialize)
-#                     Falls back to VcfEdgeAtScale/Templates/ if ~/VCFEdgeAtScale does not exist.
+#   Default base-dir: the parent directory of this script (i.e. <deploy-root>/Tools/../ = <deploy-root>).
+#                     When installed via Start-VcfEdgeAtScale -Initialize this resolves to the
+#                     deployment root (e.g. ~/VCFEdgeAtScale).  When running directly from the
+#                     module source tree it resolves to the repo's VcfEdgeAtScale/ directory.
+#                     Falls back to <script-dir>/../Templates/ if infrastructure.json is absent.
 import argparse
 import concurrent.futures
 import datetime
@@ -87,6 +90,12 @@ _MAX_WORKLOAD_SERVICE_COUNT = 65536
 # Seconds to wait before opening the browser after the HTTP server starts, giving
 # the server time to bind and begin accepting connections before the first request.
 _BROWSER_OPEN_DELAY_SECONDS = 0.8
+# Filename of the HTML UI template that must live alongside this script.
+_TEMPLATE_FILE = "veas-ui.html"
+# Set VEAS_DEBUG=1 in the environment to print full tracebacks to the console
+# for unexpected server-side exceptions.  Off by default to keep operator
+# output clean during normal use.
+_DEBUG = os.environ.get("VEAS_DEBUG", "").strip() not in ("", "0", "false")
 # VMkernel MTU bounds. 1500 is standard Ethernet; 9190 is the VMware jumbo-frame ceiling.
 # Management and vSAN Witness VMkernels are always 1500 regardless of this setting.
 _MIN_VMK_MTU = 1500
@@ -105,7 +114,8 @@ CIDR_RE = re.compile(
 # RFC1123: 1–80 chars, lowercase, no leading/trailing hyphen.
 RFC1123_RE = re.compile(r"^(?=.{1,80}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 # vSphere object names: 1–80 chars, alphanumeric + space _ + - ()
-VSPHERE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _+\-()\\.]{1,80}$")
+# Keep in sync with _isValidVsphereLabel in veas-ui.html.
+VSPHERE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _+\-()]{1,80}$")
 # vCenter user: alphanumeric + . _ @ -
 VCENTER_USER_RE = re.compile(r"^[a-zA-Z0-9._@\-]{1,256}$")
 # FQDN or IPv4
@@ -445,6 +455,61 @@ def _resolve_bool(cluster: dict, common: dict, key: str) -> bool:
     return False
 
 
+def _validate_storage_policy(
+    cluster: dict, esx_hosts, common: dict, prefix: str, errors: list[str]
+) -> str | None:
+    """Validates storagePolicy, per-type host counts, and vSAN witness for one cluster.
+
+    Returns the resolved storageType string on success, or None when storagePolicy is absent
+    or its storageType is unrecognized (errors are appended in place in both cases).
+    """
+    storage_policy = cluster.get("storagePolicy")
+    storage_type = None
+    if not isinstance(storage_policy, dict):
+        errors.append(f"{prefix}.storagePolicy: required object is missing.")
+        return None
+
+    storage_type = storage_policy.get("storageType")
+    if storage_type not in ("VMFS", "vSAN-ESA", "vSAN-OSA"):
+        errors.append(
+            f"{prefix}.storagePolicy.storageType: must be 'VMFS', 'vSAN-ESA', or 'vSAN-OSA'."
+        )
+        storage_type = None
+
+    storage_policy_rule = storage_policy.get("storagePolicyRule")
+    if storage_policy_rule is not None and storage_policy_rule != "Fully initialized":
+        errors.append(
+            f"{prefix}.storagePolicy.storagePolicyRule: only valid value is 'Fully initialized'."
+        )
+
+    # Only check per-storage-type host counts when the array is non-empty.
+    # An empty array is already reported above; emitting a count error on top would
+    # produce two errors for the same field (e.g. "must be non-empty" + "VMFS requires 1").
+    if isinstance(esx_hosts, list) and len(esx_hosts) > 0 and storage_type in ("VMFS", "vSAN-OSA", "vSAN-ESA"):
+        if storage_type == "VMFS":
+            if len(esx_hosts) != 1:
+                errors.append(f"{prefix}.esxHosts: VMFS requires exactly 1 host, got {len(esx_hosts)}.")
+        else:
+            if len(esx_hosts) != _VSAN_HOST_COUNT:
+                errors.append(
+                    f"{prefix}.esxHosts: {storage_type} requires exactly {_VSAN_HOST_COUNT} hosts, "
+                    f"got {len(esx_hosts)}."
+                )
+
+    if storage_type in ("vSAN-OSA", "vSAN-ESA"):
+        witness = cluster.get("vSanWitnessVmName") or common.get("vSanWitnessVmName", "")
+        if not witness:
+            errors.append(
+                f"{prefix}.vSanWitnessVmName: required for {storage_type} (at cluster or common level)."
+            )
+        elif not is_valid_fqdn_or_ip(witness):
+            errors.append(
+                f"{prefix}.vSanWitnessVmName: '{witness}' must be a valid FQDN or IPv4 address."
+            )
+
+    return storage_type
+
+
 def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: list[str], warnings: list[str]) -> tuple[str | None, list[str], dict[str, str]]:
     """
     Validates a single cluster entry, appending errors and warnings in place.
@@ -481,45 +546,7 @@ def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: 
     elif not isinstance(effective_nic_list, list) or len(effective_nic_list) not in (2, 4):
         errors.append(f"{prefix}.nicList: effective nicList must have exactly 2 or 4 NIC objects.")
 
-    storage_policy = cluster.get("storagePolicy")
-    storage_type = None
-    if not isinstance(storage_policy, dict):
-        errors.append(f"{prefix}.storagePolicy: required object is missing.")
-    else:
-        storage_type = storage_policy.get("storageType")
-        if storage_type not in ("VMFS", "vSAN-ESA", "vSAN-OSA"):
-            errors.append(
-                f"{prefix}.storagePolicy.storageType: must be 'VMFS', 'vSAN-ESA', or 'vSAN-OSA'."
-            )
-        storage_policy_rule = storage_policy.get("storagePolicyRule")
-        if storage_policy_rule is not None and storage_policy_rule != "Fully initialized":
-            errors.append(
-                f"{prefix}.storagePolicy.storagePolicyRule: only valid value is 'Fully initialized'."
-            )
-
-    # Only check per-storage-type host counts when the array is non-empty.
-    # An empty array is already reported above; emitting a count error on top would
-    # produce two errors for the same field (e.g. "must be non-empty" + "VMFS requires 1").
-    if isinstance(esx_hosts, list) and len(esx_hosts) > 0 and storage_type in ("VMFS", "vSAN-OSA", "vSAN-ESA"):
-        if storage_type == "VMFS":
-            if len(esx_hosts) != 1:
-                errors.append(f"{prefix}.esxHosts: VMFS requires exactly 1 host, got {len(esx_hosts)}.")
-        else:
-            if len(esx_hosts) != _VSAN_HOST_COUNT:
-                errors.append(
-                    f"{prefix}.esxHosts: {storage_type} requires exactly {_VSAN_HOST_COUNT} hosts, got {len(esx_hosts)}."
-                )
-
-    if storage_type in ("vSAN-OSA", "vSAN-ESA"):
-        witness = cluster.get("vSanWitnessVmName") or common.get("vSanWitnessVmName", "")
-        if not witness:
-            errors.append(
-                f"{prefix}.vSanWitnessVmName: required for {storage_type} (at cluster or common level)."
-            )
-        elif not is_valid_fqdn_or_ip(witness):
-            errors.append(
-                f"{prefix}.vSanWitnessVmName: '{witness}' must be a valid FQDN or IPv4 address."
-            )
+    storage_type = _validate_storage_policy(cluster, esx_hosts, common, prefix, errors)
 
     cluster_ha = cluster.get("haPolicy")
     if cluster_ha is not None and cluster_ha not in ("reservationBased", "slotBased", "disabled"):
@@ -654,16 +681,33 @@ def validate_infrastructure(infra: dict) -> InfraValidationResult:
     )
 
 
+@dataclass
+class SupervisorValidationResult:
+    """Structured result returned by validate_supervisor.
+
+    Mirrors InfraValidationResult so both validators have a consistent,
+    named-field return type rather than requiring callers to track tuple order.
+    """
+
+    errors: list[str]
+    warnings: list[str]
+
+    @property
+    def passed(self) -> bool:
+        """True when no blocking errors were found."""
+        return not bool(self.errors)
+
+
 def validate_supervisor(
     supervisor: dict,
     cluster_segment_names: dict[str, list[str]],
     cluster_segment_gateways: dict[str, dict[str, str]] | None = None,
-) -> tuple[list[str], list[str]]:
+) -> SupervisorValidationResult:
     """
     Validates a supervisor dict against all known rules.
     cluster_segment_names: dict of {edgeSite: [segment_name, ...]} from infrastructure validation.
     cluster_segment_gateways: dict of {edgeSite: {segment_name: cidr_gateway}} for IP-in-range checks.
-    Returns (errors, warnings) — both lists of plain strings. Warnings do not fail validation.
+    Returns a SupervisorValidationResult; .errors block generation, .warnings are advisory.
     """
     if cluster_segment_gateways is None:
         cluster_segment_gateways = {}
@@ -673,7 +717,7 @@ def validate_supervisor(
     common_spec = supervisor.get("commonSupervisorSpec")
     if not isinstance(common_spec, dict):
         errors.append("supervisor: missing or invalid 'commonSupervisorSpec' object.")
-        return errors, warnings
+        return SupervisorValidationResult(errors=errors, warnings=warnings)
 
     # Required commonSupervisorSpec fields.
     control_plane_count = common_spec.get("controlPlaneVMCount")
@@ -723,7 +767,7 @@ def validate_supervisor(
     site_specs = supervisor.get("siteSpec")
     if not isinstance(site_specs, list) or len(site_specs) == 0:
         errors.append("supervisor.siteSpec: must be a non-empty array.")
-        return errors, warnings
+        return SupervisorValidationResult(errors=errors, warnings=warnings)
 
     seen_edge_sites = set()
     infra_edge_sites = set(cluster_segment_names.keys())
@@ -972,7 +1016,7 @@ def validate_supervisor(
             else:
                 seen_svc_start_ips[svc_ip] = edge_site
 
-    return errors, warnings
+    return SupervisorValidationResult(errors=errors, warnings=warnings)
 
 
 # ---------------------------------------------------------------------------
@@ -1006,37 +1050,38 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
     raw_errors: list[str] = []
     raw_warnings: list[str] = []
     _validate_common(common, raw_errors, raw_warnings)
-    messages = [_tag_error(e).replace("infrastructure.common.", "common.") for e in raw_errors]
-    messages += [f"[WARNING] {w}".replace("infrastructure.common.", "common.") for w in raw_warnings]
+    messages  = [_tag_error(e.replace("infrastructure.common.", "common.")) for e in raw_errors]
+    messages += [f"[WARNING] {w.replace('infrastructure.common.', 'common.')}" for w in raw_warnings]
 
     # Add [INFO] confirmations for each field that produced no error.
-    def _no_error(*substrings):
-        return not any(all(s in m for s in substrings) for m in messages)
+    def _field_is_clean(*field_name_parts):
+        """Returns True when no message in the current list mentions all given name parts."""
+        return not any(all(part in msg for part in field_name_parts) for msg in messages)
 
     vc_name = common.get("vCenterName", "")
-    if vc_name and _no_error("vCenterName"):
+    if vc_name and _field_is_clean("vCenterName"):
         messages.append(f"[INFO] common.vCenterName: '{vc_name}' — format OK.")
 
     vc_user = common.get("vCenterUser", "")
-    if vc_user and _no_error("vCenterUser"):
+    if vc_user and _field_is_clean("vCenterUser"):
         messages.append(f"[INFO] common.vCenterUser: '{vc_user}' — format OK.")
 
     dc = common.get("datacenterName", "")
-    if dc and _no_error("datacenterName"):
+    if dc and _field_is_clean("datacenterName"):
         messages.append(f"[INFO] common.datacenterName: '{dc}'.")
 
     nic_list = common.get("nicList", [])
-    if isinstance(nic_list, list) and len(nic_list) in (2, 4) and _no_error("nicList"):
+    if isinstance(nic_list, list) and len(nic_list) in (2, 4) and _field_is_clean("nicList"):
         nics = ", ".join(n.get("name", "?") for n in nic_list)
         messages.append(f"[INFO] common.nicList: {len(nic_list)} NICs ({nics}) — OK.")
 
     ha_policy = common.get("haPolicy")
-    if ha_policy and _no_error("haPolicy"):
+    if ha_policy and _field_is_clean("haPolicy"):
         messages.append(f"[INFO] common.haPolicy: '{ha_policy}'.")
 
     for mtu_key in ("vSanvMotionVmKernelMtuValue", "vmkernelMtu"):
         mtu = common.get(mtu_key)
-        if mtu is not None and _no_error(mtu_key):
+        if mtu is not None and _field_is_clean(mtu_key):
             try:
                 messages.append(f"[INFO] common.{mtu_key}: {int(mtu)} — OK.")
             except (TypeError, ValueError):
@@ -1334,6 +1379,25 @@ def _build_cluster_obj(cluster: dict) -> dict:
     return cluster_obj
 
 
+def _build_flb_network_obj(raw: dict) -> dict:
+    """Builds a single FLB network object (management or virtual-server) from raw form data.
+
+    Both flbManagementNetwork and flbVirtualServerNetwork share the same three required
+    fields plus an optional gateway.  This helper eliminates the copy-paste duplication
+    that previously existed in build_supervisor and ensures any future field additions
+    are made in exactly one place.
+    """
+    obj = {
+        "flbNetworkName":               _iget(raw, "flbNetworkName", ""),
+        "flbNetworkIpAddressStartingIp": _iget(raw, "flbNetworkIpAddressStartingIp", ""),
+        "flbNetworkIpAddressCount":      _safe_int(_iget(raw, "flbNetworkIpAddressCount", 0)),
+    }
+    gw = (_iget(raw, "flbNetworkGateway", "") or "").strip()
+    if gw:
+        obj["flbNetworkGateway"] = gw
+    return obj
+
+
 def build_supervisor(data: dict) -> dict:
     """Builds a clean supervisor dict from the validated form data dict."""
     common_spec = data.get("commonSupervisorSpec", {})
@@ -1360,23 +1424,8 @@ def build_supervisor(data: dict) -> dict:
         flb_mgmt = _iget(flb, "flbManagementNetwork", {})
         flb_vsn = _iget(flb, "flbVirtualServerNetwork", {})
 
-        flb_mgmt_obj = {
-            "flbNetworkName": _iget(flb_mgmt, "flbNetworkName", ""),
-            "flbNetworkIpAddressStartingIp": _iget(flb_mgmt, "flbNetworkIpAddressStartingIp", ""),
-            "flbNetworkIpAddressCount": _safe_int(_iget(flb_mgmt, "flbNetworkIpAddressCount", 0)),
-        }
-        gw_mgmt = (_iget(flb_mgmt, "flbNetworkGateway", "") or "").strip()
-        if gw_mgmt:
-            flb_mgmt_obj["flbNetworkGateway"] = gw_mgmt
-
-        flb_vsn_obj = {
-            "flbNetworkName": _iget(flb_vsn, "flbNetworkName", ""),
-            "flbNetworkIpAddressStartingIp": _iget(flb_vsn, "flbNetworkIpAddressStartingIp", ""),
-            "flbNetworkIpAddressCount": _safe_int(_iget(flb_vsn, "flbNetworkIpAddressCount", 0)),
-        }
-        gw_vsn = (_iget(flb_vsn, "flbNetworkGateway", "") or "").strip()
-        if gw_vsn:
-            flb_vsn_obj["flbNetworkGateway"] = gw_vsn
+        flb_mgmt_obj = _build_flb_network_obj(flb_mgmt)
+        flb_vsn_obj  = _build_flb_network_obj(flb_vsn)
 
         mgmt_spec = _iget(site, "mgmtNetworkSpec", {})
         pwn_spec = _iget(site, "primaryWorkloadNetwork", {})
@@ -1413,8 +1462,6 @@ def build_supervisor(data: dict) -> dict:
 # ---------------------------------------------------------------------------
 # Embedded HTML/JS/CSS single-page application
 # ---------------------------------------------------------------------------
-
-_TEMPLATE_FILE = "veas-ui.html"
 
 
 def _load_html_template() -> bytes:
@@ -1500,33 +1547,29 @@ def _build_and_validate(payload: dict) -> tuple[dict, dict, list[str], list[str]
     try:
         infra_built = build_infrastructure(infra_data)
     except Exception as exc:
-        traceback.print_exc()
         raise ValueError(f"Failed to build infrastructure: {type(exc).__name__}: {exc}") from exc
 
     try:
         sup_built = build_supervisor(sup_data)
     except Exception as exc:
-        traceback.print_exc()
         raise ValueError(f"Failed to build supervisor: {type(exc).__name__}: {exc}") from exc
 
     try:
         infra_result = validate_infrastructure(infra_built)
     except Exception as exc:
-        traceback.print_exc()
         raise ValueError(f"Failed to validate infrastructure: {type(exc).__name__}: {exc}") from exc
 
     try:
-        sup_errors, sup_warnings = validate_supervisor(
+        sup_result = validate_supervisor(
             sup_built,
             infra_result.cluster_segment_names,
             infra_result.cluster_segment_gateways,
         )
     except Exception as exc:
-        traceback.print_exc()
         raise ValueError(f"Failed to validate supervisor: {type(exc).__name__}: {exc}") from exc
 
-    all_errors   = infra_result.errors + sup_errors
-    all_warnings = [f"[WARNING] {w}" for w in infra_result.warnings + sup_warnings]
+    all_errors   = infra_result.errors + sup_result.errors
+    all_warnings = [f"[WARNING] {w}" for w in infra_result.warnings + sup_result.warnings]
     return infra_built, sup_built, all_errors, all_warnings
 
 
@@ -1661,33 +1704,47 @@ class ConfigHandler(BaseHTTPRequestHandler):
         else:
             self.send_json(404, {"error": "Not found."})
 
-    def _handle_templates(self):
-        """Returns the infrastructure.json and supervisor.json from the resolved base directory."""
-        base_dir = self.base_dir
-        infra_path = base_dir / "infrastructure.json"
-        sup_path = base_dir / "supervisor.json"
+    def _load_json_pair(self, directory: Path, not_found_status: int = 404, not_found_hint: str = "") -> bool:
+        """Loads infrastructure.json and supervisor.json from directory and sends the JSON response.
+
+        Returns True on success (200 sent). On error, sends the appropriate error response and
+        returns False. Callers should return immediately when this method returns False.
+
+        not_found_status: HTTP status for FileNotFoundError (404 for the default dir, 400 for a
+            caller-supplied custom path — the caller chose the path, so it is a client error).
+        not_found_hint: Optional sentence appended to the not-found error message (e.g. how to
+            recover) — allows each call site to give context-appropriate guidance.
+        """
         try:
-            with open(infra_path, encoding="utf-8") as f:
-                infra = json.load(f)
-            with open(sup_path, encoding="utf-8") as f:
-                supervisor = json.load(f)
+            infra      = json.loads((directory / "infrastructure.json").read_text(encoding="utf-8"))
+            supervisor = json.loads((directory / "supervisor.json").read_text(encoding="utf-8"))
             self.send_json(200, {
                 "infrastructure": infra,
-                "supervisor": supervisor,
-                "_source": str(base_dir),
+                "supervisor":     supervisor,
+                "_source":        str(directory),
             })
+            return True
         except FileNotFoundError as exc:
-            self.send_json(404, {
-                "error": (
-                    f"JSON file not found in base directory '{base_dir}': {exc.filename}. "
-                    "Run 'Start-VcfEdgeAtScale -Initialize' first, or pass --base-dir to point "
-                    "at the directory containing infrastructure.json and supervisor.json."
-                )
-            })
+            msg = f"JSON file not found in '{directory}': {exc.filename}."
+            if not_found_hint:
+                msg += f" {not_found_hint}"
+            self.send_json(not_found_status, {"error": msg})
         except json.JSONDecodeError as exc:
             self.send_json(500, {"error": f"JSON file is malformed: {exc}"})
         except (PermissionError, UnicodeDecodeError) as exc:
             self.send_json(500, {"error": f"Could not read file: {exc}"})
+        return False
+
+    def _handle_templates(self):
+        """Returns the infrastructure.json and supervisor.json from the resolved base directory."""
+        self._load_json_pair(
+            self.base_dir,
+            not_found_status=404,
+            not_found_hint=(
+                "Run 'Start-VcfEdgeAtScale -Initialize' first, or pass --base-dir to point "
+                "at the directory containing infrastructure.json and supervisor.json."
+            ),
+        )
 
     def _handle_connectivity_check(self):
         """
@@ -1750,24 +1807,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": f"Directory does not exist: {custom_dir}"})
             return
 
-        infra_path = custom_dir / "infrastructure.json"
-        sup_path = custom_dir / "supervisor.json"
-        try:
-            with open(infra_path, encoding="utf-8") as f:
-                infra = json.load(f)
-            with open(sup_path, encoding="utf-8") as f:
-                supervisor = json.load(f)
-            self.send_json(200, {
-                "infrastructure": infra,
-                "supervisor": supervisor,
-                "_source": str(custom_dir),
-            })
-        except FileNotFoundError as exc:
-            self.send_json(400, {"error": f"File not found: {exc.filename}"})
-        except json.JSONDecodeError as exc:
-            self.send_json(400, {"error": f"JSON is malformed: {exc}"})
-        except (PermissionError, UnicodeDecodeError) as exc:
-            self.send_json(400, {"error": f"Could not read file: {exc}"})
+        self._load_json_pair(custom_dir, not_found_status=400)
 
     def _handle_validate_step(self):
         """
@@ -1781,7 +1821,10 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"errors": [f"[ERROR] Invalid JSON payload: {exc}"]})
             return
 
-        step = payload.get("step", 1)
+        try:
+            step = int(payload.get("step", 1))
+        except (TypeError, ValueError):
+            step = -1
         messages = []
 
         try:
@@ -1790,8 +1833,9 @@ class ConfigHandler(BaseHTTPRequestHandler):
             infra_built = build_infrastructure(payload.get("infrastructure", {}))
             sup_built = build_supervisor(payload.get("supervisor", {})) if step == 3 else None
         except Exception as exc:
-            traceback.print_exc()
-            self.send_json(200, {
+            if _DEBUG:
+                traceback.print_exc()
+            self.send_json(400, {
                 "passed": False,
                 "messages": [f"[ERROR] Could not parse configuration: {type(exc).__name__}: {exc}"],
             })
@@ -1812,21 +1856,22 @@ class ConfigHandler(BaseHTTPRequestHandler):
                 # Use _format_infra_messages (same as step 2) so that per-site INFO
                 # confirmations appear even when there are supervisor errors to fix.
                 infra_result = validate_infrastructure(infra_built)
-                sup_errors, sup_warnings = validate_supervisor(
+                sup_result = validate_supervisor(
                     sup_built,
                     infra_result.cluster_segment_names,
                     infra_result.cluster_segment_gateways,
                 )
                 messages = (
                     _format_infra_messages(infra_result.errors, infra_built)
-                    + [_tag_error(e) for e in sup_errors]
-                    + [f"[WARNING] {w}" for w in infra_result.warnings + sup_warnings]
+                    + [_tag_error(e) for e in sup_result.errors]
+                    + [f"[WARNING] {w}" for w in infra_result.warnings + sup_result.warnings]
                 )
             else:
                 messages = ["[ERROR] Unknown step."]
         except Exception as exc:
-            traceback.print_exc()
-            self.send_json(200, {
+            if _DEBUG:
+                traceback.print_exc()
+            self.send_json(400, {
                 "passed": False,
                 "messages": [f"[ERROR] Unexpected validation error: {type(exc).__name__}: {exc}"],
             })
@@ -1850,7 +1895,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
         try:
             infra_built, sup_built, all_errors, all_warnings = _build_and_validate(payload)
         except Exception as exc:
-            traceback.print_exc()
+            if _DEBUG:
+                traceback.print_exc()
             self.send_json(400, {"errors": [f"Validation failed: {type(exc).__name__}: {exc}"], "warnings": [], "passed": False})
             return
 
@@ -1937,7 +1983,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
                         with os.fdopen(fd, "wb") as bf:
                             bf.write(src_path.read_bytes())
                     except OSError:
-                        os.unlink(str(backup_path))
+                        backup_path.unlink(missing_ok=True)
                         raise
                     backups.append(str(backup_path))
 
@@ -2033,12 +2079,13 @@ def main():
             sys.exit(1)
         raise
 
-    # When binding to all interfaces (0.0.0.0) use localhost in the browser URL.
+    # When binding to all interfaces (0.0.0.0) use localhost in the browser URL so the
+    # printed address is one the user can actually open in a browser.
     browser_host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
-    url = f"http://{args.host}:{args.port}"
-    browser_url = f"http://{browser_host}:{args.port}"
+    bind_addr    = f"{args.host}:{args.port}"
+    browser_url  = f"http://{browser_host}:{args.port}"
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on {url}")
+    print(f"Listening on {bind_addr}")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")

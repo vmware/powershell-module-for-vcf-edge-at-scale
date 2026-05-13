@@ -52,7 +52,7 @@ Python
 \sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 1: Installation\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: PowerShell Gallery\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: PowerShell Gallery (Preferred)\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Install-Module -Name VcfEdgeAtScale\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Clone from GitHub and install manually\par}
@@ -92,17 +92,234 @@ pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Tools/}} \u8212- {\f1 veas-json-generator.py} + {\f1 veas-ui.html} \u8212- a stdlib-only Python 3 web UI for building and validating {\f1 infrastructure.json} and {\f1 supervisor.json} without hand-editing JSON\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b {\f1 Logs/}} \u8212- daily deployment logs once you run {\b {\f1 Start-VcfEdgeAtScale}} (not created by init alone beyond the empty folder)\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 3: Customize JSON files\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 The initialization function copies templated supervisor and infrastructure JSON files into place, but they must be customized for your specific edge site locations.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: Guided generation\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Change to your VcfEdgeatScaleRootDirectory directory.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 python3 Tools/veas-json-generator.py} \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To use a different port: {\f1 python3 Tools/veas-json-generator.py --port 8081}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab To suppress the automatic browser open (headless / SSH environments): add {\f1 --no-browser}\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Follow the on-screen instructions.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Modify JSON files by hand\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Open {\f1 $env:VcfEdgeatScaleRootDirectory/infrastructure.json} and {\f1 $env:VcfEdgeatScaleRootDirectory/supervisor.json} in the editor of your choice.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Modify the files\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Run {\f1 Start-VcfEdgeAtScale -ValidateOnly} to validate your entries.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 After initialization, {\f1 infrastructure.json} and {\f1 supervisor.json} must be customized for your specific edge site locations. Two approaches work equally well \u8212- use whichever fits your workflow.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: Direct JSON editing\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Open {\f1 $env:VcfEdgeatScaleRootDirectory/infrastructure.json} and {\f1 $env:VcfEdgeatScaleRootDirectory/supervisor.json} in any text editor. The {\f1 Docs/} folder (placed there by {\f1 -Initialize}) contains {\f1 infrastructure-config-help.json} and {\f1 supervisor-config-help.json} with field-level descriptions. Run {\f1 Start-VcfEdgeAtScale -ValidateOnly} to validate your changes before deployment.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2 Browser-based UI tool\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Change to your {\f1 $env:VcfEdgeatScaleRootDirectory} directory and run:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 python3 Tools/veas-json-generator.py [--port PORT] [--host HOST] [--base-dir DIR] [--no-browser]\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b CLI flags:}\par}
+{
+\trowd \trgaph120
+\clbrdrb\brdrs\cellx2880\clbrdrb\brdrs\cellx5760\clbrdrb\brdrs\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Flag\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Default\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Description\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 --port PORT}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 8080}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 TCP port to listen on.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 --host HOST}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 127.0.0.1}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Bind address. Use {\f1 0.0.0.0} to accept connections from other machines on the network (e.g. SSH port-forwarding or a shared lab workstation).\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 --base-dir DIR}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Parent of script directory\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Directory that contains {\f1 infrastructure.json} and {\f1 supervisor.json}. Defaults to the base directory created by {\f1 Start-VcfEdgeAtScale -Initialize}. Falls back to the module's {\f1 Templates/} directory when the default path does not exist (useful for a first run before {\f1 -Initialize} has been run).\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 --no-browser}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\i (opens automatically)}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Suppress the automatic browser tab. Use in headless, SSH, or container environments.\par}
+\cell}
+}
+\intbl\row}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Startup examples:}\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Default: loads files from the -Initialize base dir, opens browser on port 8080\line
+python3 Tools/veas-json-generator.py\line
+\line
+# Different port\line
+python3 Tools/veas-json-generator.py --port 8081\line
+\line
+# Accept LAN connections (remote workstation or SSH tunnel)\line
+python3 Tools/veas-json-generator.py --host 0.0.0.0 --port 8080\line
+\line
+# Point to an explicit JSON directory (useful when managing multiple environments)\line
+python3 Tools/veas-json-generator.py --base-dir /path/to/my-env\line
+\line
+# Headless / SSH \u8212- suppress auto-open and open the URL manually\line
+python3 Tools/veas-json-generator.py --no-browser\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Debug tracing:} Set {\f1 VEAS_DEBUG=1} in your environment before starting the server to print full Python tracebacks to the terminal for unexpected server-side errors. Off by default to keep the operator's terminal clean during normal use.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # macOS / Linux\line
+VEAS_DEBUG=1 python3 Tools/veas-json-generator.py\line
+\line
+# Windows (PowerShell)\line
+$env:VEAS_DEBUG = "1"; python3 Tools/veas-json-generator.py\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Port already in use:} If the port is taken (another instance is running), the script prints the conflicting PID and suggests opening the existing tab or using a different port. To kill the existing process:\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 # macOS / Linux\line
+lsof -ti :8080 | xargs kill\line
+\line
+# Windows\line
+netstat -ano | findstr :8080   # note the PID, then:\line
+taskkill /PID <pid> /F\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b infrastructure.json not found warning:} If {\f1 infrastructure.json} is missing from the resolved base directory, the server prints a warning at startup and the UI shows the path in the directory hint. Run {\f1 Start-VcfEdgeAtScale -Initialize} first, or pass {\f1 --base-dir} to point to a directory that already contains the files.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Managing sites in the UI\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The guided JSON generator provides a multi-step wizard covering common settings, edge sites, supervisor configuration, and a live preview. The following operations are available in the {\b Edge Sites} step.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel3 \b \fs24 Adding a new site\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 1.\tx360\tab Click {\b Add Site} to open the new-site dialog.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 2.\tx360\tab Enter an RFC1123-compliant site name \u8212- lowercase letters, digits, and hyphens only (e.g. {\f1 edge-site-1}). The input rejects invalid characters as you type and a validation error is shown if the format is not met.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab Click {\b Add} to create the site card. The new site opens expanded for editing; any existing sites are collapsed to keep the page manageable.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 4.\tx360\tab Fill in all required fields: ESX hosts, storage type (VMFS / vSAN-OSA / vSAN-ESA), network segments, VMkernel interfaces (for vSAN), and supervisor service configuration.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel3 \b \fs24 Cloning an existing site\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Cloning is the recommended way to add a second (or additional) site that shares the same topology as an existing one.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 1.\tx360\tab Click {\b Clone} on the source site card.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 2.\tx360\tab Enter an RFC1123-compliant name for the new site. A preview beneath the input shows the suffix that will be appended to auto-generated segment names.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 3.\tx360\tab Click {\b Clone Site} to create the copy.\sa180\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b What is copied:} all common settings, storage type, NIC list, VMkernel interface definitions (service and VLAN), supervisor service toggle states, and Harbor volume sizes.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b What is cleared (must be filled in):}\par}
+{
+\trowd \trgaph120
+\clbrdrb\brdrs\cellx4320\clbrdrb\brdrs\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Field\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Notes\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 ESX host list\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Host names are site-specific.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 All segment gateways\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Cleared because IP addresses differ per site. The segment names are auto-generated (see below).\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 VMkernel IP addresses and gateway overrides\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Each host/site has unique IPs for vMotion and vSAN VMkernels.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Workload service start IP\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Automatically set to a computed non-overlapping block offset from the source site's value. Verify the auto-assigned address is available in your environment.\par}
+\cell}
+}
+\intbl\row}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b What is copied (review before deploying):}\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 All other fields are copied from the source site, including Harbor hostname, TLS certificate/key paths, Harbor secrets, and supervisor sizing. These will reference the source site's values \u8212- update them to match the new environment before saving.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Network segment names:} Segment names are regenerated by appending {\f1 -<new-site-name>} and RFC1123-sanitizing the result. For example, a source segment {\f1 guestnetwork-edge-site-1} becomes {\f1 guestnetwork-edge-site-1-edge-site-2} for a new site named {\f1 edge-site-2}. Supervisor network names (FLB management, virtual-server, management, and workload) are renamed with the same pattern. All segment gateways are cleared and must be entered for the new network.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Review banner:} Immediately after cloning, a yellow banner on the new site card lists the auto-generated segment names and VMkernel services that need IPs, and shows the auto-computed workload service start IP. Review each item, enter the required values, and dismiss the banner when done.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Network segment names are matched case-sensitively between {\f1 infrastructure.json} and {\f1 supervisor.json}. Verify that the generated segment names match what is in the supervisor configuration.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel3 \b \fs24 Saving your configuration\par}
+{
+\trowd \trgaph120
+\clbrdrb\brdrs\cellx4320\clbrdrb\brdrs\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Control\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Action\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\b \u8635 ? Refresh}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Re-validates all fields and updates the JSON preview panes. No files are written.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\b \u55357 ?\u56510 ? Save & Overwrite}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Writes {\f1 infrastructure.json} and {\f1 supervisor.json} to the base directory. {\b Existing files are automatically backed up to {\f1 Backup/} with a timestamp suffix before being overwritten.} The target path is displayed in the warning note beneath the button once validation passes.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx4320\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\b \u11015 ? Download ZIP}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Downloads both JSON files as a {\f1 .zip} for manual placement anywhere. Does not write to disk on the server.\par}
+\cell}
+}
+\intbl\row}
+{\pard \ql \f0 \sa180 \li0 \fi0 \par}
+{\pard \ql \f0 \sa180 \li0 \fi0 Important\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 {\b Save & Overwrite} replaces the files the PowerShell module reads at deployment time. Make sure the configuration is valid (no errors in the Refresh pane) before saving. The automatic backup in {\f1 Backup/} retains one timestamped copy per save operation; older backups are not pruned automatically.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel3 \b \fs24 Loading an existing configuration\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 When the server starts, it loads {\f1 infrastructure.json} and {\f1 supervisor.json} from the base directory. To load files from a different location without restarting the server, use the {\b Load from Directory} option in the UI (available in the wizard header). This is useful when managing multiple environments from the same workstation.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Informational: Deployment Process (per edge site)\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 1.\tx360\tab {\b Cluster creation and host addition}: Creates a new cluster in vCenter and adds the specified host(s) to the cluster. If a host is already managed by vCenter before it is added to the cluster, the module refuses to proceed while that host has {\b powered-on} VMs unless you confirm at a {\b Y/N} prompt (default {\b N}); it logs each running VM\u8217's name, power state, and guest OS, and the vCenter server name.\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 2.\tx360\tab Cluster configuration:\par}
@@ -625,6 +842,19 @@ VMware supervisor content library
 \cellx2880\cellx5760\cellx8640
 \trkeep\intbl
 {
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 vmkernelMtu}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Legacy alias for {\f1 vSanvMotionVmKernelMtuValue}. Applied when {\f1 vSanvMotionVmKernelMtuValue} is absent. Same range (1500\u8211-9190); mgmt and vSAN Witness are always 1500. Prefer {\f1 vSanvMotionVmKernelMtuValue} for new configurations.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 nicList}\par}
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Conditional\par}
@@ -785,7 +1015,7 @@ VMware supervisor content library
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Yes\par}
 \cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 VCF context name used by VCF CLI for Argo CD.\par}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 VCF CLI context name. A VCF CLI context stores a set of configurations tied to a specific environment, including a vSphere Supervisor Cluster. Required for Argo CD and Harbor deployment; not required for {\f1 -ComputeOnly}.\par}
 \cell}
 }
 \intbl\row}
@@ -1984,7 +2214,10 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 External Tools\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl}: Required for Argo CD operations\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vcf CLI}: Required for supervisor management operations\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} + {\b veas-ui.html} (Python 3, no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically. Pass {\f1 --no-browser} to suppress auto-open in headless or SSH environments. Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more) and saves both files.\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} + {\b veas-ui.html} (Python 3.9+, stdlib only \u8212- no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically. Key flags: {\f1 --port PORT} (default 8080), {\f1 --host HOST} (default 127.0.0.1; use 0.0.0.0 for LAN access), {\f1 --base-dir DIR} (override JSON directory), {\f1 --no-browser} (headless/SSH). Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See {\b {\field{\*\fldinst{HYPERLINK "#step-3-customize-json-files"}}{\fldrslt{\ul
+Step 3
+}}}
+} for full usage details.\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Environment\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab VMware Cloud Foundation 9.x\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab vCenter Server with administrative access\par}
@@ -1995,34 +2228,6 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 CHANGELOG.md
 }}}
  for detailed version history.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1003 (current)\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 See {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
- for the authoritative per-release list. Recent additions include:\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Template split}: The HTML/JS/CSS frontend has been extracted from {\f1 veas-json-generator.py} into a standalone {\f1 veas-ui.html} file. Both files are deployed to {\f1 Tools/} by {\f1 -Initialize} and synced on module upgrade.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Browser auto-open}: {\f1 python3 veas-json-generator.py} now opens a browser tab automatically on startup. Use {\f1 --no-browser} to suppress in headless environments.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b VDS name accuracy}: The topology diagram now correctly renders VDS names using the configured {\f1 vdsNamePrefix} and edge site name (e.g. {\f1 VDS-vsan-edge1-sw1} / {\f1 -sw2} for 4-NIC).\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b PNG export fix}: The PNG download now rasterises correctly at all scale factors.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Cross-site ESX host uniqueness}: Both the Python validator and the PowerShell module now reject duplicate ESX host entries across edge sites before any deployment begins.\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Clone feature improvements}: Auto-generated network names are RFC1123-compliant; cloned sites omit source ESX hostnames, gateway addresses, and VMkernel IPs; a banner guides the user through required post-clone edits.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1001\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Added update feature\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.3.1000\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 Summary aligned with {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
- and {\field{\*\fldinst{HYPERLINK "RELEASE_NOTES.md"}}{\fldrslt{\ul
-RELEASE_NOTES.md
-}}}
-: PowerShell module packaging for VCF 9.x edge Supervisor deployments (multi-site {\b {\f1 infrastructure.json}} / {\b {\f1 supervisor.json}}). Highlights include vLCM catalog workflows, stretched vSAN ESA/OSA, Harbor and Argo CD per site, optional {\b {\f1 -ComputeOnly}}, {\b {\f1 disableArgoCD}} / {\b {\f1 disableHarbor}}, lab-mode behavior ({\b {\f1 common.labenvironment}}), HA policy for vSAN multi-host clusters, VMkernel and witness handling, rollback/cleanup flows, cross-platform {\b {\f1 Import-Module}}, {\b {\f1 -Initialize}} persisting {\b {\f1 VcfEdgeatScaleRootDirectory}} via {\b {\f1 [System.Environment]::SetEnvironmentVariable}}, and {\b {\f1 Templates/*-config-help.json}} shipped under {\b {\f1 Docs/}} for {\b {\f1 Show-*ConfigurationHelp}}. See {\b {\field{\*\fldinst{HYPERLINK "CHANGELOG.md"}}{\fldrslt{\ul
-CHANGELOG.md
-}}}
-} for the authoritative per-release list.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Version 1.0.2\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Significant reliability and performance improvements\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Cross-platform compatibility fixes\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Enhanced error handling and logging\sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Contributing\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 This module is maintained by Broadcom. For issues, feature requests, or contributions, please refer to the project repository.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 License\par}

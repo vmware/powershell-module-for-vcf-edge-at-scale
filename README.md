@@ -26,7 +26,7 @@ The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF f
 
 <a id="install-psgallery"></a>
 
-### Option 1: PowerShell Gallery
+### Option 1: PowerShell Gallery (Preferred)
 
 ```text
 Install-Module -Name VcfEdgeAtScale
@@ -93,21 +93,126 @@ After **`Start-VcfEdgeAtScale -Initialize`** (or **`-Initialize -InitializeTempl
 
 ## Step 3: Customize JSON files
 
-The initialization function copies templated supervisor and infrastructure JSON files into place, but they must be customized for your specific edge site locations.
+After initialization, `infrastructure.json` and `supervisor.json` must be customized for your specific edge site locations. Two approaches work equally well — use whichever fits your workflow.
 
-### Option 1: Guided generation
+### Option 1: Direct JSON editing
 
-- Change to your VcfEdgeatScaleRootDirectory directory.
-- Run `python3 Tools/veas-json-generator.py` — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically.
-- To use a different port: `python3 Tools/veas-json-generator.py --port 8081`
-- To suppress the automatic browser open (headless / SSH environments): add `--no-browser`
-- Follow the on-screen instructions.
+Open `$env:VcfEdgeatScaleRootDirectory/infrastructure.json` and `$env:VcfEdgeatScaleRootDirectory/supervisor.json` in any text editor. The `Docs/` folder (placed there by `-Initialize`) contains `infrastructure-config-help.json` and `supervisor-config-help.json` with field-level descriptions. Run `Start-VcfEdgeAtScale -ValidateOnly` to validate your changes before deployment.
 
-### Option 2: Modify JSON files by hand
+### Option 2 Browser-based UI tool
 
-- Open `$env:VcfEdgeatScaleRootDirectory/infrastructure.json` and `$env:VcfEdgeatScaleRootDirectory/supervisor.json` in the editor of your choice.
-- Modify the files
-- Run `Start-VcfEdgeAtScale -ValidateOnly` to validate your entries.
+Change to your `$env:VcfEdgeatScaleRootDirectory` directory and run:
+
+```text
+python3 Tools/veas-json-generator.py [--port PORT] [--host HOST] [--base-dir DIR] [--no-browser]
+```
+
+**CLI flags:**
+
+| Flag | Default | Description |
+| ---- | ------- | ----------- |
+| `--port PORT` | `8080` | TCP port to listen on. |
+| `--host HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to accept connections from other machines on the network (e.g. SSH port-forwarding or a shared lab workstation). |
+| `--base-dir DIR` | Parent of script directory | Directory that contains `infrastructure.json` and `supervisor.json`. Defaults to the base directory created by `Start-VcfEdgeAtScale -Initialize`. Falls back to the module's `Templates/` directory when the default path does not exist (useful for a first run before `-Initialize` has been run). |
+| `--no-browser` | *(opens automatically)* | Suppress the automatic browser tab. Use in headless, SSH, or container environments. |
+
+**Startup examples:**
+
+```bash
+# Default: loads files from the -Initialize base dir, opens browser on port 8080
+python3 Tools/veas-json-generator.py
+
+# Different port
+python3 Tools/veas-json-generator.py --port 8081
+
+# Accept LAN connections (remote workstation or SSH tunnel)
+python3 Tools/veas-json-generator.py --host 0.0.0.0 --port 8080
+
+# Point to an explicit JSON directory (useful when managing multiple environments)
+python3 Tools/veas-json-generator.py --base-dir /path/to/my-env
+
+# Headless / SSH — suppress auto-open and open the URL manually
+python3 Tools/veas-json-generator.py --no-browser
+```
+
+**Debug tracing:** Set `VEAS_DEBUG=1` in your environment before starting the server to print full Python tracebacks to the terminal for unexpected server-side errors. Off by default to keep the operator's terminal clean during normal use.
+
+```bash
+# macOS / Linux
+VEAS_DEBUG=1 python3 Tools/veas-json-generator.py
+
+# Windows (PowerShell)
+$env:VEAS_DEBUG = "1"; python3 Tools/veas-json-generator.py
+```
+
+**Port already in use:** If the port is taken (another instance is running), the script prints the conflicting PID and suggests opening the existing tab or using a different port. To kill the existing process:
+
+```bash
+# macOS / Linux
+lsof -ti :8080 | xargs kill
+
+# Windows
+netstat -ano | findstr :8080   # note the PID, then:
+taskkill /PID <pid> /F
+```
+
+**infrastructure.json not found warning:** If `infrastructure.json` is missing from the resolved base directory, the server prints a warning at startup and the UI shows the path in the directory hint. Run `Start-VcfEdgeAtScale -Initialize` first, or pass `--base-dir` to point to a directory that already contains the files.
+
+### Managing sites in the UI
+
+The guided JSON generator provides a multi-step wizard covering common settings, edge sites, supervisor configuration, and a live preview. The following operations are available in the **Edge Sites** step.
+
+#### Adding a new site
+
+1. Click **Add Site** to open the new-site dialog.
+2. Enter an RFC1123-compliant site name — lowercase letters, digits, and hyphens only (e.g. `edge-site-1`). The input rejects invalid characters as you type and a validation error is shown if the format is not met.
+3. Click **Add** to create the site card. The new site opens expanded for editing; any existing sites are collapsed to keep the page manageable.
+4. Fill in all required fields: ESX hosts, storage type (VMFS / vSAN-OSA / vSAN-ESA), network segments, VMkernel interfaces (for vSAN), and supervisor service configuration.
+
+#### Cloning an existing site
+
+Cloning is the recommended way to add a second (or additional) site that shares the same topology as an existing one.
+
+1. Click **Clone** on the source site card.
+2. Enter an RFC1123-compliant name for the new site. A preview beneath the input shows the suffix that will be appended to auto-generated segment names.
+3. Click **Clone Site** to create the copy.
+
+**What is copied:** all common settings, storage type, NIC list, VMkernel interface definitions (service and VLAN), supervisor service toggle states, and Harbor volume sizes.
+
+**What is cleared (must be filled in):**
+
+| Field | Notes |
+| ----- | ----- |
+| ESX host list | Host names are site-specific. |
+| All segment gateways | Cleared because IP addresses differ per site. The segment names are auto-generated (see below). |
+| VMkernel IP addresses and gateway overrides | Each host/site has unique IPs for vMotion and vSAN VMkernels. |
+| Workload service start IP | Automatically set to a computed non-overlapping block offset from the source site's value. Verify the auto-assigned address is available in your environment. |
+
+**What is copied (review before deploying):**
+
+All other fields are copied from the source site, including Harbor hostname, TLS certificate/key paths, Harbor secrets, and supervisor sizing. These will reference the source site's values — update them to match the new environment before saving.
+
+**Network segment names:** Segment names are regenerated by appending `-<new-site-name>` and RFC1123-sanitizing the result. For example, a source segment `guestnetwork-edge-site-1` becomes `guestnetwork-edge-site-1-edge-site-2` for a new site named `edge-site-2`. Supervisor network names (FLB management, virtual-server, management, and workload) are renamed with the same pattern. All segment gateways are cleared and must be entered for the new network.
+
+**Review banner:** Immediately after cloning, a yellow banner on the new site card lists the auto-generated segment names and VMkernel services that need IPs, and shows the auto-computed workload service start IP. Review each item, enter the required values, and dismiss the banner when done.
+
+> [!NOTE]
+> Network segment names are matched case-sensitively between `infrastructure.json` and `supervisor.json`. Verify that the generated segment names match what is in the supervisor configuration.
+
+#### Saving your configuration
+
+| Control | Action |
+| ------- | ------ |
+| **↻ Refresh** | Re-validates all fields and updates the JSON preview panes. No files are written. |
+| **💾 Save & Overwrite** | Writes `infrastructure.json` and `supervisor.json` to the base directory. **Existing files are automatically backed up to `Backup/` with a timestamp suffix before being overwritten.** The target path is displayed in the warning note beneath the button once validation passes. |
+| **⬇ Download ZIP** | Downloads both JSON files as a `.zip` for manual placement anywhere. Does not write to disk on the server. |
+
+> [!IMPORTANT]
+> **Save & Overwrite** replaces the files the PowerShell module reads at deployment time. Make sure the configuration is valid (no errors in the Refresh pane) before saving. The automatic backup in `Backup/` retains one timestamped copy per save operation; older backups are not pruned automatically.
+
+#### Loading an existing configuration
+
+When the server starts, it loads `infrastructure.json` and `supervisor.json` from the base directory. To load files from a different location without restarting the server, use the **Load from Directory** option in the UI (available in the wizard header). This is useful when managing multiple environments from the same workstation.
 
 ## Informational: Deployment Process (per edge site)
 
@@ -465,6 +570,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `supervisorContentLibrarySubscriptionUrl` | No | When `supervisorContentLibraryDatastore` key is present, subscription URL for the content library. If this key is omitted, the default is the [VMware supervisor content library](https://wp-content.vmware.com/supervisor/v1/latest/lib.json) subscription URL. Only used when datastore key is present. |
 | `vLcmImageName` | No | vLCM image name in vCenter Image Catalog; omit to choose at run time. |
 | `vSanvMotionVmKernelMtuValue` | No | Optional. When defined, overrides the default MTU (9000) for the VDS and for vMotion/vSAN VMkernel adapters only. Mgmt (vmk0) and vSAN Witness (vmk3) are always 1500. Must be a number between 1500 and 9190 (numbers only; validated at JSON load). Use 1500 when the physical path does not support jumbo frames. |
+| `vmkernelMtu` | No | Legacy alias for `vSanvMotionVmKernelMtuValue`. Applied when `vSanvMotionVmKernelMtuValue` is absent. Same range (1500–9190); mgmt and vSAN Witness are always 1500. Prefer `vSanvMotionVmKernelMtuValue` for new configurations. |
 | `nicList` | Conditional | Array of NICs for the VDS (e.g. `[{"name":"vmnic1"},{"name":"vmnic2"}]`). Number of uplinks = length of nicList. Required at common or per cluster; cluster overrides common. Must have 2 or 4 NICs. |
 | `supervisorServices.parentDirectory` | Conditional | Directory for Argo CD and Harbor YAML files when using `*YamlFileName` keys (escape backslashes on Windows). Not required if every Argo- or Harbor-enabled cluster resolves paths via legacy `*YamlPath` properties at common or cluster level. |
 | `supervisorServices.argoCdOperatorYamlFileName` | Conditional | File name under `parentDirectory` for the Argo CD operator package. Use with `parentDirectory`, or use `supervisorServices.argoCdOperatorYamlPath` instead. Ignored when `disableArgoCD` is true. |
@@ -477,7 +583,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `supervisorServices.harborServiceYamlFileName` | Conditional | File name under `parentDirectory` for the Harbor Carvel package YAML. Use with `parentDirectory`, or use `supervisorServices.harborServiceYamlPath` instead. Not required when `disableHarbor` is true for all clusters. |
 | `supervisorServices.harborDataTemplateYamlPath` | Conditional | Legacy full path to the Harbor data values template YAML. Used when `parentDirectory` + `harborDataTemplateYamlFileName` do not both resolve. Not required when `disableHarbor` is true for all clusters. |
 | `supervisorServices.harborServiceYamlPath` | Conditional | Legacy full path to the Harbor Supervisor Service Carvel package YAML. Used when `parentDirectory` + `harborServiceYamlFileName` do not both resolve. Not required when `disableHarbor` is true for all clusters. |
-| `contextName` | Yes | VCF context name used by VCF CLI for Argo CD. |
+| `contextName` | Yes | VCF CLI context name. A VCF CLI context stores a set of configurations tied to a specific environment, including a vSphere Supervisor Cluster. Required for Argo CD and Harbor deployment; not required for `-ComputeOnly`. |
 
 #### clusters[] (each element)
 
@@ -844,7 +950,7 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 
 - **kubectl**: Required for Argo CD operations
 - **vcf CLI**: Required for supervisor management operations
-- **veas-json-generator.py** + **veas-ui.html** (Python 3, no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically. Pass `--no-browser` to suppress auto-open in headless or SSH environments. Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more) and saves both files.
+- **veas-json-generator.py** + **veas-ui.html** (Python 3.9+, stdlib only — no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically. Key flags: `--port PORT` (default 8080), `--host HOST` (default 127.0.0.1; use 0.0.0.0 for LAN access), `--base-dir DIR` (override JSON directory), `--no-browser` (headless/SSH). Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See **[Step 3](#step-3-customize-json-files)** for full usage details.
 
 ### Environment
 
@@ -856,31 +962,6 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 ## Version History
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
-
-### Version 1.0.3.1003 (current)
-
-See [CHANGELOG.md](CHANGELOG.md) for the authoritative per-release list. Recent additions include:
-
-- **Template split**: The HTML/JS/CSS frontend has been extracted from `veas-json-generator.py` into a standalone `veas-ui.html` file. Both files are deployed to `Tools/` by `-Initialize` and synced on module upgrade.
-- **Browser auto-open**: `python3 veas-json-generator.py` now opens a browser tab automatically on startup. Use `--no-browser` to suppress in headless environments.
-- **VDS name accuracy**: The topology diagram now correctly renders VDS names using the configured `vdsNamePrefix` and edge site name (e.g. `VDS-vsan-edge1-sw1` / `-sw2` for 4-NIC).
-- **PNG export fix**: The PNG download now rasterises correctly at all scale factors.
-- **Cross-site ESX host uniqueness**: Both the Python validator and the PowerShell module now reject duplicate ESX host entries across edge sites before any deployment begins.
-- **Clone feature improvements**: Auto-generated network names are RFC1123-compliant; cloned sites omit source ESX hostnames, gateway addresses, and VMkernel IPs; a banner guides the user through required post-clone edits.
-
-### Version 1.0.3.1001
-
-- Added update feature
-
-### Version 1.0.3.1000
-
-Summary aligned with [CHANGELOG.md](CHANGELOG.md) and [RELEASE_NOTES.md](RELEASE_NOTES.md): PowerShell module packaging for VCF 9.x edge Supervisor deployments (multi-site **`infrastructure.json`** / **`supervisor.json`**). Highlights include vLCM catalog workflows, stretched vSAN ESA/OSA, Harbor and Argo CD per site, optional **`-ComputeOnly`**, **`disableArgoCD`** / **`disableHarbor`**, lab-mode behavior (**`common.labenvironment`**), HA policy for vSAN multi-host clusters, VMkernel and witness handling, rollback/cleanup flows, cross-platform **`Import-Module`**, **`-Initialize`** persisting **`VcfEdgeatScaleRootDirectory`** via **`[System.Environment]::SetEnvironmentVariable`**, and **`Templates/*-config-help.json`** shipped under **`Docs/`** for **`Show-*ConfigurationHelp`**. See **[CHANGELOG.md](CHANGELOG.md)** for the authoritative per-release list.
-
-### Version 1.0.2
-
-- Significant reliability and performance improvements
-- Cross-platform compatibility fixes
-- Enhanced error handling and logging
 
 ## Contributing
 

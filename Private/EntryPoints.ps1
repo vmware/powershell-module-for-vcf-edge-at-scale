@@ -803,12 +803,6 @@ Function Start-VcfEdgeAtScale {
         replacing infrastructure.json or supervisor.json in the base directory. Use on an existing configuration root
         to update shipped YAML or help copies without touching JSON.
 
-    .PARAMETER OpenConfigTool
-        Use only with -Initialize. When specified, launches the VcfEdgeAtScale configuration UI
-        (veas-json-generator.py) immediately after initialization completes, automatically pointing it
-        at the initialized directory. When omitted, Initialize prompts interactively whether to open
-        the tool. Requires Python 3 to be available on PATH.
-
     .PARAMETER RollbackOnFailure
         Boolean. When $true: always rollback on failure (no prompt; for autonomous runs). When $false: never rollback; leave site in current state and continue to next site if any. When omitted: prompt with Yes/No/Always. Use $true or $false to bypass the prompt for unattended execution.
 
@@ -898,11 +892,6 @@ Function Start-VcfEdgeAtScale {
 
         Checks PSGallery for a newer version of VcfEdgeAtScale and prompts to install if one is found.
 
-    .EXAMPLE
-        Start-VcfEdgeAtScale -Initialize -OpenConfigTool
-
-        Runs interactive setup then immediately launches the configuration UI pointed at the initialized directory.
-
     #>
 
     [CmdletBinding()]
@@ -919,7 +908,6 @@ Function Start-VcfEdgeAtScale {
         [Parameter(Mandatory = $false)] [Switch]$InitializeTemplatesOnly,
         [Parameter(Mandatory = $false)] [String]$InfrastructureJson,
         [Parameter(Mandatory = $false)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO",
-        [Parameter(Mandatory = $false)] [Switch]$OpenConfigTool,
         [Parameter(Mandatory = $false)] [Nullable[bool]]$RollbackOnFailure,
         [Parameter(Mandatory = $false)] [Switch]$SaveHarborYaml,
         [Parameter(Mandatory = $false)] [String]$SupervisorJson,
@@ -975,42 +963,12 @@ Function Start-VcfEdgeAtScale {
             New-LogFile -BaseDirectory $initBaseDirectory -Directory "Logs"
         }
 
-        # Offer to launch the configuration UI tool.
+        # Print the command to launch the configuration UI; do not auto-launch it.
         $toolScript = Join-Path $initBaseDirectory "Tools" "veas-json-generator.py"
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $toolScript)) {
-            $launchTool = $false
-            if ($OpenConfigTool) {
-                $launchTool = $true
-            } else {
-                Write-Host ""
-                try {
-                    $answer = Read-Host "Open the VcfEdgeAtScale configuration UI now? (Y/N, default N)"
-                } catch {
-                    $answer = ""
-                }
-                if ($answer -match "^[Yy]") { $launchTool = $true }
-            }
-
-            if ($launchTool) {
-                $pythonExe = $null
-                foreach ($candidate in @("python3", "python")) {
-                    if (Get-Command $candidate -ErrorAction SilentlyContinue) {
-                        $pythonExe = $candidate
-                        break
-                    }
-                }
-                if ($pythonExe) {
-                    Write-Host ""
-                    Write-Host "  Launching configuration UI..." -ForegroundColor Cyan
-                    Write-Host "  Base directory: $initBaseDirectory" -ForegroundColor Gray
-                    Write-Host "  Press Ctrl+C in the tool window to stop the server when done." -ForegroundColor Gray
-                    & $pythonExe $toolScript --base-dir $initBaseDirectory
-                } else {
-                    Write-Host ""
-                    Write-Warning "Python 3 was not found on PATH. To launch the tool manually, run:"
-                    Write-Host "  python3 `"$toolScript`" --base-dir `"$initBaseDirectory`"" -ForegroundColor Cyan
-                }
-            }
+            Write-Host ""
+            Write-Host "  To build your configuration JSON, run:" -ForegroundColor Cyan
+            Write-Host "  python3 `"$toolScript`" --base-dir `"$initBaseDirectory`"" -ForegroundColor Gray
         }
 
         return
