@@ -107,12 +107,12 @@ The initialization function performs the following steps
 
 - Establishes a base directory for the module's logs and configuration files based on user input.
 - Copies templated JSON files into said base directory.
-- Copies Service YAML files into a ServiceYaml subdirectory.
+- Copies Service YAML files into a ServicesYaml subdirectory.
 - Copies the JSON configuration generator tool (`veas-json-generator.py`) into place.
 - Copies local help files into place (accessible through the module).
 - Creates an environment variable for the base directory.
 - Creates a logs directory for the module's debug logs.
-- Establishes the `$env:VcfEdgeatScaleRootDirectory` variable pointing to the base directory.
+- Establishes the `$env:VcfEdgeAtScaleRootDirectory` variable pointing to the base directory.
 
 ```Powershell
 Start-VcfEdgeAtScale -Initialize
@@ -137,11 +137,11 @@ After initialization, `infrastructure.json` and `supervisor.json` must be custom
 
 ### Option 1: Direct JSON editing
 
-Open `$env:VcfEdgeatScaleRootDirectory/infrastructure.json` and `$env:VcfEdgeatScaleRootDirectory/supervisor.json` in any text editor. The `Docs/` folder (placed there by `-Initialize`) contains `infrastructure-config-help.json` and `supervisor-config-help.json` with field-level descriptions. Run `Start-VcfEdgeAtScale -ValidateOnly` to validate your changes before deployment.
+Open `$env:VcfEdgeAtScaleRootDirectory/infrastructure.json` and `$env:VcfEdgeAtScaleRootDirectory/supervisor.json` in any text editor. The `Docs/` folder (placed there by `-Initialize`) contains `infrastructure-config-help.json` and `supervisor-config-help.json` with field-level descriptions. Run `Start-VcfEdgeAtScale -ValidateOnly` to validate your changes before deployment.
 
 ### Option 2 Browser-based UI tool
 
-Change to your `$env:VcfEdgeatScaleRootDirectory` directory and run:
+Change to your `$env:VcfEdgeAtScaleRootDirectory` directory and run:
 
 ```text
 python3 Tools/veas-json-generator.py [--port PORT] [--base-dir DIR] [--no-browser]
@@ -301,7 +301,7 @@ Show-SupervisorJsonConfigurationHelp -Format GridView
 ## Step 4: Deployment
 
 ```Powershell
-.\Start-VcfEdgeAtScale
+Start-VcfEdgeAtScale
 ```
 
 **Deployment Parameters:**
@@ -315,11 +315,11 @@ Show-SupervisorJsonConfigurationHelp -Format GridView
 - `ComputeOnly` (Switch, optional) - Run all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM) then exit without enabling the supervisor or deploying Argo CD.
 - `EdgeSite` (String, optional) - Comma-delimited list of edge site names (e.g. `"site1,site2"`). Deploy only clusters whose `edgeSite` matches one of the values, in the order listed. Omit to deploy all clusters. Only comma is allowed as separator; invalid delimiters or unknown site names cause the workflow to fail.
 - `Force` (Switch, optional) - When `common.labenvironment` is true in infrastructure JSON, bypasses the cleanup confirmation prompt when using `-CleanUp`. Has no effect otherwise; a warning is shown if used without lab.
-- `InfrastructureJson` (String, optional) - Path to infrastructure configuration JSON file. When omitted (or null/empty), defaults to **`Join-Path $env:VcfEdgeatScaleRootDirectory 'infrastructure.json'`
+- `InfrastructureJson` (String, optional) - Path to infrastructure configuration JSON file. When omitted (or null/empty), defaults to **`Join-Path $env:VcfEdgeAtScaleRootDirectory 'infrastructure.json'`
 - `LogLevel` (String, optional) - Minimum log level for console output. Valid values: `DEBUG`, `INFO`, `ADVISORY`, `WARNING`, `EXCEPTION`, `ERROR`. Default: `"INFO"`.
 - `RollbackOnFailure` (Boolean, optional) - When `$true`: always rollback on failure (no prompt; for autonomous runs). When `$false`: never rollback; leave site in current state and continue to next site if any. When omitted: prompt (Y/N/Always). Rollback scope is automatic by failure state (see **Rollback behavior** below). **Operational guidance:** answer Y (or use `$true`) before you re-try after a failure so the site is torn back to a consistent state. Use `$false` or N only for intentional leave-as-is debugging; afterward run the appropriate `-CleanUp` for that scope and edge site (for example `-CleanUp Harbor -EdgeSite site1`) before another full deployment.
 - `SaveHarborYaml` (Switch, optional) - When specified, the per-site Harbor data values YAML generated at runtime is moved to a `HarborYaml` subdirectory under the module directory instead of being deleted after installation. **Warning:** this file contains Harbor passwords and secrets in plain text. A `[WARNING]` is shown whenever this switch is used. Delete the file immediately after inspecting it.
-- `SupervisorJson` (String, optional) - Path to supervisor configuration JSON file. When omitted (or null/empty), defaults to **`Join-Path $env:VcfEdgeatScaleRootDirectory 'supervisor.json'`**.
+- `SupervisorJson` (String, optional) - Path to supervisor configuration JSON file. When omitted (or null/empty), defaults to **`Join-Path $env:VcfEdgeAtScaleRootDirectory 'supervisor.json'`**.
 
 **Rollback behavior:** Scope follows where the run failed: compute or vSAN before Supervisor → full compute teardown; after compute but before Argo CD → Supervisor disabled only; Argo CD issues → namespace removed, Supervisor kept; Harbor issues → Harbor service removed only. `-RollbackOnFailure` sets prompt, always, or never.
 
@@ -381,10 +381,10 @@ Start-VcfEdgeAtScale -CleanUp All -Force
 # Accept bad vSAN health or vLCM compliance (proceed without Y/N prompts)
 Start-VcfEdgeAtScale -AcceptBadCheckResults
 
-# Validate JSON and YAML only (no deployment) using files under VcfEdgeatScaleRootDirectory
+# Validate JSON and YAML only (no deployment) using files under VcfEdgeAtScaleRootDirectory
 Start-VcfEdgeAtScale -ValidateOnly
 
-# Or validate explicit paths (VcfEdgeatScaleRootDirectory must still be set; these paths override the default JSON filenames only)
+# Or validate explicit paths (VcfEdgeAtScaleRootDirectory must still be set; these paths override the default JSON filenames only)
 Start-VcfEdgeAtScale -ValidateOnly -InfrastructureJson "infrastructure-test.json" -SupervisorJson "supervisor-test.json"
 ```
 
@@ -412,7 +412,7 @@ If you run into a problem and need to share a log bundle with Broadcom, please r
 Start-VcfEdgeAtScale -CollectLogs
 ```
 
-The module will create an archive containing your infrastructure.json, supervisor.json, logs from the `$env:VcfEdgeatScaleRootDirectory`/log directory, and the `$env:VcfEdgeatScaleRootDirectory`/VcfEdgeBaseDir directory.
+The module creates a zip archive under your home directory containing infrastructure.json, supervisor.json, the `Logs/` folder, and the `ServicesYaml/` folder from `$env:VcfEdgeAtScaleRootDirectory`.
 
 ## Check module version
 
@@ -578,7 +578,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
   - **Volume sizes:** Optional `registryVolumeSize`, `jobserviceVolumeSize`, `databaseVolumeSize`, `redisVolumeSize`, `trivyVolumeSize` use `<positive integer>Gi` (for example `10Gi`).
   - **Secrets:** Optional keys map into the Harbor data values YAML. Prefix with `$env:VAR` to load at runtime so secrets stay out of JSON.
   - **Prompts:** If `$env:` is used and the variable is unset, the script asks once during pre-flight (masked input) and caches the value for the process. Plain text in JSON is never prompted for.
-  - **TLS:** **`tlsCrt`** and **`tlsKey`** must be defined **together** or **both omitted**; defining only one is an error. When using your own PEMs, either set **`harborConfiguration.parentDirectory`** and use **`tlsCrt`** / **`tlsKey`** as **file names** under that directory (both required together), with optional **`caCrt`** as a file name when both TLS files are set, **or** omit **`parentDirectory`** and set **`tlsCrt`**, **`tlsKey`**, and optional **`caCrt`** to full or infrastructure-relative PEM paths (legacy). Paths are validated before deploy. When **`common.labenvironment`** is **`true`** and **both** **`tlsCrt`** and **`tlsKey`** are omitted, the module generates a **self-signed** RSA certificate (via .NET, works on Windows and macOS/Linux), injects it into the Harbor data values YAML, and uses the same PEM for Supervisor container-registry trust; post-install **Harbor connection details** note that TLS is self-signed for lab. Set **`common.preserveAutoGeneratedKeyCertPair`** to **`true`** to save the generated key and certificate to **`$env:VcfEdgeatScaleRootDirectory/HarborKeyCerts/<edgeSite>/`** (as **`<edgeSite>.key`** / **`<edgeSite>.crt`**) after a successful deployment; on non-Windows the private key is restricted to owner-read-only (`chmod 0600`). This has no effect when `tlsCrt`/`tlsKey` are supplied or when `labenvironment` is `false`.
+  - **TLS:** **`tlsCrt`** and **`tlsKey`** must be defined **together** or **both omitted**; defining only one is an error. When using your own PEMs, either set **`harborConfiguration.parentDirectory`** and use **`tlsCrt`** / **`tlsKey`** as **file names** under that directory (both required together), with optional **`caCrt`** as a file name when both TLS files are set, **or** omit **`parentDirectory`** and set **`tlsCrt`**, **`tlsKey`**, and optional **`caCrt`** to full or infrastructure-relative PEM paths (legacy). Paths are validated before deploy. When **`common.labenvironment`** is **`true`** and **both** **`tlsCrt`** and **`tlsKey`** are omitted, the module generates a **self-signed** RSA certificate (via .NET, works on Windows and macOS/Linux), injects it into the Harbor data values YAML, and uses the same PEM for Supervisor container-registry trust; post-install **Harbor connection details** note that TLS is self-signed for lab. Set **`common.preserveAutoGeneratedKeyCertPair`** to **`true`** to save the generated key and certificate to **`$env:VcfEdgeAtScaleRootDirectory/HarborKeyCerts/<edgeSite>/`** (as **`<edgeSite>.key`** / **`<edgeSite>.crt`**) after a successful deployment; on non-Windows the private key is restricted to owner-read-only (`chmod 0600`). This has no effect when `tlsCrt`/`tlsKey` are supplied or when `labenvironment` is `false`.
   - **Service YAML:** Download the Harbor Supervisor Service Carvel package from Broadcom; set **`harborServiceYamlFileName`** (with **`parentDirectory`**) under `supervisorServices`, or use legacy **`harborServiceYamlPath`** / **`harborDataTemplateYamlPath`**.
   - **Order and rollback:** Harbor installs after Argo CD. Failure rolls back Harbor only so you can fix and re-run. `-CleanUp Harbor` removes Harbor without touching Supervisor or Argo CD.
 - **Network segment names** must be lower-case and RFC1123-compliant; they are matched to supervisor.json network references (case-sensitive).
@@ -598,7 +598,7 @@ This file defines vCenter connection, datacenter, and shared naming prefixes; th
 | `nonInteractivePassword` | No | Boolean. When true, uses VCENTER_COMMON_PASSWORD / ESX_COMMON_PASSWORD env vars. |
 | `autoUpdate` | No | Boolean. Default: omitted (auto-check enabled). When `false`, disables the once-per-day automatic PSGallery version check. The auto-check runs regardless of install source — PSGallery installs are offered `Update-Module`; manually installed copies are shown `git pull` + re-run installer steps. All PSGallery failures are non-fatal. Use `Start-VcfEdgeAtScale -CheckForUpdates` to check manually at any time. |
 | `labenvironment` | No | Boolean lab mode. JSON property name is case-insensitive; **`labenvironment`** matches **`Templates/infrastructure.json`** and **`Docs/infrastructure-config-help.json`**. Default `false`. When `true`, silences the vSAN HCL / hardware-compatibility health checks (`controlleronhcl`, `controllerdiskmode`, `controllerfirmware`, `controllerdriver`, `hclhostbadstate`) plus transient `advcfgsync`, and lab-filters the third-party IO filter alarm. This masks the red vSAN alarm signal but does **not** change the underlying hardware state; Supervisor enablement (WCP) still enforces cluster/host HCL conformance downstream, so a cluster that deploys cleanly in lab mode may fail to enable Supervisor outside lab mode on identical hardware. Also permits `-Force` to bypass cleanup confirmation and allows Harbor self-signed TLS when `tlsCrt`/`tlsKey` are both omitted. Keep `false` for production-equivalent deployments; use `true` only for nested / demo environments. See the **Lab environment and the vSAN HCL** bullet above. |
-| `preserveAutoGeneratedKeyCertPair` | No | Boolean. Only meaningful when `labenvironment` is `true` and Harbor TLS is auto-generated (`tlsCrt` and `tlsKey` both omitted). When `true`, saves the generated private key as `<edgeSite>.key` and certificate as `<edgeSite>.crt` to **`$env:VcfEdgeatScaleRootDirectory/HarborKeyCerts/<edgeSite>/`** after a successful deployment. On non-Windows, the private key is restricted to owner-read-only (`chmod 0600`). Ignored if `labenvironment` is `false` or `tlsCrt`/`tlsKey` are supplied. Default `false` when absent. |
+| `preserveAutoGeneratedKeyCertPair` | No | Boolean. Only meaningful when `labenvironment` is `true` and Harbor TLS is auto-generated (`tlsCrt` and `tlsKey` both omitted). When `true`, saves the generated private key as `<edgeSite>.key` and certificate as `<edgeSite>.crt` to **`$env:VcfEdgeAtScaleRootDirectory/HarborKeyCerts/<edgeSite>/`** after a successful deployment. On non-Windows, the private key is restricted to owner-read-only (`chmod 0600`). Ignored if `labenvironment` is `false` or `tlsCrt`/`tlsKey` are supplied. Default `false` when absent. |
 | `datacenterName` | Yes | Existing vSphere datacenter; clusters are created under it. |
 | `clusterNamePrefix` | No | Prefix for cluster names. Omit for default `cluster`; format `{prefix}-{edgeSite}`. |
 | `datastoreNamePrefix` | No | Prefix for datastore names. Omit for default `datastore`; format `{prefix}-{edgeSite}`. |
@@ -856,7 +856,7 @@ The module provides comprehensive logging with multiple levels:
 
 All levels are always written to the log file regardless of the configured `-LogLevel`. Console output is filtered to the configured level and above.
 
-Log files are created under **`Join-Path $env:VcfEdgeatScaleRootDirectory 'Logs'`** (not under the module folder) with the naming pattern:
+Log files are created under **`Join-Path $env:VcfEdgeAtScaleRootDirectory 'Logs'`** (not under the module folder) with the naming pattern:
 
 ```text
 <your-base-directory>/Logs/VcfEdgeAtScale-YYYY-MM-DD.log
@@ -894,7 +894,7 @@ Install-Module -Name VcfEdgeAtScale -Force
 ### Deployment Failures
 
 1. **Enable DEBUG logging**: `Start-VcfEdgeAtScale -LogLevel DEBUG`
-2. **Check log files**: Review **`Join-Path $env:VcfEdgeatScaleRootDirectory 'Logs/VcfEdgeAtScale-*.log'`** (or the path shown in errors)
+2. **Check log files**: Review **`Join-Path $env:VcfEdgeAtScaleRootDirectory 'Logs/VcfEdgeAtScale-*.log'`** (or the path shown in errors)
 3. **Validate JSON files**: Ensure configuration files are valid JSON
 4. **Verify prerequisites**: Confirm VCF.PowerCLI 9.0+, kubectl, and vcf CLI are available
 

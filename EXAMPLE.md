@@ -42,13 +42,8 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
 
   Module loaded (version 1.0.3.1008).
 
-Auto-load on every session
-  Add the following line to your PowerShell profile (C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
-    Import-Module VcfEdgeAtScale
 
-Add this line to your profile now? (Y/N, Enter=no): Y
-Added 'Import-Module VcfEdgeAtScale' to C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1.
-  The module will load automatically in every new PowerShell session.
+  No profile changes needed — Start-VcfEdgeAtScale auto-loads on first use.
 
 Installation complete.
   Start-VcfEdgeAtScale -Initialize
