@@ -1,0 +1,104 @@
+name: Pester Tests
+
+on:
+  push:
+    branches: ["main", "feat/**", "fix/**"]
+    paths:
+      - "VcfEdgeAtScale/**"
+  pull_request:
+    branches: ["main"]
+    paths:
+      - "VcfEdgeAtScale/**"
+
+jobs:
+  pester:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # Cache installed PowerShell modules keyed on the manifest's RequiredModules list.
+      # The cache key includes the runner OS and a hash of the psd1 so the cache is
+      # invalidated automatically when RequiredModules versions change.
+      - name: Cache PowerShell modules
+        id: cache-psmodules
+        uses: actions/cache@v4
+        with:
+          path: "${{ env.USERPROFILE }}\\Documents\\PowerShell\\Modules"
+          key: psmodules-${{ runner.os }}-${{ hashFiles('VcfEdgeAtScale/VcfEdgeAtScale.psd1') }}
+          restore-keys: |
+            psmodules-${{ runner.os }}-
+
+      - name: Install required modules
+        if: steps.cache-psmodules.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          # Install VMware PowerCLI components declared in VcfEdgeAtScale.psd1 RequiredModules.
+          # MinimumVersion matches the psd1 requirement; -AllowClobber prevents version-conflict errors.
+          $modules = @(
+            @{ Name = "VMware.Sdk.vSphere";                    MinimumVersion = "13.4" }
+            @{ Name = "VMware.VimAutomation.Core";             MinimumVersion = "13.4" }
+            @{ Name = "VMware.VimAutomation.Storage";          MinimumVersion = "13.4" }
+            @{ Name = "VMware.VimAutomation.Vds";              MinimumVersion = "13.4" }
+            @{ Name = "VMware.VimAutomation.WorkloadManagement"; MinimumVersion = "13.4" }
+            @{ Name = "Pester";                                MinimumVersion = "5.5"  }
+          )
+          foreach ($mod in $modules) {
+            Write-Host "Installing $($mod.Name) >= $($mod.MinimumVersion)..."
+            Install-Module -Name $mod.Name -MinimumVersion $mod.MinimumVersion `
+              -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+          }
+
+      - name: Run Pester
+        shell: pwsh
+        working-directory: VcfEdgeAtScale
+        run: |
+          $config = New-PesterConfiguration
+          $config.Run.Path       = "./Tests"
+          $config.Run.Exit       = $true
+          $config.Output.Verbosity = "Detailed"
+          $config.TestResult.Enabled    = $true
+          $config.TestResult.OutputFormat = "NUnit2.5"
+          $config.TestResult.OutputPath  = "test-results.xml"
+          Invoke-Pester -Configuration $config
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pester-results
+          path: VcfEdgeAtScale/test-results.xml
+
+      - name: Run PSScriptAnalyzer
+        shell: pwsh
+        working-directory: VcfEdgeAtScale
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+
+          # Analyze source files using the module-level settings (strict credential-handling rules enforced).
+          $sourceResults = Invoke-ScriptAnalyzer `
+            -Path . `
+            -Recurse `
+            -Settings PSScriptAnalyzerSettings.psd1 `
+            -Severity Warning, Error `
+            -ExcludePath Tests/
+
+          # Analyze test files with the test-specific settings (PSAvoidUsingConvertToSecureStringWithPlainText
+          # excluded because Pester It blocks are not function declarations and cannot use
+          # [Diagnostics.CodeAnalysis.SuppressMessageAttribute] directly).
+          $testResults = Invoke-ScriptAnalyzer `
+            -Path Tests/ `
+            -Recurse `
+            -Settings Tests/PSScriptAnalyzerSettings.psd1 `
+            -Severity Warning, Error
+
+          $allResults = @($sourceResults) + @($testResults)
+          if ($allResults.Count -gt 0) {
+            $allResults | Format-Table -AutoSize
+            Write-Error "PSScriptAnalyzer found $($allResults.Count) issue(s). See output above."
+            exit 1
+          }
+          Write-Host "PSScriptAnalyzer: no issues found."

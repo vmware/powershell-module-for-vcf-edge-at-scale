@@ -172,7 +172,7 @@ try {
     # and the user can reload manually if a dependency like VCF.PowerCLI is absent.
     Write-Host "Importing module into current session..." -ForegroundColor Gray
     try {
-        Import-Module -Name "VcfEdgeAtScale" -Force -ErrorAction Stop
+        Import-Module -Name $manifestPath -Force -ErrorAction Stop
         $reloadedVersion = (Get-Module -Name "VcfEdgeAtScale").Version
         Write-Host "  Module loaded (version $reloadedVersion)." -ForegroundColor Gray
     } catch {
