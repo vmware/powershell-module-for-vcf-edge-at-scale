@@ -2,17 +2,17 @@ apiVersion: data.packaging.carvel.dev/v1alpha1
 kind: Package
 metadata:
   creationTimestamp: null
-  name: argocd-service.vsphere.vmware.com.1.0.1-24896502
+  name: argocd-service.vsphere.vmware.com.1.1.0-25100889
 spec:
   refName: argocd-service.vsphere.vmware.com
-  releasedAt: "2025-05-08T08:32:37Z"
+  releasedAt: "2025-12-10T09:00:00Z"
   template:
     spec:
       deploy:
       - kapp: {}
       fetch:
       - imgpkgBundle:
-          image: projects.packages.broadcom.com/vsphere/supervisor/argocd-service/1.0.1/argocd-service:v1.0.1_vmware.1
+          image: projects.packages.broadcom.com/vsphere/supervisor/argocd-service/1.1.0/argocd-service:v1.1.0_vmware.1
       template:
       - ytt:
           paths:
@@ -26,12 +26,30 @@ spec:
     openAPIv3:
       additionalProperties: false
       properties:
+        bundleUrl:
+          default: ""
+          description: package bundle URL for the argocd carvel package
+          type: string
+        capabilities:
+          default: []
+          description: Array of capabilities passed by supervisor service framework
+          items:
+            additionalProperties: false
+            properties:
+              name:
+                default: ""
+                type: string
+              value:
+                default: false
+                type: boolean
+            type: object
+          type: array
         namespace:
           default: argocd-service
           description: argocd-service's namespace
           type: string
       type: object
-  version: 1.0.1-24896502
+  version: 1.1.0-25100889
 ---
 apiVersion: data.packaging.carvel.dev/v1alpha1
 kind: PackageMetadata
@@ -40,5 +58,6 @@ metadata:
   name: argocd-service.vsphere.vmware.com
 spec:
   displayName: ArgoCD Service
+  providerName: Broadcom
   longDescription: This service allows users to self-service ArgoCD instance in different namespaces.
   shortDescription: This service allows users to self-service ArgoCD instance in different namespaces.

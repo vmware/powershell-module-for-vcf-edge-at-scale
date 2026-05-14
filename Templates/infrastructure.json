@@ -1,0 +1,133 @@
+{
+  "common": {
+    "vCenterName": "vc01.example.com",
+    "vCenterUser": "administrator@vsphere.local",
+    "contextName": "vcf-context-01",
+    "datacenterName": "dc01",
+    "nicList": [
+      { "name": "vmnic0" },
+      { "name": "vmnic1" }
+    ],
+    "supervisorServices": {
+      "parentDirectory": "C:\\Users\\Administrator\\Documents\\",
+      "argoCdDeploymentYamlFileName": "argocd-deployment.yml",
+      "argoCdOperatorYamlFileName": "1.1.0-25100889.yml",
+      "harborDataTemplateYamlFileName": "harbor-data-values-v2.14.2.yml",
+      "harborServiceYamlFileName": "legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
+    },
+    "vLcmImageName": "autogen-software-spec-1",
+    "vSanWitnessVmName": "vsanwitness.example.com",
+    "haPolicy": "reservationBased"
+  },
+  "clusters": [
+    {
+      "edgeSite": "site1",
+      "esxHosts": [
+        "esx01.example.com",
+        "esx02.example.com"
+      ],
+      "harborConfiguration": {
+        "parentDirectory": "C:\\Users\\Administrator\\Documents\\",
+        "hostname": "harbor-site1.example.com",
+        "tlsCrt": "tls.crt.pem",
+        "tlsKey": "tls.key.pem",
+        "caCrt": "ca.crt.pem",
+        "registryVolumeSize": "10Gi",
+        "jobserviceVolumeSize": "5Gi",
+        "databaseVolumeSize": "10Gi",
+        "redisVolumeSize": "1Gi",
+        "trivyVolumeSize": "5Gi",
+        "harborAdminPassword": "$env:HARBOR_ADMIN_PASSWORD",
+        "secretKey": "$env:SECRET_KEY",
+        "databasePassword": "$env:DATABASE_PASSWORD",
+        "coreSecret": "$env:CORE_SECRET_KEY",
+        "jobserviceSecret": "$env:JOBSERVICE_SECRET_KEY",
+        "registrySecret": "$env:REGISTRY_SECRET_KEY"
+      },
+      "storagePolicy": {
+        "storageType": "vSAN-OSA"
+      },
+      "networking": {
+        "networkSegments": [
+          {
+            "name": "primaryworkloadnetwork",
+            "vlanId": "300",
+            "gateway": "10.30.10.1/24"
+          },
+          {
+            "name": "flbmanagementnetwork",
+            "vlanId": "301",
+            "gateway": "10.30.11.1/24"
+          },
+          {
+            "name": "virtualservernetwork",
+            "vlanId": "302",
+            "gateway": "10.30.12.1/24"
+          },
+          {
+            "name": "mgmtnetwork",
+            "vlanId": "303",
+            "gateway": "10.30.13.1/24"
+          }
+        ],
+        "networkingVmKernelInterfaces": [
+          {
+            "service": "vMotion",
+            "vlanId": "304",
+            "netmask": "255.255.255.0",
+            "ipList": ["10.30.14.12", "10.30.14.13"]
+          },
+          {
+            "service": "vSAN",
+            "vlanId": "305",
+            "netmask": "255.255.255.0",
+            "ipList": ["10.30.15.12", "10.30.15.13"]
+          },
+          {
+            "service": "vSAN Witness",
+            "vlanId": "306",
+            "netmask": "255.255.255.0",
+            "gateway": "10.30.16.1",
+            "ipList": ["10.30.16.12", "10.30.16.13"]
+          }
+        ]
+      }
+    },
+    {
+      "edgeSite": "site2",
+      "esxHosts": [
+        "esx03.example.com"
+      ],
+      "storagePolicy": {
+        "storageType": "VMFS"
+      },
+      "harborConfiguration": {
+        "hostname": "harbor-site2.example.com"
+      },
+      "networking": {
+        "networkSegments": [
+          {
+            "name": "primaryworkloadnetwork-2",
+            "vlanId": "400",
+            "gateway": "10.40.10.1/24"
+          },
+          {
+            "name": "flbmanagementnetwork-2",
+            "vlanId": "401",
+            "gateway": "10.40.11.1/24"
+          },
+          {
+            "name": "virtualservernetwork-2",
+            "vlanId": "402",
+            "gateway": "10.40.12.1/24"
+          },
+          {
+            "name": "mgmtnetwork-2",
+            "vlanId": "403",
+            "gateway": "10.40.13.1/24"
+          }
+        ]
+      }
+    }
+  ]
+}

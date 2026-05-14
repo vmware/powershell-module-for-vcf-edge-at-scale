@@ -1,0 +1,150 @@
+{
+  "moduleVersion": "1.0.3",
+  "entries": [
+  {
+    "Key": "commonSupervisorSpec.controlPlaneVMCount",
+    "Required": "Yes",
+    "Notes": "1 or 3. Shallow validation requires the key; values follow platform rules."
+  },
+  {
+    "Key": "commonSupervisorSpec.controlPlaneSize",
+    "Required": "Yes",
+    "Notes": "TINY, SMALL, MEDIUM, or LARGE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbAvailability",
+    "Required": "Yes",
+    "Notes": "SINGLE_NODE or ACTIVE_PASSIVE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbSize",
+    "Required": "Yes",
+    "Notes": "SMALL, MEDIUM, LARGE, or X-LARGE."
+  },
+  {
+    "Key": "commonSupervisorSpec.flbNetworkType",
+    "Required": "Yes",
+    "Notes": "Use DVPG."
+  },
+  {
+    "Key": "commonSupervisorSpec.networkSearchDomains",
+    "Required": "Yes",
+    "Notes": "Array of DNS search domains."
+  },
+  {
+    "Key": "commonSupervisorSpec.networkNtpServers",
+    "Required": "Yes",
+    "Notes": "Array of NTP servers."
+  },
+  {
+    "Key": "commonSupervisorSpec.dnsServers",
+    "Required": "Yes",
+    "Notes": "Array of DNS servers."
+  },
+  {
+    "Key": "siteSpec",
+    "Required": "Yes",
+    "Notes": "Array of site-specific supervisor configurations. Each entry is linked to infrastructure.json clusters[] via edgeSite."
+  },
+  {
+    "Key": "siteSpec[].edgeSite",
+    "Required": "Yes",
+    "Notes": "Must match infrastructure.json clusters[].edgeSite."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbName",
+    "Required": "Yes",
+    "Notes": "FLB name for this site."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVipStartIP",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB virtual IP range."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVipIPCount",
+    "Required": "Yes",
+    "Notes": "Count of VIPs from flbVipStartIP."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName",
+    "Required": "Yes",
+    "Notes": "Must match infra networkSegments[].name; gateway from infra unless flbNetworkGateway is set."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB management network."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount",
+    "Required": "Yes",
+    "Notes": "IP count for FLB management."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkGateway",
+    "Required": "No",
+    "Notes": "Override gateway (otherwise from infra by name)."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName",
+    "Required": "Yes",
+    "Notes": "Must match infra segment name; gateway from infra unless flbNetworkGateway is set."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for FLB virtual server network."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount",
+    "Required": "Yes",
+    "Notes": "IP count for the FLB virtual-server network range; required by shallow validation (e.g. match segment size)."
+  },
+  {
+    "Key": "siteSpec[].foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkGateway",
+    "Required": "No",
+    "Notes": "Override gateway (otherwise from infra by name)."
+  },
+  {
+    "Key": "siteSpec[].mgmtNetworkSpec.mgmtNetworkName",
+    "Required": "Yes",
+    "Notes": "Must match infra segment name."
+  },
+  {
+    "Key": "siteSpec[].mgmtNetworkSpec.mgmtNetworkStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for VKS management network."
+  },
+  {
+    "Key": "siteSpec[].mgmtNetworkSpec.mgmtNetworkIPCount",
+    "Required": "Yes",
+    "Notes": "IP count for VKS management."
+  },
+  {
+    "Key": "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkName",
+    "Required": "Yes",
+    "Notes": "Must match infra segment name."
+  },
+  {
+    "Key": "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp",
+    "Required": "Yes",
+    "Notes": "Start IP for workload VIP range."
+  },
+  {
+    "Key": "siteSpec[].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount",
+    "Required": "Yes",
+    "Notes": "IP count for workload VIP range."
+  },
+  {
+    "Key": "siteSpec[].primaryWorkloadNetwork.workloadServiceStartIp",
+    "Required": "Yes",
+    "Notes": "Start IP for workload service range."
+  },
+  {
+    "Key": "siteSpec[].primaryWorkloadNetwork.workloadServiceCount",
+    "Required": "Yes",
+    "Notes": "Count (e.g. 256 or 512); must occupy full CIDR. Shallow validation requires this key."
+  }
+  ]
+}

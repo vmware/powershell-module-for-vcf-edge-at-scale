@@ -1,0 +1,82 @@
+{
+    "commonSupervisorSpec": {
+      "controlPlaneVMCount": 1,
+      "controlPlaneSize": "SMALL",
+      "flbAvailability": "SINGLE_NODE",
+      "flbSize": "MEDIUM",
+      "flbNetworkType": "DVPG",
+      "networkSearchDomains": [
+        "vcfedge.demo"
+      ],
+      "networkNtpServers": [
+        "10.34.14.20"
+      ],
+      "dnsServers": [
+        "10.191.174.20"
+      ]
+    },
+    "siteSpec": [
+      {
+        "edgeSite": "site1",
+        "foundationLoadBalancerComponents": {
+          "flbName": "flb-test-sn1",
+          "flbVipStartIP": "10.30.12.201",
+          "flbVipIPCount": 50,
+          "flbManagementNetwork": {
+            "flbNetworkName": "flbmanagementnetwork",
+            "flbNetworkIpAddressStartingIp": "10.30.11.101",
+            "flbNetworkIpAddressCount": 40
+          },
+          "flbVirtualServerNetwork": {
+            "flbNetworkName": "virtualservernetwork",
+            "flbNetworkIpAddressStartingIp": "10.30.12.141",
+            "flbNetworkIpAddressCount": 60
+          }
+        },
+        "mgmtNetworkSpec": {
+          "mgmtNetworkName": "mgmtnetwork",
+          "mgmtNetworkStartingIp": "10.30.13.100",
+          "mgmtNetworkIPCount": 7
+        },
+        "primaryWorkloadNetwork": {
+          "primaryWorkloadNetworkName": "primaryworkloadnetwork",
+          "primaryWorkloadNetworkStartingIp": "10.30.10.101",
+          "primaryWorkloadNetworkIPCount": 100,
+          "workloadServiceStartIp": "10.97.0.0",
+          "workloadServiceCount": 512
+        }
+      },
+      {
+        "edgeSite": "site2",
+        "foundationLoadBalancerComponents": {
+          "flbName": "flb-test-sn2",
+          "flbVipStartIP": "10.40.12.201",
+          "flbVipIPCount": 50,
+          "flbManagementNetwork": {
+            "flbNetworkName": "flbmanagementnetwork-2",
+            "flbNetworkIpAddressStartingIp": "10.40.11.101",
+            "flbNetworkIpAddressCount": 40,
+            "flbNetworkGateway": "10.40.11.1/24"
+          },
+          "flbVirtualServerNetwork": {
+            "flbNetworkName": "virtualservernetwork-2",
+            "flbNetworkIpAddressStartingIp": "10.40.12.141",
+            "flbNetworkIpAddressCount": 60,
+            "flbNetworkGateway": "10.40.12.1/24"
+          }
+        },
+        "mgmtNetworkSpec": {
+          "mgmtNetworkName": "mgmtnetwork-2",
+          "mgmtNetworkStartingIp": "10.40.13.100",
+          "mgmtNetworkIPCount": 7
+        },
+        "primaryWorkloadNetwork": {
+          "primaryWorkloadNetworkName": "primaryworkloadnetwork-2",
+          "primaryWorkloadNetworkStartingIp": "10.40.10.101",
+          "primaryWorkloadNetworkIPCount": 100,
+          "workloadServiceStartIp": "10.98.0.0",
+          "workloadServiceCount": 512
+        }
+      }
+    ]
+  }
