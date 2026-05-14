@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1007 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1008 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
@@ -357,7 +357,7 @@
             <div class="field">
               <label>vSAN Witness VM Name<span class="tt"><span class="tt-icon">?</span><span class="tt-body">FQDN or IPv4 of the vSAN witness appliance. Required for vSAN-OSA and vSAN-ESA clusters. Can be set here (common) or overridden per cluster.</span></span></label>
               <input type="text" id="vSanWitnessVmName" placeholder="vsanwitness.example.com"
-                oninput="_restrictFqdnInput(this)"
+                oninput="_restrictFqdnInput(this);_updateAllWitnessHints()"
                 onblur="validateSegField(this,'fqdn',null,true)">
               <span class="field-inline-err"></span>
               <span class="field-hint">Overridable per cluster.</span>
@@ -963,6 +963,9 @@ function _restrictCidrInput(el)    { _restrictInput(el, '0-9./'); }
 // Strips non-digit characters for integer count fields.
 function _restrictNumericInput(el) { _restrictInput(el, '0-9'); }
 
+// Strips characters invalid for a Kubernetes resource quantity (digits and binary/decimal size suffixes).
+function _restrictK8sSizeInput(el) { _restrictInput(el, '0-9KMGTPEi'); }
+
 // Strips characters not valid in a vCenter username (letters, digits, . _ @ -).
 function _restrictUserInput(el)    { _restrictInput(el, 'a-zA-Z0-9.@\\-_'); }
 
@@ -1070,6 +1073,16 @@ function validateSegField(el, type, min, allowEmpty) {
           msg = "Must be an integer between 1500 and 9190.";
         break;
       }
+      case "k8sSize": {
+        const _m = /^(\d+)([KMGTPE]i?)?$/.exec(val);
+        if (!_m || parseInt(_m[1], 10) === 0)
+          msg = "Must be a positive integer with optional unit suffix (e.g. 10Gi, 512Mi).";
+        break;
+      }
+      case "secretKey16":
+        if (!/^\$env:[A-Za-z_][A-Za-z0-9_]*$/.test(val) && val.length !== 16)
+          msg = "Must be exactly 16 characters, or use $env:VARNAME to reference an environment variable.";
+        break;
       case "required":
         break;
       default:
@@ -2252,23 +2265,16 @@ function _renderSiteHeaderFields(site) {
         </div>
         <span class="field-hint" id="nicCountHint_${site.id}">Leave blank to inherit common NIC list.</span>
       </div>
-      ${vmkRequired ? (() => {
-        const commonWitness = v('vSanWitnessVmName');
-        const witnessHint = site.vSanWitnessVmName
-          ? `<span class="field-hint" style="color:var(--text-muted);">Overriding common${commonWitness ? ` (${esc(commonWitness)})` : ''}.</span>`
-          : commonWitness
-            ? `<span class="field-hint" style="color:var(--success);">✓ Inheriting from common: ${esc(commonWitness)}</span>`
-            : `<span class="field-hint" style="color:var(--warning);">⚠ Not set at common level — enter here or set in Common Settings.</span>`;
-        return `
+      ${vmkRequired ? `
       <div class="field">
         <label>vSAN Witness VM Name <span class="tip">optional; overrides common</span>${tt('FQDN or IPv4 of the vSAN witness appliance for this site. Overrides the common-level setting when set; leave blank to inherit from Common Settings.')}</label>
         <input type="text" value="${esc(site.vSanWitnessVmName)}" placeholder="vsanwitness.example.com"
+          data-err-id="witnessErr_${site.id}"
           oninput="_restrictFqdnInput(this);updateSiteField(${site.id},'vSanWitnessVmName',this.value)"
           onblur="validateSegField(this,'fqdn',null,true)">
-        <span class="field-inline-err"></span>
-        ${witnessHint}
-      </div>`;
-      })() : ''}
+        <span class="field-inline-err" id="witnessErr_${site.id}"></span>
+        <span id="witnessHint_${site.id}">${_witnessHintHtml(site.vSanWitnessVmName || '', v('vSanWitnessVmName'))}</span>
+      </div>` : ''}
       <div class="field">
         <label>HA Policy Override <span class="tip">optional</span>${tt('Override the HA Policy for this site only. Leave blank to inherit from common (default: reservationBased). reservationBased: percentage-based admission control. slotBased: slot-based. disabled: HA on, no admission control.')}</label>
         <select onchange="updateSiteField(${site.id},'haPolicy',this.value)">
@@ -2391,6 +2397,30 @@ function _renderSiteVmkWidget(site) {
     <button class="btn btn-secondary" style="margin-bottom:16px;font-size:12px;" onclick="addVmk(${site.id})">+ Add VMkernel Interface</button>`;
 }
 
+// Returns the inner HTML for the vSAN witness hint span based on current site/common state.
+function _witnessHintHtml(siteWitness, commonWitness) {
+  if (siteWitness)
+    return `<span class="field-hint" style="color:var(--text-muted);">Overriding common${commonWitness ? ` (${esc(commonWitness)})` : ''}.</span>`;
+  if (commonWitness)
+    return `<span class="field-hint" style="color:var(--success);">✓ Inheriting from common: ${esc(commonWitness)}</span>`;
+  return `<span class="field-hint" style="color:var(--warning);">⚠ Not set at common level — enter here or set in Common Settings.</span>`;
+}
+
+// Updates the witness hint for a single site without a full re-render.
+function _updateWitnessHint(siteId) {
+  const el = document.getElementById(`witnessHint_${siteId}`);
+  if (!el) return;
+  const site = sites.find(s => s.id === siteId);
+  if (!site) return;
+  // innerHTML is intentional — _witnessHintHtml() returns <span> elements. User values are escaped via esc().
+  el.innerHTML = _witnessHintHtml(site.vSanWitnessVmName || '', v('vSanWitnessVmName'));
+}
+
+// Refreshes witness hints for all sites. Called when the common vSanWitnessVmName field changes.
+function _updateAllWitnessHints() {
+  sites.forEach(s => _updateWitnessHint(s.id));
+}
+
 // Renders the Harbor configuration fields for a site (inside a collapsible section).
 function _renderSiteHarborFields(site) {
   const h = site.harbor || {};
@@ -2399,7 +2429,10 @@ function _renderSiteHarborFields(site) {
       <div class="grid-2">
         <div class="field"><label>Hostname <span class="req">*</span> <span class="tip">unless disabled</span>${tt('FQDN or IPv4 address of the Harbor registry endpoint. Required unless Disable Harbor is checked for this site.')}</label>
           <input type="text" value="${esc(h.hostname)}" placeholder="harbor-site1.example.com"
-            oninput="updateHarbor(${site.id},'hostname',this.value)"></div>
+            data-err-id="harborErr_${site.id}_hostname"
+            oninput="_restrictFqdnInput(this);updateHarbor(${site.id},'hostname',this.value)"
+            onblur="validateSegField(this,'fqdn',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_hostname"></span></div>
         <div class="field"><label>Parent Directory${tt('Filesystem path containing Harbor YAML and certificate files. Use the directory that holds tlsCrt, tlsKey, and caCrt files.')}</label>
           <input type="text" value="${esc(h.parentDirectory)}" placeholder="${_osDirPlaceholder()}"
             oninput="updateHarbor(${site.id},'parentDirectory',this.value)"></div>
@@ -2417,25 +2450,52 @@ function _renderSiteHarborFields(site) {
             oninput="updateHarbor(${site.id},'harborAdminPassword',this.value)"></div>
         <div class="field"><label>Secret Key <span class="tip">exactly 16 chars</span>${tt('AES-128 encryption key for Harbor internal data. Must be exactly 16 characters. Use $env:SECRET_KEY to read from an environment variable.')}</label>
           <input type="text" value="${esc(h.secretKey)}" placeholder="$env:SECRET_KEY"
-            oninput="updateHarbor(${site.id},'secretKey',this.value)"></div>
+            data-err-id="harborErr_${site.id}_secretKey"
+            oninput="updateHarbor(${site.id},'secretKey',this.value)"
+            onblur="validateSegField(this,'secretKey16',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_secretKey"></span></div>
         <div class="field"><label>Database Password${tt('Password for the Harbor PostgreSQL database. Use $env:DATABASE_PASSWORD to read from an environment variable.')}</label>
           <input type="text" value="${esc(h.databasePassword)}" placeholder="$env:DATABASE_PASSWORD"
             oninput="updateHarbor(${site.id},'databasePassword',this.value)"></div>
         <div class="field"><label>Registry Volume Size${tt('Persistent volume size for the Harbor registry component. Must be a positive integer followed by Gi (e.g. 10Gi). Minimum recommended: 10Gi.')}</label>
           <input type="text" value="${esc(h.registryVolumeSize)}" placeholder="10Gi"
-            oninput="updateHarbor(${site.id},'registryVolumeSize',this.value)"></div>
+            data-err-id="harborErr_${site.id}_regVol"
+            oninput="_restrictK8sSizeInput(this);updateHarbor(${site.id},'registryVolumeSize',this.value)"
+            onblur="validateSegField(this,'k8sSize',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_regVol"></span></div>
         <div class="field"><label>Jobservice Volume Size${tt('Persistent volume size for the Harbor job service component (e.g. 5Gi).')}</label>
           <input type="text" value="${esc(h.jobserviceVolumeSize)}" placeholder="5Gi"
-            oninput="updateHarbor(${site.id},'jobserviceVolumeSize',this.value)"></div>
+            data-err-id="harborErr_${site.id}_jobVol"
+            oninput="_restrictK8sSizeInput(this);updateHarbor(${site.id},'jobserviceVolumeSize',this.value)"
+            onblur="validateSegField(this,'k8sSize',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_jobVol"></span></div>
         <div class="field"><label>Database Volume Size${tt('Persistent volume size for the Harbor PostgreSQL database (e.g. 10Gi).')}</label>
           <input type="text" value="${esc(h.databaseVolumeSize)}" placeholder="10Gi"
-            oninput="updateHarbor(${site.id},'databaseVolumeSize',this.value)"></div>
+            data-err-id="harborErr_${site.id}_dbVol"
+            oninput="_restrictK8sSizeInput(this);updateHarbor(${site.id},'databaseVolumeSize',this.value)"
+            onblur="validateSegField(this,'k8sSize',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_dbVol"></span></div>
         <div class="field"><label>Redis Volume Size${tt('Persistent volume size for the Harbor Redis cache (e.g. 1Gi).')}</label>
           <input type="text" value="${esc(h.redisVolumeSize)}" placeholder="1Gi"
-            oninput="updateHarbor(${site.id},'redisVolumeSize',this.value)"></div>
+            data-err-id="harborErr_${site.id}_redisVol"
+            oninput="_restrictK8sSizeInput(this);updateHarbor(${site.id},'redisVolumeSize',this.value)"
+            onblur="validateSegField(this,'k8sSize',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_redisVol"></span></div>
         <div class="field"><label>Trivy Volume Size${tt('Persistent volume size for the Trivy vulnerability scanner used by Harbor (e.g. 5Gi).')}</label>
           <input type="text" value="${esc(h.trivyVolumeSize)}" placeholder="5Gi"
-            oninput="updateHarbor(${site.id},'trivyVolumeSize',this.value)"></div>
+            data-err-id="harborErr_${site.id}_trivyVol"
+            oninput="_restrictK8sSizeInput(this);updateHarbor(${site.id},'trivyVolumeSize',this.value)"
+            onblur="validateSegField(this,'k8sSize',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_trivyVol"></span></div>
+        <div class="field"><label>Core Secret${tt('Internal CSRF protection secret for the Harbor core component. Use $env:CORE_SECRET_KEY to read from an environment variable at deployment time.')}</label>
+          <input type="text" value="${esc(h.coreSecret)}" placeholder="$env:CORE_SECRET_KEY"
+            oninput="updateHarbor(${site.id},'coreSecret',this.value)"></div>
+        <div class="field"><label>Jobservice Secret${tt('Internal authentication secret for the Harbor job service component. Use $env:JOBSERVICE_SECRET_KEY to read from an environment variable at deployment time.')}</label>
+          <input type="text" value="${esc(h.jobserviceSecret)}" placeholder="$env:JOBSERVICE_SECRET_KEY"
+            oninput="updateHarbor(${site.id},'jobserviceSecret',this.value)"></div>
+        <div class="field"><label>Registry Secret${tt('Internal authentication secret for the Harbor registry component. Use $env:REGISTRY_SECRET_KEY to read from an environment variable at deployment time.')}</label>
+          <input type="text" value="${esc(h.registrySecret)}" placeholder="$env:REGISTRY_SECRET_KEY"
+            oninput="updateHarbor(${site.id},'registrySecret',this.value)"></div>
       </div>
     </div>`;
 }
@@ -2541,6 +2601,7 @@ function updateSiteField(id, field, value) {
     const header = document.querySelector(`#site-block-${id} .item-header strong`);
     if (header) header.textContent = value || '(unnamed)';
   }
+  if (field === 'vSanWitnessVmName') _updateWitnessHint(id);
 }
 
 function addSegment(siteId) {
@@ -4483,6 +4544,8 @@ function _diffClusters(origInfra, infra, chg) {
     const oH = _iget(oC, 'harborConfiguration') || {};
     const nH = nC.harborConfiguration || {};
     for (const key of ['hostname','parentDirectory','tlsCrt','tlsKey','caCrt',
+                        'harborAdminPassword','secretKey','databasePassword',
+                        'coreSecret','jobserviceSecret','registrySecret',
                         'registryVolumeSize','jobserviceVolumeSize','databaseVolumeSize',
                         'redisVolumeSize','trivyVolumeSize']) {
       chg(sec, `harbor.${key}`, _iget(oH, key), nH[key]);

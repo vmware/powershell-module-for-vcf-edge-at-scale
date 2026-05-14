@@ -707,6 +707,19 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
 
     return $zipDestinationPath
 }
+
+Function Write-VcfDeploymentFailureFooter {
+    Write-Host ""
+    if (-not [String]::IsNullOrWhiteSpace($Script:LogFile) -and (Test-Path -LiteralPath $Script:LogFile -PathType Leaf)) {
+        Write-Host "Deployment failed. Log file: $Script:LogFile" -ForegroundColor Red
+        Write-Host "To collect logs and configuration for support, run:" -ForegroundColor Yellow
+        Write-Host "  Start-VcfEdgeAtScale -CollectLogs" -ForegroundColor Yellow
+    } else {
+        Write-Host "Deployment failed. No log file was created (check prerequisites)." -ForegroundColor Red
+    }
+    Write-Host ""
+}
+
 Function Start-VcfEdgeAtScale {
 
     <#
@@ -1212,7 +1225,7 @@ Function Start-VcfEdgeAtScale {
                 }
                 Write-LogMessage -Type ERROR -Message $errorMessage
                 Write-LogMessage -Type ERROR -Message "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
-                throw "[E-YAML-MISSING-001] Required YAML files are missing or not accessible. Check logs for details."
+                throw [VcfDeploymentException]::new("[E-YAML-MISSING-001] Required YAML files are missing or not accessible. Check logs for details.")
             }
 
             $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
@@ -1302,7 +1315,7 @@ Function Start-VcfEdgeAtScale {
         if (-not $networkSegmentNameValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
             Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate network segment names. Please fix the naming conflicts and try again."
-            throw "[E-NETSEG-001] Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
+            throw [VcfDeploymentException]::new("[E-NETSEG-001] Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)")
         } else {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Network segment name uniqueness validation passed."
         }
@@ -1316,7 +1329,7 @@ Function Start-VcfEdgeAtScale {
         if (-not $esxHostValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
             Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate ESX hosts. Each host must belong to exactly one edge site."
-            throw "[E-ESXHOST-001] ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
+            throw [VcfDeploymentException]::new("[E-ESXHOST-001] ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)")
         } else {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "ESX host uniqueness validation passed."
         }
@@ -1337,12 +1350,12 @@ Function Start-VcfEdgeAtScale {
     if ($PSBoundParameters.ContainsKey("CleanUp") -and [String]::IsNullOrWhiteSpace($CleanUp)) {
         Write-LogMessage -Type WARNING -Message "-CleanUp requires one of: Supervisor, Compute, All, ArgoCD, Harbor."
         Write-Host ""
-        Write-Output "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
-        Write-Output "  Supervisor - Remove only the supervisor (compute remains)."
-        Write-Output "  Compute   - Remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed."
-        Write-Output "  All       - Remove supervisor first, then compute."
-        Write-Output "  ArgoCD    - Remove only the ArgoCD supervisor namespace for each cluster."
-        Write-Output "  Harbor    - Remove only the Harbor Supervisor Service from the supervisor for each cluster."
+        Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
+        Write-Host "  Supervisor - Remove only the supervisor (compute remains)."
+        Write-Host "  Compute   - Remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed."
+        Write-Host "  All       - Remove supervisor first, then compute."
+        Write-Host "  ArgoCD    - Remove only the ArgoCD supervisor namespace for each cluster."
+        Write-Host "  Harbor    - Remove only the Harbor Supervisor Service from the supervisor for each cluster."
         return
     }
 
@@ -1357,7 +1370,7 @@ Function Start-VcfEdgeAtScale {
             "supervisor" { $CleanUp = "Supervisor" }
             default {
                 Write-LogMessage -Type WARNING -Message "-CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor (got: $CleanUp)."
-                Write-Output "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
+                Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
                 return
             }
         }
@@ -1416,18 +1429,15 @@ Function Start-VcfEdgeAtScale {
             $initParams.SaveHarborYaml = $true
         }
         Initialize-VcfEdgeAtScale @initParams
+    } catch [VcfDeploymentException] {
+        # Known deployment failure — already surfaced to the user via Write-LogMessage -Type ERROR.
+        # Show the friendly footer without rethrowing so the raw "Exception: file:line" block is suppressed.
+        Write-VcfDeploymentFailureFooter
+        Write-Error $_.Exception.Message
     } catch {
-        # Surface a friendly log-collection hint whenever deployment exits with an error.
-        # The original exception is rethrown so the caller (or PowerShell itself) still sees it.
-        Write-Host ""
-        if (-not [String]::IsNullOrWhiteSpace($Script:LogFile) -and (Test-Path -LiteralPath $Script:LogFile -PathType Leaf)) {
-            Write-Host "Deployment failed. Log file: $Script:LogFile" -ForegroundColor Red
-            Write-Host "To collect logs and configuration for support, run:" -ForegroundColor Yellow
-            Write-Host "  Start-VcfEdgeAtScale -CollectLogs" -ForegroundColor Yellow
-        } else {
-            Write-Host "Deployment failed. No log file was created (check prerequisites)." -ForegroundColor Red
-        }
-        Write-Host ""
+        # Unexpected exception — not previously logged. Surface the full exception so the developer
+        # can diagnose the root cause via file path and line number.
+        Write-VcfDeploymentFailureFooter
         throw
     } finally {
         $Global:ProgressPreference = $savedProgressPreference
@@ -1500,13 +1510,13 @@ Function Get-ModuleTemplatesPath {
 
     if (-not $moduleBase) {
         Write-LogMessage -Type ERROR -Message "Unable to determine module installation path. Please ensure the module is installed correctly."
-        throw "Unable to determine module installation path. Please ensure the module is installed correctly."
+        throw [VcfDeploymentException]::new("Unable to determine module installation path. Please ensure the module is installed correctly.")
     }
 
     $templatesPath = Join-Path $moduleBase "Templates"
     if (-not (Test-Path $templatesPath)) {
         Write-LogMessage -Type ERROR -Message "Templates directory not found at: $templatesPath."
-        throw "Templates directory not found at: $templatesPath."
+        throw [VcfDeploymentException]::new("Templates directory not found at: $templatesPath.")
     }
 
     return $templatesPath
