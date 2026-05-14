@@ -40,7 +40,7 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
        Copyright (c) Broadcom. All Rights Reserved.
 
 
-  Module loaded (version 1.0.3.1003).
+  Module loaded (version 1.0.3.1005).
 
 Auto-load on every session
   Add the following line to your PowerShell profile (C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
@@ -57,10 +57,14 @@ Installation complete.
 ## Example of initializing the script's configuration directory
 
 ```Powershell
-PS C:\Users\Administrator> Start-VcfEdgeAtScale -Initialize
+PS C:\Users\Administrator> start-VcfEdgeAtScale -Initialize
 
 VcfEdgeAtScale initialize
   Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace.
+
+  Note: $env:VcfEdgeatScaleRootDirectory pointed at a path that does not exist:
+    C:\Users\Administrator\VCFEdgeAtScale
+  Stale value cleared from session and user environment. Choose a folder below.
 
   Default base directory:  C:\Users\Administrator\VCFEdgeAtScale
 
@@ -75,25 +79,32 @@ Press Enter to use the default, or type a full directory path:
   Documentation (Docs)
     Copied: EXAMPLE.rtf
     Copied: README.rtf
-    Copied: infrastructure-config-help.json
-    Copied: supervisor-config-help.json
+    Updated: infrastructure-config-help.json
+    Updated: supervisor-config-help.json
 
   Tools
-    Copied: veas-json-generator.py  (run: python3 "C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py")
+    Copied: veas-json-generator.py  (run: python "C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py")
     Copied: veas-ui.html
 
   Root JSON files
-    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; cluster harbor TLS paths unchanged).
+    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; harborConfiguration.parentDirectory -> base directory).
     Copied supervisor.json to deployment root.
 
 === Initialize summary ===
   Deployment root: C:\Users\Administrator\VCFEdgeAtScale
   Base directory: created (it did not exist before).
-  Subdirectories created: Docs, Logs, ServicesYaml.
-  See sections above for YAML, Docs, and JSON actions.
-  Optional Docs sources may show WARNING if your module install is missing RTF/help files.
+  Subdirectories created: Docs, Logs, ServicesYaml, Tools.
+  See sections above for YAML, Docs, Tools, and JSON actions.
+  Optional Docs/Tools sources may show WARNING if your module install is missing files.
   Root JSON: created or refreshed per your answers above.
   VcfEdgeatScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
+
+  Next step: customize infrastructure.json and supervisor.json.
+  Option 1 — Direct JSON editing:
+    Open infrastructure.json and supervisor.json in any text editor.
+    Run 'Start-VcfEdgeAtScale -ValidateOnly' to validate before deploying.
+  Option 2 — Browser-based UI:
+    python "C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py"
 ```
 
 ## Show parameters for Start-VcfEdgeAtScale
@@ -327,6 +338,27 @@ clusters[].networking.networkingVmKernelInterfaces[].vlanId  Conditional VLAN ID
 clusters[].networking.networkingVmKernelInterfaces[].netmask Conditional IPv4 netmask for the VMkernel (e.g. 255.255.255.0).
 clusters[].networking.networkingVmKernelInterfaces[].ipList  Conditional Array of exactly two unique IPv4 addresses (order aligns with esxHosts order).
 clusters[].networking.networkingVmKernelInterfaces[].gateway Conditional Optional. Used on the vSAN Witness entry only: IPv4 gateway applied via esxcli after the VMkernel exists.
+```
+
+## Example of checking for an update
+
+```Powershell
+PS C:\Users\Administrator> start-VcfEdgeAtScale -checkForUpdates
+
+[ADVISORY] A new version of VcfEdgeAtScale is available: 1.0.3.1005 (you have 1.0.3.1003).
+
+Install update now? [Y/n]: Y
+[INFO] Installing VcfEdgeAtScale 1.0.3.1005 from PSGallery...
+[INFO] VcfEdgeAtScale 1.0.3.1005 installed successfully.
+[INFO] Updating config UI tool: version 1.0.3.1003 → 1.0.3.1005.
+[INFO] Config UI tool updated to 1.0.3.1005 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py.
+  Config UI tool updated: veas-json-generator.py (1.0.3.1003 → 1.0.3.1005)
+[INFO] Updating UI template: version 1.0.3.1003 → 1.0.3.1005.
+[INFO] UI template updated to 1.0.3.1005 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-ui.html.
+  UI template updated: veas-ui.html (1.0.3.1003 → 1.0.3.1005)
+
+Update complete. Open a new PowerShell window to use the new version.
+
 ```
 
 ## Example of single edge side deployment (four vNICs, vSAN-OSA, two VKS networks)
@@ -606,5 +638,5 @@ PS C:\Users\Administrator>
 
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -Version
-[INFO] VcfEdgeAtScale version: 1.0.3.1003
+[INFO] VcfEdgeAtScale version: 1.0.3.1005
 ```

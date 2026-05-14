@@ -40,12 +40,8 @@
 #
 
 #region Script scope variables
-$local:manifestPath = Join-Path -Path $PSScriptRoot -ChildPath "VcfEdgeAtScale.psd1"
-$Script:ModuleVersion = if (Test-Path -LiteralPath $local:manifestPath) {
-    (Import-PowerShellDataFile -Path $local:manifestPath).ModuleVersion
-} else {
-    "unknown"
-}
+# The module Version object is always populated from the manifest by the time the psm1 runs.
+$Script:ModuleVersion = $ExecutionContext.SessionState.Module.Version.ToString()
 
 # Set platform-specific command names for cross-platform compatibility.
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
@@ -55,7 +51,7 @@ $Script:KubectlCmd = if ($IsWindows) { "kubectl.exe" } else { "kubectl" }
 $Script:VcfCmd = $null
 $local:vcfCliCandidates = if ($IsWindows) { @("vcf.exe", "vcf") } else { @("vcf") }
 foreach ($vcfCliName in $local:vcfCliCandidates) {
-    if (Get-Command -Name $vcfCliName -ErrorAction SilentlyContinue) {
+    if (Get-Command -Name $vcfCliName -CommandType Application -ErrorAction SilentlyContinue) {
         $Script:VcfCmd = $vcfCliName
         break
     }
@@ -164,3 +160,9 @@ if ($PSVersionTable.PSVersion -lt [Version]"7.4") {
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Supervisor.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Validation.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/EntryPoints.ps1")
+
+# Pre-warm comment-based help for exported functions so that PSReadLine tab-completion tooltips
+# are populated from the cache on first use, rather than incurring a parse-on-demand delay.
+$null = Get-Help Start-VcfEdgeAtScale -ErrorAction SilentlyContinue
+$null = Get-Help Show-InfrastructureJsonConfigurationHelp -ErrorAction SilentlyContinue
+$null = Get-Help Show-SupervisorJsonConfigurationHelp -ErrorAction SilentlyContinue

@@ -3666,7 +3666,7 @@ Function Get-VcfEdgeAtScaleConfigUiVersion {
         Full path to the veas-json-generator.py file to inspect.
 
         .OUTPUTS
-        [String] Version string (e.g. "1.0.3.1003"), or $null if not found.
+        [String] Version string (e.g. "1.0.3.1004"), or $null if not found.
 
         .EXAMPLE
         Get-VcfEdgeAtScaleConfigUiVersion -FilePath "C:\Users\Admin\VCFEdgeAtScale\Tools\veas-json-generator.py"
@@ -3788,7 +3788,7 @@ Function Get-VcfEdgeAtScaleUiTemplateVersion {
         Full path to the veas-ui.html file to inspect.
 
         .OUTPUTS
-        [String] Version string (e.g. "1.0.3.1003"), or $null if not found.
+        [String] Version string (e.g. "1.0.3.1004"), or $null if not found.
 
         .EXAMPLE
         Get-VcfEdgeAtScaleUiTemplateVersion -FilePath "C:\VCFEdgeAtScale\Tools\veas-ui.html"
@@ -4027,7 +4027,7 @@ Function Invoke-VcfEdgeAtScaleUpdateCheck {
         Sync-VcfEdgeAtScaleConfigUiTool -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
         Sync-VcfEdgeAtScaleUiTemplate -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
         Write-Host ""
-        Write-Host "Update complete. Open a new PowerShell window (or run 'Remove-Module VcfEdgeAtScale; Import-Module VcfEdgeAtScale') to use the new version." -ForegroundColor Green
+        Write-Host "Update complete. Open a new PowerShell window to use the new version." -ForegroundColor Green
         Write-Host ""
     } catch {
         Write-LogMessage -Type ERROR -Message "Update failed: $($_.Exception.Message)"

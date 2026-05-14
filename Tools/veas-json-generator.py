@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1003"
+UI_VERSION = "1.0.3.1005"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -113,9 +113,10 @@ CIDR_RE = re.compile(
 )
 # RFC1123: 1–80 chars, lowercase, no leading/trailing hyphen.
 RFC1123_RE = re.compile(r"^(?=.{1,80}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
-# vSphere object names: 1–80 chars, alphanumeric + space _ + - ()
+# vSphere object names: 1–80 chars, alphanumeric + space _ + - () .
+# Dots are allowed because vSphere datacenter/cluster/VDS names commonly include them.
 # Keep in sync with _isValidVsphereLabel in veas-ui.html.
-VSPHERE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _+\-()]{1,80}$")
+VSPHERE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _+\-().]{1,80}$")
 # vCenter user: alphanumeric + . _ @ -
 VCENTER_USER_RE = re.compile(r"^[a-zA-Z0-9._@\-]{1,256}$")
 # FQDN or IPv4
@@ -232,7 +233,7 @@ def _validate_common(common: dict, errors: list[str], warnings: list[str]) -> No
         errors.append("infrastructure.common.datacenterName: required field is missing or empty.")
     elif not VSPHERE_NAME_RE.match(dc_name):
         errors.append(
-            "infrastructure.common.datacenterName: must be 1–80 chars, alphanumeric with spaces, _, +, -, ()."
+            "infrastructure.common.datacenterName: must be 1–80 chars, alphanumeric with spaces, _, +, -, (), ."
         )
 
     if not common.get("contextName"):
@@ -246,7 +247,7 @@ def _validate_common(common: dict, errors: list[str], warnings: list[str]) -> No
         if val and not VSPHERE_NAME_RE.match(val):
             errors.append(
                 f"infrastructure.common.{prefix_field}: must be 1–80 chars, "
-                "alphanumeric with spaces, _, +, -, ()."
+                "alphanumeric with spaces, _, +, -, (), ."
             )
 
     common_nic_list = common.get("nicList")
@@ -1679,6 +1680,10 @@ class ConfigHandler(BaseHTTPRequestHandler):
                 "version": UI_VERSION,
                 "base_dir": str(base_dir),
                 "base_dir_exists": base_dir.is_dir(),
+                "has_json_files": (
+                    (base_dir / "infrastructure.json").is_file()
+                    and (base_dir / "supervisor.json").is_file()
+                ),
                 "readme_url": README_URL,
             })
 

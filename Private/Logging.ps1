@@ -558,6 +558,52 @@ Function Get-CleanServiceErrorMessage {
     # Final fallback: return original message.
     return $ErrorMessage
 }
+Function Get-PythonExecutable {
+
+    <#
+        .SYNOPSIS
+        Returns the name of the first Python executable found on PATH.
+
+        .DESCRIPTION
+        Tries platform-preferred Python executable names in order and returns the first one
+        that responds successfully to --version. On Windows the preferred names are "python",
+        "py" (Windows Launcher), and "python3" as a fallback. On non-Windows "python3" is
+        tried first, then "python" (which may be Python 2 on some systems).
+
+        Returns an empty string when no Python executable is found.
+
+        .OUTPUTS
+        [PSCustomObject] Object with Executable ([String]) and Version ([String]) properties,
+        or $null when no Python executable is found on PATH.
+
+        .EXAMPLE
+        $py = Get-PythonExecutable
+        if ($py) {
+            Write-Host "Using $($py.Executable) ($($py.Version))"
+            & $py.Executable script.py
+        }
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param ()
+
+    $candidates = if ($IsWindows) { @("python", "py", "python3") } else { @("python3", "python") }
+    foreach ($candidate in $candidates) {
+        try {
+            $rawOutput = & $candidate --version 2>&1
+            if ($LASTEXITCODE -eq 0 -and $rawOutput) {
+                $versionLine = ($rawOutput | Where-Object { $_ -is [String] } | Select-Object -First 1).Trim()
+                if (-not [String]::IsNullOrWhiteSpace($versionLine)) {
+                    return [PSCustomObject]@{ Executable = $candidate; Version = $versionLine }
+                }
+            }
+        } catch {
+            continue
+        }
+    }
+    return $null
+}
 Function Get-EnvironmentSetup {
 
     <#
@@ -665,28 +711,12 @@ Function Get-EnvironmentSetup {
         Write-LogMessage -Type DEBUG -Message "vcf version check failed: $($_.Exception.Message)"
     }
 
-    # Python version — try candidates in platform-preferred order.
-    # On Windows: python is the standard PATH entry from the python.org installer;
-    # py is the Windows Launcher (C:\Windows\py.exe) installed alongside it; python3 is rare on Windows.
-    # On non-Windows: python3 is canonical; python may be Python 2 on older systems.
-    # All errors are suppressed; the result is best-effort for log context only.
-    # Get-Command guard removed: & inside try already handles CommandNotFoundException,
-    # and the double PATH lookup added latency without benefit.
+    # Python version — Get-PythonExecutable detects the executable and captures the version
+    # string in a single --version invocation; no second call needed.
     $pythonVersion = "N/A"
-    $pythonCandidates = if ($IsWindows) { @("python", "py", "python3") } else { @("python3", "python") }
-    foreach ($pyCmd in $pythonCandidates) {
-        try {
-            $pyRaw = & $pyCmd --version 2>&1
-            if ($LASTEXITCODE -eq 0 -and $pyRaw) {
-                $pyLine = ($pyRaw | Where-Object { $_ -is [String] } | Select-Object -First 1).Trim()
-                if (-not [String]::IsNullOrWhiteSpace($pyLine)) {
-                    $pythonVersion = $pyLine
-                    break
-                }
-            }
-        } catch {
-            Write-LogMessage -Type DEBUG -Message "$pyCmd version check failed: $($_.Exception.Message)"
-        }
+    $pyResult = Get-PythonExecutable
+    if ($pyResult) {
+        $pythonVersion = $pyResult.Version
     }
 
     # Start with basic OS information from PowerShell automatic variables.

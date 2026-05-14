@@ -351,9 +351,10 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             }
         }
         if ($shouldCopyConfigUi) {
+            $pyExeHint = (Get-PythonExecutable)?.Executable ?? "python3"
             try {
                 Copy-Item -LiteralPath $configUiSourcePath -Destination $configUiDestinationPath -Force -ErrorAction Stop
-                Write-Host "    Copied: $configUiFileName  (run: python3 `"$configUiDestinationPath`")" -ForegroundColor Green
+                Write-Host "    Copied: $configUiFileName  (run: $pyExeHint `"$configUiDestinationPath`")" -ForegroundColor Green
             } catch {
                 Write-Warning "Skipping tool copy '$configUiFileName' after error: $($_.Exception.Message) $templateRestoreHint"
             }
@@ -963,12 +964,19 @@ Function Start-VcfEdgeAtScale {
             New-LogFile -BaseDirectory $initBaseDirectory -Directory "Logs"
         }
 
-        # Print the command to launch the configuration UI; do not auto-launch it.
+        # Print next-step hints for customizing JSON; direct editing first, browser UI second.
+        $pyExe = (Get-PythonExecutable)?.Executable ?? "python3"
+        Write-Host ""
+        Write-Host "  Next step: customize infrastructure.json and supervisor.json." -ForegroundColor Cyan
+        Write-Host "  Option 1 — Direct JSON editing:" -ForegroundColor White
+        Write-Host "    Open infrastructure.json and supervisor.json in any text editor." -ForegroundColor Gray
+        Write-Host "    Run 'Start-VcfEdgeAtScale -ValidateOnly' to validate before deploying." -ForegroundColor Gray
         $toolScript = Join-Path $initBaseDirectory "Tools" "veas-json-generator.py"
+        Write-Host "  Option 2 — Browser-based UI:" -ForegroundColor White
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $toolScript)) {
-            Write-Host ""
-            Write-Host "  To build your configuration JSON, run:" -ForegroundColor Cyan
-            Write-Host "  python3 `"$toolScript`" --base-dir `"$initBaseDirectory`"" -ForegroundColor Gray
+            Write-Host "    $pyExe `"$toolScript`"" -ForegroundColor Gray
+        } else {
+            Write-Host "    $pyExe `"<base-dir>\Tools\veas-json-generator.py`"" -ForegroundColor Gray
         }
 
         return

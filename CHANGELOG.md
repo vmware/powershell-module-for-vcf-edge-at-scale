@@ -1,10 +1,10 @@
-# Releases
+Configurable vSphere HA admission policy for vSAN stretched clusters# Release Notes
 
-<a id="v1.0.3.1002"></a>
-## 1.0.3.1002
+<a id="v1.0.3.1005"></a>
+## 1.0.3.1005
 
-- Checks for updates automatically daily.
-- Configurable vSphere HA admission policy for vSAN stretched clusters (`common.haPolicy` / `clusters[].haPolicy`): **`reservationBased`** when omitted, or **`slotBased`** / **`disabled`** when set; validated when the key is set. VMFS clusters keep percentage-based admission on HA re-apply after the VDS step.
+- Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.
+- Configurable vSphere HA admission policy for vSAN stretched clusters.
 - Added support for vLCM images for clusters (using vCenter image catalog) (interactive or JSON).
 - Added support for deploying multiple clusters in a single vCenter.
 - Added support for defining multiple clusters in a single set of infrastructure/supervisor JSON files.
@@ -41,3 +41,4 @@
 ## 1.0.0.1
 
 - Initial Release
+
