@@ -1,4 +1,12 @@
-Configurable vSphere HA admission policy for vSAN stretched clusters# Release Notes
+# Release Notes
+
+<a id="v1.0.3.1006"></a>
+## 1.0.3.1006
+
+- Fixed install source detection: `Get-EnvironmentSetup` now uses `Get-InstalledModule` (PowerShellGet) as the authoritative source, so PSGallery-installed modules correctly log `PSGallery (vX.Y.Z)` instead of always reporting "Manual install".
+- Fixed spurious "module in use" warnings during auto-update: removed `-Force` from `Update-Module`, which was causing PowerShellGet to force-reinstall all required VMware modules already loaded in the session.
+- Fixed misleading post-update message that suggested `Remove-Module; Import-Module` as a hot-reload alternative; users are now directed to open a new PowerShell window only.
+- Swapped `-Initialize` next-step hint order to match README: Direct JSON editing is Option 1, Browser-based UI is Option 2.
 
 <a id="v1.0.3.1005"></a>
 ## 1.0.3.1005
@@ -9,6 +17,7 @@ Configurable vSphere HA admission policy for vSAN stretched clusters# Release No
 - Added support for deploying multiple clusters in a single vCenter.
 - Added support for defining multiple clusters in a single set of infrastructure/supervisor JSON files.
 - Breaking change: update JSON structures to support multi-node and multi-edge deployments.
+- Added Python-based UI alternative for authoring JSON infrastructure and supervisor JSON files
 - Automatic Supervisor content catalog creation.
 - Automatic Supervisor upgrade to latest version upon deployment.
 - Show ArgoCD login information (URL and admin credentials) per edge location.
@@ -29,7 +38,7 @@ Configurable vSphere HA admission policy for vSAN stretched clusters# Release No
 - ComputeOnly deployment option.
 - vLCM image compliance check before supervisor workflow.
 - Ability to disable ArgoCD or Harbor services (non-default).
-- Updated ArgoCD version
+- Updated ArgoCD version.
 
 <a id="v1.0.0.2"></a>
 ## 1.0.0.2
@@ -41,4 +50,3 @@ Configurable vSphere HA admission policy for vSAN stretched clusters# Release No
 ## 1.0.0.1
 
 - Initial Release
-
