@@ -208,14 +208,14 @@ Function Add-Cluster {
             Set-VclsRetreatModeForCluster -ClusterName $ClusterName -Server $Script:vCenterName
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
-            throw [VcfDeploymentException]::new(" Failed (authorization).")
+            throw [VcfDeploymentException]::new("Cluster creation failed (authorization): insufficient permissions to create cluster `"$ClusterName`" on `"$Script:vCenterName`".")
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-            throw [VcfDeploymentException]::new(" Failed (timeout).")
+            throw [VcfDeploymentException]::new("Cluster creation timed out for `"$ClusterName`" on `"$Script:vCenterName`".")
         } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Cluster creation failed for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)")
         }
     } else {
         Write-LogMessage -Type INFO -Message "The cluster `"$ClusterName`" in datacenter `"$DataCenterName`" is already present. Skipping cluster creation."
@@ -1632,22 +1632,22 @@ Function Add-HostToCluster {
             Write-LogMessage -Type INFO -CompletePending -Message "Set"
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authorization): $($_.Exception.Message)")
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (timeout).")
         }
         catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authentication error): $($_.Exception.Message)")
         }
         catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (server connection error): $($_.Exception.Message)")
         } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state: $($_.Exception.Message)")
         }
     }
 
@@ -2159,19 +2159,19 @@ Function Set-NewDatastore {
 
             if (-not $datastoreReady) {
                 Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-                throw [VcfDeploymentException]::new(" Failed (timeout).")
+                throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" did not reach a ready state within the timeout period.")
             }
             Write-LogMessage -Type INFO -CompletePending -Message " Success"
         } catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
-            throw [VcfDeploymentException]::new(" Failed (authorization).")
+            throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`" (authorization): $($_.Exception.Message)")
         }
         catch [System.TimeoutException] {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-            throw [VcfDeploymentException]::new(" Failed (timeout).")
+            throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" on `"$Script:vCenterName`" timed out.")
         } catch {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new(" Failed.")
+            throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`": $($_.Exception.Message)")
         }
     }
     try {

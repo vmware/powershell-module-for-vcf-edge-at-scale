@@ -152,7 +152,9 @@ class RollbackSkippedException : System.Exception {
 # Caught by the top-level catch in Start-VcfEdgeAtScale, which shows the friendly footer without rethrowing the
 # raw exception — suppressing the scary "Exception: file:line" block that appears after user-readable [ERROR] output.
 class VcfDeploymentException : System.Exception {
+    VcfDeploymentException() : base("Deployment failed.") {}
     VcfDeploymentException([string]$message) : base($message) {}
+    VcfDeploymentException([string]$message, [System.Exception]$inner) : base($message, $inner) {}
 }
 # Set when Invoke-VsanDeploymentRollback (or other rollback) is entered so the main catch does not prompt/run rollback again.
 $Script:RollbackAttempted = $false

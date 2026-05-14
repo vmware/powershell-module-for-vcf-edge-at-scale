@@ -963,8 +963,8 @@ function _restrictCidrInput(el)    { _restrictInput(el, '0-9./'); }
 // Strips non-digit characters for integer count fields.
 function _restrictNumericInput(el) { _restrictInput(el, '0-9'); }
 
-// Strips characters invalid for a Kubernetes resource quantity (digits and binary/decimal size suffixes).
-function _restrictK8sSizeInput(el) { _restrictInput(el, '0-9KMGTPEi'); }
+// Strips characters not valid for a Harbor volume size (digits, G, and i — Gi suffix only).
+function _restrictK8sSizeInput(el) { _restrictInput(el, '0-9Gi'); }
 
 // Strips characters not valid in a vCenter username (letters, digits, . _ @ -).
 function _restrictUserInput(el)    { _restrictInput(el, 'a-zA-Z0-9.@\\-_'); }
@@ -1074,9 +1074,8 @@ function validateSegField(el, type, min, allowEmpty) {
         break;
       }
       case "k8sSize": {
-        const _m = /^(\d+)([KMGTPE]i?)?$/.exec(val);
-        if (!_m || parseInt(_m[1], 10) === 0)
-          msg = "Must be a positive integer with optional unit suffix (e.g. 10Gi, 512Mi).";
+        if (!/^[1-9]\d*Gi$/.test(val))
+          msg = "Must be a positive integer in gibibytes (e.g. 10Gi, 50Gi).";
         break;
       }
       case "secretKey16":

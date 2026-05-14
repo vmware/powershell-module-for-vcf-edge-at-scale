@@ -1,7 +1,7 @@
 # Release Notes
 
-<a id="v1.0.3.1007"></a>
-## 1.0.3.1007
+<a id="v1.0.3.1008"></a>
+## 1.0.3.1008
 
 - Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.
 - Configurable vSphere HA admission policy for vSAN stretched clusters.

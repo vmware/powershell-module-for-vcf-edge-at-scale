@@ -1225,7 +1225,7 @@ Function Start-VcfEdgeAtScale {
                 }
                 Write-LogMessage -Type ERROR -Message $errorMessage
                 Write-LogMessage -Type ERROR -Message "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
-                throw [VcfDeploymentException]::new("[E-YAML-MISSING-001] Required YAML files are missing or not accessible. Check logs for details.")
+                throw [VcfDeploymentException]::new("Required YAML files are missing or not accessible. Check logs for details.")
             }
 
             $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
@@ -1315,7 +1315,7 @@ Function Start-VcfEdgeAtScale {
         if (-not $networkSegmentNameValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
             Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate network segment names. Please fix the naming conflicts and try again."
-            throw [VcfDeploymentException]::new("[E-NETSEG-001] Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)")
+            throw [VcfDeploymentException]::new("Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)")
         } else {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Network segment name uniqueness validation passed."
         }
@@ -1329,7 +1329,7 @@ Function Start-VcfEdgeAtScale {
         if (-not $esxHostValidationResult.IsValid) {
             Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
             Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate ESX hosts. Each host must belong to exactly one edge site."
-            throw [VcfDeploymentException]::new("[E-ESXHOST-001] ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)")
+            throw [VcfDeploymentException]::new("ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)")
         } else {
             Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "ESX host uniqueness validation passed."
         }

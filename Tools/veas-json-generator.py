@@ -1408,8 +1408,10 @@ def build_supervisor(data: dict) -> dict:
 
     try:
         cp_vm_count = int(common_spec.get("controlPlaneVMCount", 1))
-    except (TypeError, ValueError):
-        cp_vm_count = 1
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            f"controlPlaneVMCount must be an integer, got: {common_spec.get('controlPlaneVMCount', 1)!r}"
+        ) from exc
 
     common_obj = {
         "controlPlaneVMCount": cp_vm_count,
@@ -1600,13 +1602,6 @@ class ConfigHandler(BaseHTTPRequestHandler):
             super().handle()
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass
-
-    def handle_error(self, request, client_address):
-        """Suppresses benign client-disconnect errors at the socketserver level."""
-        exc = sys.exc_info()[1]
-        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
-            return
-        super().handle_error(request, client_address)
 
     def _send_security_headers(self):
         """Sends common security headers on every response.
@@ -1901,10 +1896,10 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
         try:
             infra_built, sup_built, all_errors, all_warnings = _build_and_validate(payload)
-        except Exception as exc:
+        except ValueError as exc:
             if _DEBUG:
                 traceback.print_exc()
-            self.send_json(400, {"errors": [f"Validation failed: {type(exc).__name__}: {exc}"], "warnings": [], "passed": False})
+            self.send_json(400, {"errors": [f"Validation failed: {exc}"], "warnings": [], "passed": False})
             return
 
         self.send_json(200, {
@@ -1966,7 +1961,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
             return
 
         base_dir = self.base_dir
-        timestamp = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+        _now = datetime.datetime.now()
+        timestamp = f"{_now.strftime('%Y%m%d-%H%M%S')}-{_now.microsecond // 1000:03d}"
         infra_path = base_dir / "infrastructure.json"
         sup_path = base_dir / "supervisor.json"
         backups = []
@@ -2035,6 +2031,20 @@ def _make_handler(configured_base_dir: Path) -> type:
     return _Handler
 
 
+class _SecureHTTPServer(HTTPServer):
+    """Suppresses benign browser-disconnect errors at the server level.
+
+    handle_error belongs on the server (BaseServer), not the handler — this is
+    the correct override point for catching exceptions from process_request().
+    """
+
+    def handle_error(self, request, client_address):
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+            return
+        super().handle_error(request, client_address)
+
+
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
@@ -2071,7 +2081,7 @@ def main():
     browser_url = f"http://localhost:{args.port}"
 
     try:
-        server = HTTPServer((_BIND_HOST, args.port), _make_handler(base_dir))
+        server = _SecureHTTPServer((_BIND_HOST, args.port), _make_handler(base_dir))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             print(

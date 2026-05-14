@@ -4460,7 +4460,7 @@ Function Invoke-VDSCreation {
                         $createAttempt++
                     } else {
                         Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-                        throw [VcfDeploymentException]::new(" Failed.")
+                        throw [VcfDeploymentException]::new("VDS `"$VdsName`" creation failed after $VdsCreationRetryCount attempt(s): $createErr")
                     }
                 } else {
                     Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
