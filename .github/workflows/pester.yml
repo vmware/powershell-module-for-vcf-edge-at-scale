@@ -2,18 +2,20 @@ name: Pester Tests
 
 on:
   push:
-    branches: ["main", "feat/**", "fix/**"]
+    branches: [main, feat/**, fix/**]
     paths:
-      - "VcfEdgeAtScale/**"
+      - VcfEdgeAtScale/**
   pull_request:
-    branches: ["main"]
+    branches: [main]
     paths:
-      - "VcfEdgeAtScale/**"
+      - VcfEdgeAtScale/**
 
 jobs:
   pester:
     runs-on: windows-latest
     timeout-minutes: 30
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
@@ -36,8 +38,9 @@ jobs:
         shell: pwsh
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
-          # Install VMware PowerCLI components declared in VcfEdgeAtScale.psd1 RequiredModules.
-          # MinimumVersion matches the psd1 requirement; -AllowClobber prevents version-conflict errors.
+          # Install VMware PowerCLI components required by VcfEdgeAtScale.
+          # These are not in RequiredModules (VCF PowerCLI is distributed by Broadcom, not PSGallery)
+          # so they must be installed explicitly in CI. -AllowClobber prevents version-conflict errors.
           $modules = @(
             @{ Name = "VMware.Sdk.vSphere";                    MinimumVersion = "13.4" }
             @{ Name = "VMware.VimAutomation.Core";             MinimumVersion = "13.4" }
@@ -77,28 +80,14 @@ jobs:
         working-directory: VcfEdgeAtScale
         run: |
           Install-Module -Name PSScriptAnalyzer -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
-
-          # Analyze source files using the module-level settings (strict credential-handling rules enforced).
-          $sourceResults = Invoke-ScriptAnalyzer `
+          $results = Invoke-ScriptAnalyzer `
             -Path . `
             -Recurse `
             -Settings PSScriptAnalyzerSettings.psd1 `
-            -Severity Warning, Error `
-            -ExcludePath Tests/
-
-          # Analyze test files with the test-specific settings (PSAvoidUsingConvertToSecureStringWithPlainText
-          # excluded because Pester It blocks are not function declarations and cannot use
-          # [Diagnostics.CodeAnalysis.SuppressMessageAttribute] directly).
-          $testResults = Invoke-ScriptAnalyzer `
-            -Path Tests/ `
-            -Recurse `
-            -Settings Tests/PSScriptAnalyzerSettings.psd1 `
             -Severity Warning, Error
-
-          $allResults = @($sourceResults) + @($testResults)
-          if ($allResults.Count -gt 0) {
-            $allResults | Format-Table -AutoSize
-            Write-Error "PSScriptAnalyzer found $($allResults.Count) issue(s). See output above."
+          if ($results.Count -gt 0) {
+            $results | Format-Table -AutoSize
+            Write-Error "PSScriptAnalyzer found $($results.Count) issue(s). See output above."
             exit 1
           }
           Write-Host "PSScriptAnalyzer: no issues found."
