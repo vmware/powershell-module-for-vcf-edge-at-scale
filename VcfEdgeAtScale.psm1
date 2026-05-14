@@ -148,6 +148,14 @@ $Script:RollbackAlwaysFromPrompt = $false
 class RollbackSkippedException : System.Exception {
     RollbackSkippedException() : base("Rollback skipped by user; continue to next site.") {}
 }
+# Typed exception for known deployment failures that have already been logged via Write-LogMessage -Type ERROR.
+# Caught by the top-level catch in Start-VcfEdgeAtScale, which shows the friendly footer without rethrowing the
+# raw exception — suppressing the scary "Exception: file:line" block that appears after user-readable [ERROR] output.
+class VcfDeploymentException : System.Exception {
+    VcfDeploymentException() : base("Deployment failed.") {}
+    VcfDeploymentException([string]$message) : base($message) {}
+    VcfDeploymentException([string]$message, [System.Exception]$inner) : base($message, $inner) {}
+}
 # Set when Invoke-VsanDeploymentRollback (or other rollback) is entered so the main catch does not prompt/run rollback again.
 $Script:RollbackAttempted = $false
 # Set when rollback fails (e.g. Remove-Cluster failed); main catch rethrows immediately so the script fails exit.
@@ -223,6 +231,7 @@ if (-not $IsWindows -and
     -not [String]::IsNullOrEmpty($env:VcfEdgeatScaleRootDirectory) -and
     [String]::IsNullOrEmpty($env:VcfEdgeAtScaleRootDirectory)) {
     $env:VcfEdgeAtScaleRootDirectory = $env:VcfEdgeatScaleRootDirectory
+    Remove-Item Env:\VcfEdgeatScaleRootDirectory -ErrorAction SilentlyContinue
 }
 
 #endregion

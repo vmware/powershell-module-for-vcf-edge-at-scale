@@ -75,14 +75,14 @@ Function Initialize-ScriptVcfPowerCliModuleVersion {
     if ($null -eq $vcfModuleLatest) {
         $errorDetail = "VCF.PowerCLI is not installed. Install VCF.PowerCLI $($MinimumVcfPowerCliVersion) or later."
         Write-LogMessage -Type ERROR -Message $errorDetail
-        throw "$errorDetail See log file for full deployment context if logging is enabled."
+        throw [VcfDeploymentException]::new("$errorDetail See log file for full deployment context if logging is enabled.")
     }
 
     $vcfPowerCliRelease = $vcfModuleLatest.Version
     if ([Version]$vcfPowerCliRelease -lt $MinimumVcfPowerCliVersion) {
         $errorDetail = "VCF.PowerCLI version $vcfPowerCliRelease is below the minimum required $MinimumVcfPowerCliVersion. Upgrade VCF PowerCLI and retry."
         Write-LogMessage -Type ERROR -Message $errorDetail
-        throw "$errorDetail See log file for full deployment context if logging is enabled."
+        throw [VcfDeploymentException]::new("$errorDetail See log file for full deployment context if logging is enabled.")
     }
 
     $Script:VcfPowerCliModuleVersion = [Version]$vcfPowerCliRelease
@@ -352,7 +352,7 @@ Function Write-ErrorAndReturn {
         $result = Add-HostToVDS -Hostname $esxHost -VdsName $vdsName
         if (-not $result.Success) {
             Write-LogMessage -Type ERROR -Message "VDS configuration failed: $($result.ErrorMessage)."
-            throw "VDS configuration failed: $($result.ErrorMessage)."
+            throw [VcfDeploymentException]::new("VDS configuration failed: $($result.ErrorMessage).")
         }
 
         .OUTPUTS
@@ -1308,7 +1308,7 @@ Function Connect-Vcenter {
                 Write-LogMessage -Type DEBUG -Message "Successfully connected to $ServerType `"$ServerName`"."
             } catch [System.TimeoutException] {
                 Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
-                throw "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
+                throw [VcfDeploymentException]::new("Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_.")
             } catch {
                 # Extract clean error message and classify so we can show targeted guidance (SSL, auth, or generic).
                 $errorMessage = $_.Exception.Message
@@ -1330,7 +1330,7 @@ Function Connect-Vcenter {
                         Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $ServerName -Port 443"
                         Write-Host ""
                         Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage."
-                        throw "Full error details: $errorMessage."
+                        throw [VcfDeploymentException]::new("Full error details: $errorMessage.")
                     }
                     "incorrect user name or password|authentication|credentials" {
                         Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."
@@ -1364,7 +1364,7 @@ Function Connect-Vcenter {
                             Write-LogMessage -Type INFO -Message "Retrying connection with new credentials..."
                         } else {
                             Write-LogMessage -Type ERROR -Message "User chose not to retry. Exiting."
-                            throw "Authentication failed"
+                            throw [VcfDeploymentException]::new("Authentication failed")
                         }
                     }
                     default {
@@ -1439,7 +1439,7 @@ Function Test-VcenterConnection {
         $connectionTest = Test-VcenterConnection
         if (-not $connectionTest.IsConnected) {
             Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-            throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+            throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
         }
 
         .EXAMPLE
@@ -1749,7 +1749,7 @@ Function Disconnect-Vcenter {
             } else {
                 $serverNames = $activeConnections | Select-Object -ExpandProperty Name
                 Write-LogMessage -Type ERROR -Message "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
-                throw "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
+                throw [VcfDeploymentException]::new("Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')")
             }
         }
     }
@@ -1792,7 +1792,7 @@ Function Test-VCenterVersion {
         $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
             Write-LogMessage -Type ERROR -Message "Version validation failed: $($result.ErrorMessage)"
-            throw "Version validation failed: $($result.ErrorMessage)"
+            throw [VcfDeploymentException]::new("Version validation failed: $($result.ErrorMessage)")
         }
 
         Validates the vCenter version against a minimum requirement of 9.0.0.
@@ -2048,7 +2048,7 @@ Function New-SubscriptionBasedContentLibrary {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
     }
 
     # Check if a content library with the same name already exists.
@@ -2078,12 +2078,14 @@ Function New-SubscriptionBasedContentLibrary {
                 } else {
                     Write-LogMessage -Type ERROR -Message "No datastores found on vCenter `"$Script:vCenterName`"."
                 }
+            } catch [VcfDeploymentException] {
+                throw  # already logged and typed — propagate without re-wrapping
             } catch {
                 Write-LogMessage -Type DEBUG -Message "Could not retrieve list of available datastores: $($_.Exception.Message)"
             }
 
             Write-LogMessage -Type ERROR -Message "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
-            throw "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
+            throw [VcfDeploymentException]::new("SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`".")
         }
 
         Write-LogMessage -Type DEBUG -Message "Found datastore `"$DatastoreName`" (ID: $($datastoreObject.Id)) on vCenter `"$Script:vCenterName`"."
@@ -2125,7 +2127,7 @@ Function New-SubscriptionBasedContentLibrary {
             if (-not $certificate) {
                 Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. RemoteCertificate is null."
                 Write-LogMessage -Type ERROR -Message "This may indicate a network connectivity issue or the server is not responding."
-                throw "This may indicate a network connectivity issue or the server is not responding."
+                throw [VcfDeploymentException]::new("This may indicate a network connectivity issue or the server is not responding.")
             }
 
             # Get the raw hash and format it with colons (format required by New-ContentLibrary).
@@ -2138,7 +2140,7 @@ Function New-SubscriptionBasedContentLibrary {
                 Write-LogMessage -Type ERROR -Message "Inner exception: $($_.Exception.InnerException.Message)"
             }
             Write-LogMessage -Type ERROR -Message "Cannot create content library without SSL thumbprint."
-            throw "Cannot create content library without SSL thumbprint."
+            throw [VcfDeploymentException]::new("Cannot create content library without SSL thumbprint.")
         }
         finally {
             # Clean up SSL stream and TCP client.
@@ -2160,7 +2162,7 @@ Function New-SubscriptionBasedContentLibrary {
 
         if (-not $sslThumbprint) {
             Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
-            throw "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
+            throw [VcfDeploymentException]::new("Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint.")
         }
 
         # Create the content library with SSL thumbprint (required parameter).
@@ -2180,18 +2182,18 @@ Function New-SubscriptionBasedContentLibrary {
         $contentLibraryId = Get-ContentLibraryId -LibraryName $LibraryName
         if (-not $contentLibraryId) {
             Write-LogMessage -Type ERROR -Message "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
-            throw "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
+            throw [VcfDeploymentException]::new("Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`".")
         }
 
         return $contentLibraryId
     }
     catch [System.UnauthorizedAccessException] {
         Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new("Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
     }
     catch [System.TimeoutException] {
         Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new("Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
     } catch {
         $errorMessage = $_.Exception.Message
         $innerException = $_.Exception.InnerException
@@ -2563,7 +2565,7 @@ Function Test-ContentLibraryBySubscriptionUri {
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
         Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
     }
 
     try {
@@ -2580,11 +2582,13 @@ Function Test-ContentLibraryBySubscriptionUri {
 
         Write-LogMessage -Type DEBUG -Message "No content library found with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`"."
         return $false
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
     } catch {
         # Re-throw API errors so callers can distinguish a transient failure from a missing library.
         # Returning $false on error would cause callers to create a duplicate content library.
         Write-LogMessage -Type ERROR -Message "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new("Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
 Function Initialize-SupervisorContentLibrary {
