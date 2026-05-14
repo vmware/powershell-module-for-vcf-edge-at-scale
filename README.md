@@ -7,6 +7,52 @@
 [![PS Downloads](https://img.shields.io/powershellgallery/dt/VcfEdgeAtScale?label=PS%20Gallery%20Downloads)](https://www.powershellgallery.com/packages/VcfEdgeAtScale)
 [![Downloads](https://img.shields.io/github/downloads/vmware/powershell-module-for-vcf-edge-at-scale/total?label=Github%20Release%20Downloads)](https://github.com/vmware/powershell-module-for-vcf-edge-at-scale/releases)
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Prerequisites](#prerequisites)
+- [Step 1: Installation](#step-1-installation)
+  - [Option 1: PowerShell Gallery (Preferred)](#option-1-powershell-gallery-preferred)
+  - [Option 2: Clone from GitHub](#option-2-clone-from-github-and-install-manually)
+  - [Option 3: Download from GitHub Release](#option-3-download-latest-release-from-github-and-install-manually)
+- [Step 2: Initialize Settings](#step-2-initialize-settings)
+- [Step 3: Customize JSON Files](#step-3-customize-json-files)
+  - [Option 1: Direct JSON Editing](#option-1-direct-json-editing)
+  - [Option 2: Browser-Based UI Tool](#option-2-browser-based-ui-tool)
+    - [Managing Sites in the UI](#managing-sites-in-the-ui)
+- [Deployment Process Overview](#informational-deployment-process-per-edge-site)
+- [In-Application Help](#informational-in-application-help)
+- [Step 4: Deployment](#step-4-deployment)
+  - [Operational Modes](#informational-operational-modes)
+  - [Collect Logs](#collect-logs)
+- [Check Module Version](#check-module-version)
+- [Check for New Releases](#check-for-new-releases)
+- [Configuration Files Reference](#configuration-files)
+  - [infrastructure.json](#infrastructurejson)
+  - [supervisor.json](#supervisorjson)
+- [Harbor and Argo CD Deployment Notes](#harbor-and-argo-cd-deployment-notes)
+  - [Harbor: Secrets and Environment Variables](#harbor-secret-management-and-just-in-time-environment-variables)
+  - [Argo CD: Deployment Output and Rollback](#argo-cd-deployment-output-namespace-uniqueness-and-fallback)
+- [Logging](#logging)
+- [Troubleshooting](#troubleshooting)
+  - [Template Files Missing](#template-files-or-templates-directory-missing)
+  - [Module Not Found](#module-not-found)
+  - [Deployment Failures](#deployment-failures)
+  - [Cleanup: Management Restore or VDS Removal Fails](#cleanup-management-restore-or-vds-removal-fails)
+  - [Harbor: secretKey Wrong Length](#harbor-secretkey-wrong-length)
+  - [Harbor: TLS Certificate and Key Swapped](#harbor-tls-certificate-and-key-swapped-pem-type-mismatch)
+  - [Harbor: Service Enters ERROR State](#harbor-service-enters-error-state)
+  - [Common Issues](#common-issues)
+- [Requirements](#requirements)
+- [Version History](#version-history)
+- [Contributing](#contributing)
+- [License](#license)
+- [Support](#support)
+- [Related Resources](#related-resources)
+- [Important Notes](#important-notes)
+
+---
+
 ## Overview
 
 The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF for edge sites, offering turnkey enablement of 1–2 node clusters with vSphere Supervisor and Supervisor services (Harbor and Argo CD).  Leveraging two simple JSON input files, `infrastructure.json` and `supervisor.json`, it provides a flexible, idempotent deployment mechanism to drive different, validated edge deployment topologies.  A Python-based JSON generator is provided to help create the JSON files needed to generate edge configurations with safeguards against configuration errors.
@@ -24,15 +70,11 @@ The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF f
 
 ## Step 1: Installation
 
-<a id="install-psgallery"></a>
-
 ### Option 1: PowerShell Gallery (Preferred)
 
 ```text
 Install-Module -Name VcfEdgeAtScale
 ```
-
-<a id="install-github-clone"></a>
 
 ### Option 2: Clone from GitHub and install manually
 
@@ -42,8 +84,6 @@ git clone https://github.com/vmware/powershell-module-for-vcf-edge-at-scale.git
 cd powershell-module-for-vcf-edge-at-scale/VcfEdgeAtScale
 pwsh -ExecutionPolicy Bypass -File .\Install-VcfEdgeAtScaleModule.ps1
 ```
-
-<a id="install-github-release"></a>
 
 ### Option 3: Download latest release from GitHub and install manually
 
@@ -59,7 +99,7 @@ pwsh -ExecutionPolicy Bypass -File .\Install-VcfEdgeAtScaleModule.ps1
 > [!NOTE]
 > **`-ExecutionPolicy Bypass`** is required on Windows when running a script downloaded from the internet. It is accepted but has no effect on macOS and Linux, so the same command works on all platforms. The installer also calls `Unblock-File` on all installed module files to remove the Windows "mark of the web" that would otherwise block `Import-Module` even after the script completes.
 
-The installer prompts whether to add `Import-Module VcfEdgeAtScale` to your `$PROFILE` so the module loads automatically in every new PowerShell session. To skip the prompt, pass `-AddToProfile` to always add the line or `-SkipProfileUpdate` to never modify the profile.
+PowerShell auto-imports the module on first use once it is installed to `$env:PSModulePath` — no profile changes are needed. If your `$PROFILE` contains a previous `Import-Module VcfEdgeAtScale` line or lazy-load stub from an earlier install, the installer detects it and offers to clean it up. Pass `-SkipProfileUpdate` to suppress the profile check entirely (for unattended installs).
 
 ## Step 2: Initialize Settings
 
@@ -104,15 +144,16 @@ Open `$env:VcfEdgeatScaleRootDirectory/infrastructure.json` and `$env:VcfEdgeatS
 Change to your `$env:VcfEdgeatScaleRootDirectory` directory and run:
 
 ```text
-python3 Tools/veas-json-generator.py [--port PORT] [--host HOST] [--base-dir DIR] [--no-browser]
+python3 Tools/veas-json-generator.py [--port PORT] [--base-dir DIR] [--no-browser]
 ```
+
+The server always binds to `127.0.0.1` (localhost only). It has no TLS and is not designed for network exposure. To reach it from a remote machine, use SSH port-forwarding: `ssh -L 8080:localhost:8080 user@host`.
 
 **CLI flags:**
 
 | Flag | Default | Description |
 | ---- | ------- | ----------- |
 | `--port PORT` | `8080` | TCP port to listen on. |
-| `--host HOST` | `127.0.0.1` | Bind address. Use `0.0.0.0` to accept connections from other machines on the network (e.g. SSH port-forwarding or a shared lab workstation). |
 | `--base-dir DIR` | Parent of script directory | Directory that contains `infrastructure.json` and `supervisor.json`. Defaults to the base directory created by `Start-VcfEdgeAtScale -Initialize`. Falls back to the module's `Templates/` directory when the default path does not exist (useful for a first run before `-Initialize` has been run). |
 | `--no-browser` | *(opens automatically)* | Suppress the automatic browser tab. Use in headless, SSH, or container environments. |
 
@@ -124,9 +165,6 @@ python3 Tools/veas-json-generator.py
 
 # Different port
 python3 Tools/veas-json-generator.py --port 8081
-
-# Accept LAN connections (remote workstation or SSH tunnel)
-python3 Tools/veas-json-generator.py --host 0.0.0.0 --port 8080
 
 # Point to an explicit JSON directory (useful when managing multiple environments)
 python3 Tools/veas-json-generator.py --base-dir /path/to/my-env
@@ -238,7 +276,7 @@ When the server starts, it loads `infrastructure.json` and `supervisor.json` fro
 
 7. **Harbor instance creation**: Harbor registry created and configured from a templated data file so many edge sites stay consistent and easier to maintain.  The code will also show a URL and login password post deployment.
 
-## Informational: In-application help
+## Informational: In-Application Help
 
 ```powershell
 # View infrastructure.json configuration reference (auto-detects best format)
@@ -950,7 +988,7 @@ Start-VcfEdgeAtScale -EdgeSite "site1"
 
 - **kubectl**: Required for Argo CD operations
 - **vcf CLI**: Required for supervisor management operations
-- **veas-json-generator.py** + **veas-ui.html** (Python 3.9+, stdlib only — no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory — the server starts on `http://127.0.0.1:8080` and opens a browser tab automatically. Key flags: `--port PORT` (default 8080), `--host HOST` (default 127.0.0.1; use 0.0.0.0 for LAN access), `--base-dir DIR` (override JSON directory), `--no-browser` (headless/SSH). Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See **[Step 3](#step-3-customize-json-files)** for full usage details.
+- **veas-json-generator.py** + **veas-ui.html** (Python 3.9+, stdlib only — no extra packages): Browser-based JSON configuration UI copied to **`Tools/`** by **`Start-VcfEdgeAtScale -Initialize`**. Run `python3 Tools/veas-json-generator.py` from your base directory — the server starts on `http://localhost:8080` (localhost only; no TLS) and opens a browser tab automatically. Key flags: `--port PORT` (default 8080), `--base-dir DIR` (override JSON directory), `--no-browser` (headless/SSH). For remote access use SSH port-forwarding. Validates **`infrastructure.json`** and **`supervisor.json`** against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See **[Step 3](#step-3-customize-json-files)** for full usage details.
 
 ### Environment
 

@@ -24,6 +24,172 @@
 {\cf1 [image: https://img.shields.io/github/downloads/vmware/powershell-module-for-vcf-edge-at-scale/total?label=Github%20Release%20Downloads]\cf0}
 }}}
 \par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Table of Contents\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#overview"}}{\fldrslt{\ul
+Overview
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#prerequisites"}}{\fldrslt{\ul
+Prerequisites
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#step-1-installation"}}{\fldrslt{\ul
+Step 1: Installation
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#option-1-powershell-gallery-preferred"}}{\fldrslt{\ul
+Option 1: PowerShell Gallery (Preferred)
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#option-2-clone-from-github-and-install-manually"}}{\fldrslt{\ul
+Option 2: Clone from GitHub
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#option-3-download-latest-release-from-github-and-install-manually"}}{\fldrslt{\ul
+Option 3: Download from GitHub Release
+}}}
+\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#step-2-initialize-settings"}}{\fldrslt{\ul
+Step 2: Initialize Settings
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#step-3-customize-json-files"}}{\fldrslt{\ul
+Step 3: Customize JSON Files
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#option-1-direct-json-editing"}}{\fldrslt{\ul
+Option 1: Direct JSON Editing
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#option-2-browser-based-ui-tool"}}{\fldrslt{\ul
+Option 2: Browser-Based UI Tool
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li1080 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#managing-sites-in-the-ui"}}{\fldrslt{\ul
+Managing Sites in the UI
+}}}
+\sa180\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#informational-deployment-process-per-edge-site"}}{\fldrslt{\ul
+Deployment Process Overview
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#informational-in-application-help"}}{\fldrslt{\ul
+In-Application Help
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#step-4-deployment"}}{\fldrslt{\ul
+Step 4: Deployment
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#informational-operational-modes"}}{\fldrslt{\ul
+Operational Modes
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#collect-logs"}}{\fldrslt{\ul
+Collect Logs
+}}}
+\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#check-module-version"}}{\fldrslt{\ul
+Check Module Version
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#check-for-new-releases"}}{\fldrslt{\ul
+Check for New Releases
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#configuration-files"}}{\fldrslt{\ul
+Configuration Files Reference
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#infrastructurejson"}}{\fldrslt{\ul
+infrastructure.json
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#supervisorjson"}}{\fldrslt{\ul
+supervisor.json
+}}}
+\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#harbor-and-argo-cd-deployment-notes"}}{\fldrslt{\ul
+Harbor and Argo CD Deployment Notes
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#harbor-secret-management-and-just-in-time-environment-variables"}}{\fldrslt{\ul
+Harbor: Secrets and Environment Variables
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#argo-cd-deployment-output-namespace-uniqueness-and-fallback"}}{\fldrslt{\ul
+Argo CD: Deployment Output and Rollback
+}}}
+\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#logging"}}{\fldrslt{\ul
+Logging
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#troubleshooting"}}{\fldrslt{\ul
+Troubleshooting
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#template-files-or-templates-directory-missing"}}{\fldrslt{\ul
+Template Files Missing
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#module-not-found"}}{\fldrslt{\ul
+Module Not Found
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#deployment-failures"}}{\fldrslt{\ul
+Deployment Failures
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#cleanup-management-restore-or-vds-removal-fails"}}{\fldrslt{\ul
+Cleanup: Management Restore or VDS Removal Fails
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#harbor-secretkey-wrong-length"}}{\fldrslt{\ul
+Harbor: secretKey Wrong Length
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#harbor-tls-certificate-and-key-swapped-pem-type-mismatch"}}{\fldrslt{\ul
+Harbor: TLS Certificate and Key Swapped
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#harbor-service-enters-error-state"}}{\fldrslt{\ul
+Harbor: Service Enters ERROR State
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li720 \fi-360 \endash \tx360\tab {\field{\*\fldinst{HYPERLINK "#common-issues"}}{\fldrslt{\ul
+Common Issues
+}}}
+\sa180\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#requirements"}}{\fldrslt{\ul
+Requirements
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#version-history"}}{\fldrslt{\ul
+Version History
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#contributing"}}{\fldrslt{\ul
+Contributing
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#license"}}{\fldrslt{\ul
+License
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#support"}}{\fldrslt{\ul
+Support
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#related-resources"}}{\fldrslt{\ul
+Related Resources
+}}}
+\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\field{\*\fldinst{HYPERLINK "#important-notes"}}{\fldrslt{\ul
+Important Notes
+}}}
+\sa180\par}
+{\pard \qc \f0 \sa180 \li0 \fi0 \emdash\emdash\emdash\emdash\emdash\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Overview\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The VCF Edge at Scale PowerShell module provides streamlined deployment of VCF for edge sites, offering turnkey enablement of 1\u8211-2 node clusters with vSphere Supervisor and Supervisor services (Harbor and Argo CD). Leveraging two simple JSON input files, {\f1 infrastructure.json} and {\f1 supervisor.json}, it provides a flexible, idempotent deployment mechanism to drive different, validated edge deployment topologies. A Python-based JSON generator is provided to help create the JSON files needed to generate edge configurations with safeguards against configuration errors.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Prerequisites\par}
@@ -51,16 +217,13 @@ Python
 }}}
 \sa180\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 1: Installation\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 1: PowerShell Gallery (Preferred)\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 Install-Module -Name VcfEdgeAtScale\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2: Clone from GitHub and install manually\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 # Open a PowerShell 7.4+ prompt (pwsh on macOS/Linux, PowerShell 7 on Windows)\line
 git clone https://github.com/vmware/powershell-module-for-vcf-edge-at-scale.git\line
 cd powershell-module-for-vcf-edge-at-scale/VcfEdgeAtScale\line
 pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 3: Download latest release from GitHub and install manually\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 $tempDir = New-Item -ItemType Directory -Path (Join-Path ([System.IO.Path]::GetTempPath()) ([Guid]::NewGuid().ToString()))\line
 $fullPath = Join-Path -Path $tempDir -ChildPath "VcfEdgeAtScale.zip"\line
@@ -70,7 +233,7 @@ cd $tempDir\line
 pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Note\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b {\f1 -ExecutionPolicy Bypass}} is required on Windows when running a script downloaded from the internet. It is accepted but has no effect on macOS and Linux, so the same command works on all platforms. The installer also calls {\f1 Unblock-File} on all installed module files to remove the Windows "mark of the web" that would otherwise block {\f1 Import-Module} even after the script completes.\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 The installer prompts whether to add {\f1 Import-Module VcfEdgeAtScale} to your {\f1 $PROFILE} so the module loads automatically in every new PowerShell session. To skip the prompt, pass {\f1 -AddToProfile} to always add the line or {\f1 -SkipProfileUpdate} to never modify the profile.\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 PowerShell auto-imports the module on first use once it is installed to {\f1 $env:PSModulePath} \u8212- no profile changes are needed. If your {\f1 $PROFILE} contains a previous {\f1 Import-Module VcfEdgeAtScale} line or lazy-load stub from an earlier install, the installer detects it and offers to clean it up. Pass {\f1 -SkipProfileUpdate} to suppress the profile check entirely (for unattended installs).\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Step 2: Initialize Settings\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 The initialization function performs the following steps\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab Establishes a base directory for the module's logs and configuration files based on user input.\par}
@@ -97,7 +260,8 @@ pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Open {\f1 $env:VcfEdgeatScaleRootDirectory/infrastructure.json} and {\f1 $env:VcfEdgeatScaleRootDirectory/supervisor.json} in any text editor. The {\f1 Docs/} folder (placed there by {\f1 -Initialize}) contains {\f1 infrastructure-config-help.json} and {\f1 supervisor-config-help.json} with field-level descriptions. Run {\f1 Start-VcfEdgeAtScale -ValidateOnly} to validate your changes before deployment.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 Option 2 Browser-based UI tool\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 Change to your {\f1 $env:VcfEdgeatScaleRootDirectory} directory and run:\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \f1 python3 Tools/veas-json-generator.py [--port PORT] [--host HOST] [--base-dir DIR] [--no-browser]\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \f1 python3 Tools/veas-json-generator.py [--port PORT] [--base-dir DIR] [--no-browser]\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 The server always binds to {\f1 127.0.0.1} (localhost only). It has no TLS and is not designed for network exposure. To reach it from a remote machine, use SSH port-forwarding: {\f1 ssh -L 8080:localhost:8080 user@host}.\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 {\b CLI flags:}\par}
 {
 \trowd \trgaph120
@@ -122,19 +286,6 @@ pwsh -ExecutionPolicy Bypass -File .\\Install-VcfEdgeAtScaleModule.ps1\par}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 8080}\par}
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 TCP port to listen on.\par}
-\cell}
-}
-\intbl\row}
-{
-\trowd \trgaph120
-\cellx2880\cellx5760\cellx8640
-\trkeep\intbl
-{
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 --host HOST}\par}
-\cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 127.0.0.1}\par}
-\cell}
-{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Bind address. Use {\f1 0.0.0.0} to accept connections from other machines on the network (e.g. SSH port-forwarding or a shared lab workstation).\par}
 \cell}
 }
 \intbl\row}
@@ -171,9 +322,6 @@ python3 Tools/veas-json-generator.py\line
 \line
 # Different port\line
 python3 Tools/veas-json-generator.py --port 8081\line
-\line
-# Accept LAN connections (remote workstation or SSH tunnel)\line
-python3 Tools/veas-json-generator.py --host 0.0.0.0 --port 8080\line
 \line
 # Point to an explicit JSON directory (useful when managing multiple environments)\line
 python3 Tools/veas-json-generator.py --base-dir /path/to/my-env\line
@@ -336,7 +484,7 @@ taskkill /PID <pid> /F\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 5.\tx360\tab {\b vSphere Supervisor enablement}: Unless the edge site is deployed with the {\f1 -ComputeOnly} flag, a Supervisor is automatically deployed upon successful standup of the compute and networking stack. After which, the PowerShell module will check if there are any pending supervisor updates available and apply them. Unless Argo CD and/or Harbor are disabled, it will then proceed to deploy one or both of those services.\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 6.\tx360\tab {\b Argo CD instance creation}: Argo CD instance created and configured. After deployment, it prints the URL and temporary admin password for immediate use.\par}
 {\pard \ql \f0 \sa180 \li360 \fi-360 7.\tx360\tab {\b Harbor instance creation}: Harbor registry created and configured from a templated data file so many edge sites stay consistent and easier to maintain. The code will also show a URL and login password post deployment.\sa180\par}
-{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Informational: In-application help\par}
+{\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel1 \b \fs32 Informational: In-Application Help\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \f1 # View infrastructure.json configuration reference (auto-detects best format)\line
 Show-InfrastructureJsonConfigurationHelp\line
 \line
@@ -2214,7 +2362,7 @@ Start-VcfEdgeAtScale -EdgeSite "site1"\par}
 {\pard \ql \f0 \sa180 \li0 \fi0 \outlinelevel2 \b \fs28 External Tools\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b kubectl}: Required for Argo CD operations\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vcf CLI}: Required for supervisor management operations\par}
-{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} + {\b veas-ui.html} (Python 3.9+, stdlib only \u8212- no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory \u8212- the server starts on {\f1 http://127.0.0.1:8080} and opens a browser tab automatically. Key flags: {\f1 --port PORT} (default 8080), {\f1 --host HOST} (default 127.0.0.1; use 0.0.0.0 for LAN access), {\f1 --base-dir DIR} (override JSON directory), {\f1 --no-browser} (headless/SSH). Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See {\b {\field{\*\fldinst{HYPERLINK "#step-3-customize-json-files"}}{\fldrslt{\ul
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b veas-json-generator.py} + {\b veas-ui.html} (Python 3.9+, stdlib only \u8212- no extra packages): Browser-based JSON configuration UI copied to {\b {\f1 Tools/}} by {\b {\f1 Start-VcfEdgeAtScale -Initialize}}. Run {\f1 python3 Tools/veas-json-generator.py} from your base directory \u8212- the server starts on {\f1 http://localhost:8080} (localhost only; no TLS) and opens a browser tab automatically. Key flags: {\f1 --port PORT} (default 8080), {\f1 --base-dir DIR} (override JSON directory), {\f1 --no-browser} (headless/SSH). For remote access use SSH port-forwarding. Validates {\b {\f1 infrastructure.json}} and {\b {\f1 supervisor.json}} against the same rules as the PowerShell module (service-aware LB IP minimums, RFC1123 names, cross-file site matching, cross-site ESX host uniqueness, and more). Supports adding new edge sites and cloning existing sites with auto-generated RFC1123 segment names. Saves both files to the base directory (with automatic timestamped backups) or downloads them as a ZIP. See {\b {\field{\*\fldinst{HYPERLINK "#step-3-customize-json-files"}}{\fldrslt{\ul
 Step 3
 }}}
 } for full usage details.\sa180\par}

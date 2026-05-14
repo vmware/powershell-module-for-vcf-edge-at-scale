@@ -1,15 +1,7 @@
 # Release Notes
 
-<a id="v1.0.3.1006"></a>
-## 1.0.3.1006
-
-- Fixed install source detection: `Get-EnvironmentSetup` now uses `Get-InstalledModule` (PowerShellGet) as the authoritative source, so PSGallery-installed modules correctly log `PSGallery (vX.Y.Z)` instead of always reporting "Manual install".
-- Fixed spurious "module in use" warnings during auto-update: removed `-Force` from `Update-Module`, which was causing PowerShellGet to force-reinstall all required VMware modules already loaded in the session.
-- Fixed misleading post-update message that suggested `Remove-Module; Import-Module` as a hot-reload alternative; users are now directed to open a new PowerShell window only.
-- Swapped `-Initialize` next-step hint order to match README: Direct JSON editing is Option 1, Browser-based UI is Option 2.
-
-<a id="v1.0.3.1005"></a>
-## 1.0.3.1005
+<a id="v1.0.3.1007"></a>
+## 1.0.3.1007
 
 - Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.
 - Configurable vSphere HA admission policy for vSAN stretched clusters.

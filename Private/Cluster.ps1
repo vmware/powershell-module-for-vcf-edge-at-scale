@@ -2184,7 +2184,7 @@ Function Set-NewDatastore {
             Write-LogMessage -Type ERROR -Message "This error occurs when:"
             Write-LogMessage -Type ERROR -Message "  - The tag has a `"single`" cardinality and is already assigned to another datastore"
             Write-LogMessage -Type ERROR -Message "  - The tag has a `"many`" cardinality but has reached its maximum assignment limit"
-            Write-Output ""
+            Write-Host ""
             Write-LogMessage -Type ERROR -Message "SOLUTION:"
             Write-LogMessage -Type ERROR -Message "  1. Check the tag category cardinality in vCenter: Menu > Tags & Custom Attributes > Tags"
             Write-LogMessage -Type ERROR -Message "  2. If the tag is `"single`" cardinality, remove it from the other datastore first"
@@ -3062,7 +3062,7 @@ Function Get-UserDiskSelection {
     }
 
     # Display all disks in a single table.
-    Write-Output ""
+    Write-Host ""
     Write-Output "vSAN $StorageType Eligible Disks for cluster `"$ClusterName`":"
     $tableOutput = $diskDisplayList | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize | Out-String
     # Remove trailing newlines from Out-String, then write table.
@@ -3079,10 +3079,10 @@ Function Get-UserDiskSelection {
     # Remove colon from prompt message as Read-Host adds it automatically.
     $deselectPrompt = "Would you like to de-select any disks? (Y/N, default: N)"
     $deselectResponse = Read-Host $deselectPrompt
-    Write-Output ""
+    Write-Host ""
 
     if ($deselectResponse -eq "Y" -or $deselectResponse -eq "y") {
-        Write-Output ""
+        Write-Host ""
         Write-Output "Enter the IDs of disks to de-select (comma-separated, e.g., 1,3,5) or 'C' to cancel:"
         $deselectInput = Read-Host "Disk IDs to de-select"
 
@@ -3124,7 +3124,7 @@ Function Get-UserDiskSelection {
         }
 
         $disksWereDeselected = $true
-        Write-Output ""
+        Write-Host ""
         Write-LogMessage -Type INFO -Message "User de-selected disk ID(s): $($idsToDeselectArray -join ', '). $($selectedDiskIds.Count) disk(s) remain selected."
     }
 
@@ -3135,9 +3135,9 @@ Function Get-UserDiskSelection {
     # Display summary only if disks were deselected, otherwise show simple confirmation.
     if ($disksWereDeselected) {
         # Display summary tables for included and excluded disks.
-        Write-Output ""
+        Write-Host ""
         Write-Output "Disk Selection Summary:"
-        Write-Output ""
+        Write-Host ""
 
         # Display included disks table.
         Write-Output "Included Disks:"
@@ -3146,7 +3146,7 @@ Function Get-UserDiskSelection {
         } else {
             Write-Output "  (No disks included)"
         }
-        Write-Output ""
+        Write-Host ""
 
         # Display excluded disks table.
         Write-Output "Excluded Disks:"
@@ -3155,7 +3155,7 @@ Function Get-UserDiskSelection {
         } else {
             Write-Output "  (No disks excluded)"
         }
-        Write-Output ""
+        Write-Host ""
     } else {
         # Simple confirmation when all disks are selected.
         Write-LogMessage -Type INFO -Message "All $($diskDisplayList.Count) disk(s) will be added to vSAN $StorageType storage pools."

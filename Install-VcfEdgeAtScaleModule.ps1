@@ -42,66 +42,77 @@
     files are overwritten and reloaded afterward, so the in-memory version
     matches what was just installed.
 
-    After installation the script optionally appends 'Import-Module VcfEdgeAtScale'
-    to $PROFILE so the module loads automatically in every new PowerShell session.
-    Use -AddToProfile to skip the interactive prompt and always add the line, or
-    -SkipProfileUpdate to skip the prompt and never add it.
+    Once installed to $env:PSModulePath, PowerShell auto-imports the module the first time
+    any of its commands is used in a session. No $PROFILE changes are needed.
+
+    IMPORTANT: Do not add 'Import-Module VcfEdgeAtScale' to $PROFILE. The module contains
+    ~35,000 lines across six private files and takes ~2 seconds to load on macOS. Loading it
+    at every shell startup will make every new terminal noticeably slow. Use PowerShell's
+    built-in auto-import instead — the module loads once on first use per session.
+
+    If $PROFILE contains 'Import-Module VcfEdgeAtScale' or a lazy-load stub from an earlier
+    install, the installer detects and offers to clean them up automatically.
+
+    Use -SkipProfileUpdate to suppress all profile checks for unattended installs.
 
     Prerequisites:
       - PowerShell 7.4 or newer (enforced by #Requires).
-      - VCF.PowerCLI 9.0 or newer must already be installed; it is declared as
-        a required module in the VcfEdgeAtScale manifest and Import-Module will
-        fail without it.
+      - VCF.PowerCLI 9.0 or newer must already be installed.
 
 .PARAMETER SourcePath
     Path to the directory containing the module source files. Defaults to the
     directory containing this script ($PSScriptRoot), which is correct when
     running directly from a cloned repository.
 
-.PARAMETER AddToProfile
-    When specified, appends 'Import-Module VcfEdgeAtScale' to $PROFILE without
-    prompting. Skipped silently if the line is already present. Cannot be combined
-    with -SkipProfileUpdate.
-
 .PARAMETER SkipProfileUpdate
-    When specified, skips the $PROFILE update prompt entirely and does not modify
-    $PROFILE. Use for unattended installs where profile changes are unwanted.
-    Cannot be combined with -AddToProfile.
+    When specified, skips all $PROFILE inspection and cleanup. Use for unattended
+    installs where profile changes are unwanted.
 
 .EXAMPLE
     .\Install-VcfEdgeAtScaleModule.ps1
 
-    Installs from the script's own directory. Prompts whether to add the module
-    to $PROFILE for auto-load on every new session.
+    Installs from the script's own directory. Checks $PROFILE for any VcfEdgeAtScale
+    entries that would slow shell startup and offers to remove them.
 
 .EXAMPLE
     .\Install-VcfEdgeAtScaleModule.ps1 -SourcePath "~/Downloads/VcfEdgeAtScale"
 
-    Installs from a custom source directory and prompts for $PROFILE update.
-
-.EXAMPLE
-    .\Install-VcfEdgeAtScaleModule.ps1 -AddToProfile
-
-    Installs and adds 'Import-Module VcfEdgeAtScale' to $PROFILE without prompting.
+    Installs from a custom source directory.
 
 .EXAMPLE
     .\Install-VcfEdgeAtScaleModule.ps1 -SkipProfileUpdate
 
-    Installs without modifying $PROFILE (suitable for CI or scripted installs).
+    Installs without inspecting or modifying $PROFILE (suitable for CI or scripted installs).
 
 .NOTES
-    After installation run 'Import-Module VcfEdgeAtScale' to confirm success,
-    then 'Start-VcfEdgeAtScale -Initialize' to set up your working directory.
+    After installation, open a new shell and run 'Start-VcfEdgeAtScale -Initialize' to set up
+    your working directory. PowerShell auto-imports the module on first use — no profile line needed.
 #>
 [CmdletBinding()]
 Param (
-    [Parameter(Mandatory = $false)] [Switch]$AddToProfile,
     [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$SourcePath = $PSScriptRoot,
     [Parameter(Mandatory = $false)] [Switch]$SkipProfileUpdate
 )
 
-if ($AddToProfile -and $SkipProfileUpdate) {
-    throw "Do not combine -AddToProfile with -SkipProfileUpdate."
+function Invoke-ProfileCleanup {
+
+    <#
+    .SYNOPSIS
+        Prompts the user to confirm removal of a stale VcfEdgeAtScale profile entry.
+    .NOTES
+        Caller is responsible for building $CleanedContent before calling this function.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$CleanedContent,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ProfilePath
+    )
+
+    $response = Read-Host "Remove it now? (Y/N, Enter=no)"
+    if ($response -match '^Y(es)?$') {
+        Set-Content -LiteralPath $ProfilePath -Encoding UTF8 -NoNewline -Value $CleanedContent
+        Write-Host "  Removed. Shell startup is now fast." -ForegroundColor Green
+    }
 }
 
 $itemsToCopy = @("VcfEdgeAtScale.psd1", "VcfEdgeAtScale.psm1", "PSScriptAnalyzerSettings.psd1", "Private", "Templates", "Tools")
@@ -180,40 +191,49 @@ try {
         Write-Host "  Run 'Import-Module VcfEdgeAtScale' manually once all prerequisites are met." -ForegroundColor Yellow
     }
 
-    # Optionally add 'Import-Module VcfEdgeAtScale' to $PROFILE so the module
-    # loads automatically in every new PowerShell session. Prompt unless the
-    # caller passed -AddToProfile or -SkipProfileUpdate.
-    $profileLine = "Import-Module VcfEdgeAtScale"
-    $shouldUpdateProfile = $false
+    # Check $PROFILE for any VcfEdgeAtScale entries that would slow shell startup and clean them up.
+    # The installer never writes to $PROFILE — PowerShell auto-imports the module on first command
+    # use without any profile line. Detect two known patterns that cause ~2s startup latency:
+    #   1. "Import-Module VcfEdgeAtScale" (eager load added by older versions of this installer)
+    #   2. A lazy-load stub block (added by a transitional version of this installer)
+    $eagerProfileLine = "Import-Module VcfEdgeAtScale"
+    $lazyStubSentinel = "# VcfEdgeAtScale lazy loader"
 
     if (-not $SkipProfileUpdate) {
-        $profileAlreadyContainsLine = (Test-Path -LiteralPath $PROFILE) -and
-            ((Get-Content -LiteralPath $PROFILE -ErrorAction SilentlyContinue) -contains $profileLine)
-
-        if ($profileAlreadyContainsLine) {
-            Write-Host "Profile ($PROFILE) already contains '$profileLine'; no change needed." -ForegroundColor Gray
-        } elseif ($AddToProfile) {
-            $shouldUpdateProfile = $true
+        $profileContent = if (Test-Path -LiteralPath $PROFILE) {
+            Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
         } else {
-            Write-Host ""
-            Write-Host "Auto-load on every session" -ForegroundColor Cyan
-            Write-Host "  Add the following line to your PowerShell profile ($PROFILE):" -ForegroundColor Cyan
-            Write-Host "    $profileLine" -ForegroundColor White
-            Write-Host ""
-            $response = Read-Host "Add this line to your profile now? (Y/N, Enter=no)"
-            $shouldUpdateProfile = ($response -match '^Y(es)?$')
+            ""
         }
 
-        if ($shouldUpdateProfile) {
-            if (-not (Test-Path -LiteralPath $PROFILE)) {
-                Write-Host "Creating profile file: $PROFILE" -ForegroundColor Gray
-                New-Item -Path $PROFILE -ItemType File -Force | Out-Null
-            }
-            Add-Content -LiteralPath $PROFILE -Value "" -Encoding UTF8
-            Add-Content -LiteralPath $PROFILE -Value "# Added by VcfEdgeAtScale installer on $(Get-Date -Format 'yyyy-MM-dd')" -Encoding UTF8
-            Add-Content -LiteralPath $PROFILE -Value $profileLine -Encoding UTF8
-            Write-Host "Added '$profileLine' to $PROFILE." -ForegroundColor Green
-            Write-Host "  The module will load automatically in every new PowerShell session." -ForegroundColor Green
+        $hasLazyStub = $profileContent -match [regex]::Escape($lazyStubSentinel)
+        $hasEagerLine = $profileContent -match "(?m)^\s*$([regex]::Escape($eagerProfileLine))\s*$"
+
+        if ($hasLazyStub) {
+            Write-Host ""
+            Write-Host "Profile cleanup available" -ForegroundColor Yellow
+            Write-Host "  $PROFILE contains a VcfEdgeAtScale lazy-load stub from an earlier install." -ForegroundColor Yellow
+            Write-Host "  It is no longer needed — PowerShell auto-imports the module on first use." -ForegroundColor Yellow
+            Write-Host ""
+            # Remove the stub block from the sentinel comment line through its stand-alone closing '}'.
+            # (?ms): multiline (^ matches line start) + singleline (. matches newlines).
+            # The outer if-block '}' is the only one that appears at column 0 in the stub structure.
+            $cleanedContent = $profileContent -replace "(?ms)^$([regex]::Escape($lazyStubSentinel)).*?^}", ""
+            Invoke-ProfileCleanup -ProfilePath $PROFILE -CleanedContent $cleanedContent
+        } elseif ($hasEagerLine) {
+            Write-Host ""
+            Write-Host "Profile warning" -ForegroundColor Yellow
+            Write-Host "  $PROFILE contains 'Import-Module VcfEdgeAtScale'." -ForegroundColor Yellow
+            Write-Host "  This adds ~2 seconds to every new shell. PowerShell auto-imports the module" -ForegroundColor Yellow
+            Write-Host "  on first use without any profile entry — the line is not needed." -ForegroundColor Yellow
+            Write-Host ""
+            # Remove the Import-Module line and any installer comment immediately preceding it.
+            $cleanedContent = ($profileContent -replace "(?m)^\s*# VcfEdgeAtScale[^\n]*\r?\n?", "") `
+                -replace "(?m)^\s*$([regex]::Escape($eagerProfileLine))\r?\n?", ""
+            Invoke-ProfileCleanup -ProfilePath $PROFILE -CleanedContent $cleanedContent
+        } else {
+            Write-Host ""
+            Write-Host "  No profile changes needed — Start-VcfEdgeAtScale auto-loads on first use." -ForegroundColor Green
         }
     }
 

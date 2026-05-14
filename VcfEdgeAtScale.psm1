@@ -39,12 +39,13 @@
 #   Private/EntryPoints.ps1 — Start-VcfEdgeAtScale, configuration help (exported)
 #
 
-# Module-scope initialization helpers. These are private functions called once during module load
-# to provide error-handled versions of Import-PowerShellDataFile and VCF CLI auto-detection.
-# try/catch at raw module scope triggers PSScriptAnalyzer LSP false positives in some editors;
-# extracting into named functions avoids those false positives while retaining proper error
-# handling and user-visible warnings. Both functions are removed from the Function: drive after
-# use so they do not appear in Get-Command -Module VcfEdgeAtScale.
+# Module-scope initialization helpers. These are private functions defined before the script-scope
+# variable block so they can be called during initialization and remain available to dot-sourced
+# private files. try/catch at raw module scope triggers PSScriptAnalyzer LSP false positives in
+# some editors; extracting into named functions avoids those false positives while retaining proper
+# error handling and user-visible warnings. Read-VcfEdgeAtScaleManifestVersion is removed from the
+# Function: drive after use (one-shot helper). Get-VcfEdgeAtScaleVcfCmd is kept as a private
+# lazy-resolver callable by the dot-sourced private files.
 function Read-VcfEdgeAtScaleManifestVersion {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ManifestPath
@@ -56,11 +57,39 @@ function Read-VcfEdgeAtScaleManifestVersion {
         return "unknown"
     }
 }
-function Resolve-VcfEdgeAtScaleCliCommand {
+
+function Get-VcfEdgeAtScaleVcfCmd {
+
+    <#
+        .SYNOPSIS
+        Returns the VCF CLI executable name, resolving and caching it on first call.
+
+        .DESCRIPTION
+        Performs the VCF CLI PATH scan (Get-Command -CommandType Application) lazily — only
+        on first invocation — and caches the result in $Script:VcfCmd. Subsequent calls return
+        the cached value immediately with no I/O. Deferring the scan from module-load time to
+        first use avoids ~1-2 seconds of PATH scan latency on every new shell startup (macOS).
+
+        .OUTPUTS
+        String. The resolved VCF CLI command name (e.g. "vcf" or "vcf.exe").
+
+        .NOTES
+        Sets $Script:VcfCmd as a side-effect. Many call sites in Private/Supervisor.ps1 reference
+        $Script:VcfCmd directly rather than calling this function. They are safe because
+        Get-EnvironmentSetup (called at the start of every Start-VcfEdgeAtScale run via New-LogFile)
+        invokes this function first. Any code path that bypasses Get-EnvironmentSetup must call
+        this function explicitly before using $Script:VcfCmd.
+    #>
+
+    if ($null -ne $Script:VcfCmd) {
+        return $Script:VcfCmd
+    }
+
     try {
         $candidates = if ($IsWindows) { @("vcf.exe", "vcf") } else { @("vcf") }
         foreach ($name in $candidates) {
             if (Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue) {
+                $Script:VcfCmd = $name
                 return $name
             }
         }
@@ -68,7 +97,10 @@ function Resolve-VcfEdgeAtScaleCliCommand {
         $defaultName = if ($IsWindows) { "vcf.exe" } else { "vcf" }
         Write-Warning "VcfEdgeAtScale: VCF CLI auto-detection failed — $($_.Exception.Message). Defaulting to '$defaultName'."
     }
-    return if ($IsWindows) { "vcf.exe" } else { "vcf" }
+
+    # No candidate found on PATH; fall back to the platform default name.
+    $Script:VcfCmd = if ($IsWindows) { "vcf.exe" } else { "vcf" }
+    return $Script:VcfCmd
 }
 
 #region Script scope variables
@@ -84,12 +116,14 @@ $Script:ModuleVersion = if (Test-Path -LiteralPath $local:manifestPath) {
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
 $Script:KubectlCmd = if ($IsWindows) { "kubectl.exe" } else { "kubectl" }
 
-# VCF CLI: on Windows, Broadcom ships `vcf.exe`; some environments expose the same binary as `vcf`. Prefer the first name found on PATH.
-$Script:VcfCmd = Resolve-VcfEdgeAtScaleCliCommand
+# VCF CLI command name: resolved lazily on first use via Get-VcfEdgeAtScaleVcfCmd to avoid a
+# PATH scan (Get-Command -CommandType Application) at module-load time. Deferred initialization
+# keeps profile load time fast; the scan runs once when the user first invokes a VCF CLI operation.
+$Script:VcfCmd = $null
 
-# Remove initialization helpers from the Function: drive; they must not appear in Get-Command -Module VcfEdgeAtScale.
+# Remove the one-shot manifest-version helper from the Function: drive; it must not appear in Get-Command -Module VcfEdgeAtScale.
+# Get-VcfEdgeAtScaleVcfCmd is intentionally kept — it is a private lazy-resolver used by the dot-sourced private files.
 Remove-Item -Path Function:\Read-VcfEdgeAtScaleManifestVersion -ErrorAction SilentlyContinue
-Remove-Item -Path Function:\Resolve-VcfEdgeAtScaleCliCommand -ErrorAction SilentlyContinue
 
 # Define log level hierarchy (lower number = lower priority, higher number = higher priority)
 $Script:LogLevelHierarchy = @{
@@ -179,6 +213,16 @@ $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames = @(
 # Enforce minimum engine version (must match PowerShellVersion in VcfEdgeAtScale.psd1).
 if ($PSVersionTable.PSVersion -lt [Version]"7.4") {
     throw "VcfEdgeAtScale requires PowerShell 7.4 or later. Current version is $($PSVersionTable.PSVersion). Install a newer pwsh and retry."
+}
+
+# Backward compatibility: the env var was misspelled "VcfEdgeatScaleRootDirectory" (lowercase 't')
+# before 1.0.3.1007. On Windows, env vars are case-insensitive so both names resolve identically.
+# On macOS/Linux (case-sensitive), migrate the old value to the corrected name automatically
+# so existing $PROFILE lines from earlier -Initialize runs continue to work without manual editing.
+if (-not $IsWindows -and
+    -not [String]::IsNullOrEmpty($env:VcfEdgeatScaleRootDirectory) -and
+    [String]::IsNullOrEmpty($env:VcfEdgeAtScaleRootDirectory)) {
+    $env:VcfEdgeAtScaleRootDirectory = $env:VcfEdgeatScaleRootDirectory
 }
 
 #endregion

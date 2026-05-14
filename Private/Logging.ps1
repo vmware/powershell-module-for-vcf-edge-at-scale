@@ -618,19 +618,19 @@ Function Get-VcfEdgeAtScaleInstallSource {
         .psd1 read failures without silently producing a misleading fallback.
 
         .PARAMETER ModuleVersion
-        The module version string to look up (e.g. "1.0.3.1006"). Used to match the exact
+        The module version string to look up (e.g. "1.0.3.1007"). Used to match the exact
         installed version rather than the latest.
 
         .OUTPUTS
         System.String
-        A descriptive install source string such as "PSGallery (v1.0.3.1006)" or
-        "Local path (C:\Users\admin\VCFEdgeAtScale\1.0.3.1006)". Returns "N/A" if the
+        A descriptive install source string such as "PSGallery (v1.0.3.1007)" or
+        "Local path (C:\Users\admin\VCFEdgeAtScale\1.0.3.1007)". Returns "N/A" if the
         module cannot be located, or "N/A (manifest unreadable)" when ModuleVersion is
         "unknown" (indicating the .psd1 could not be read at import time).
 
         .EXAMPLE
-        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "1.0.3.1006"
-        Returns "PSGallery (v1.0.3.1006)" when installed from the gallery.
+        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "1.0.3.1007"
+        Returns "PSGallery (v1.0.3.1007)" when installed from the gallery.
 
         .EXAMPLE
         Get-VcfEdgeAtScaleInstallSource -ModuleVersion "unknown"
@@ -753,9 +753,10 @@ Function Get-EnvironmentSetup {
     }
 
     # VCF CLI version — best-effort; suppressed on any error.
+    # Get-VcfEdgeAtScaleVcfCmd resolves and caches $Script:VcfCmd lazily on first call; deferred from module-load to avoid PATH scan at startup.
     $vcfCliVersion = "N/A"
     try {
-        $vcfRaw = & $Script:VcfCmd version 2>&1
+        $vcfRaw = & (Get-VcfEdgeAtScaleVcfCmd) version 2>&1
         if ($LASTEXITCODE -eq 0 -and $vcfRaw) {
             $vcfCliVersion = ($vcfRaw | Where-Object { $_ -is [String] } | Select-Object -First 1).Trim()
         }
@@ -868,7 +869,7 @@ Function New-LogFile {
 
         .EXAMPLE
         New-LogFile -BaseDirectory "$HOME/VcfEdgeAtScale" -Directory "Logs"
-        Creates a log file under the deployment root when $env:VcfEdgeatScaleRootDirectory is used by Start-VcfEdgeAtScale.
+        Creates a log file under the deployment root when $env:VcfEdgeAtScaleRootDirectory is used by Start-VcfEdgeAtScale.
 
         .NOTES
         This function should be called before any Write-LogMessage calls to ensure the log
@@ -1126,7 +1127,7 @@ Function Write-LogMessage {
     # NoNewline: display without newline and store for later CompletePending; do not write to file yet.
     if ($NoNewline) {
         if ($PrependNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and ($shouldDisplay -or $ForceToScreen)) {
-            Write-Output ""
+            Write-Host ""
         }
         $Script:LogMessagePending = $Message
         $Script:LogMessagePendingType = $Type
@@ -1137,7 +1138,7 @@ Function Write-LogMessage {
                 [Console]::Out.Flush()
             }
             if ($AppendNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and ($shouldDisplay -or $ForceToScreen)) {
-                Write-Output ""
+                Write-Host ""
             }
         } catch {
             # If console output fails after pending state was set, clear it to prevent a permanently orphaned pending line.
@@ -1150,7 +1151,7 @@ Function Write-LogMessage {
 
     # Add blank line before message if requested and not in log-only mode and meets log level threshold.
     if ($PrependNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and ($shouldDisplay -or $ForceToScreen)) {
-        Write-Output ""
+        Write-Host ""
     }
 
     # Display message to console with color coding (unless suppressed, in log-only mode, or below log level threshold).
@@ -1164,7 +1165,7 @@ Function Write-LogMessage {
 
     # Add blank line after message if requested and not in log-only mode and meets log level threshold.
     if ($AppendNewLine -and (-not ($Script:LogOnly -eq "enabled")) -and ($shouldDisplay -or $ForceToScreen)) {
-        Write-Output ""
+        Write-Host ""
     }
 
     # Write message to log file (unless suppressed).
@@ -1315,19 +1316,19 @@ Function Connect-Vcenter {
                 switch -Regex ($errorMessage) {
                     "SSL connection could not be established|SSL|certificate" {
                         Write-LogMessage -Type ERROR -Message "Failed to establish SSL connection to $ServerType `"$ServerName`"."
-                        Write-Output ""
+                        Write-Host ""
                         Write-LogMessage -Type ERROR -Message "Common causes and solutions:"
                         Write-LogMessage -Type ERROR -Message "  1. Self-signed or untrusted SSL certificate."
                         Write-LogMessage -Type ERROR -Message "     Solution: Configure PowerCLI to ignore invalid certificates:"
                         Write-LogMessage -Type ERROR -Message "     Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:`$false"
-                        Write-Output ""
+                        Write-Host ""
                         Write-LogMessage -Type ERROR -Message "  2. TLS protocol version mismatch."
                         Write-LogMessage -Type ERROR -Message "     Solution: Enable TLS 1.2 in PowerShell:"
                         Write-LogMessage -Type ERROR -Message "     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12"
-                        Write-Output ""
+                        Write-Host ""
                         Write-LogMessage -Type ERROR -Message "  3. Network connectivity or firewall blocking HTTPS (port 443)"
                         Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $ServerName -Port 443"
-                        Write-Output ""
+                        Write-Host ""
                         Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage."
                         throw "Full error details: $errorMessage."
                     }
@@ -1340,7 +1341,7 @@ Function Connect-Vcenter {
                         }
 
                         # Prompt user if they want to re-enter credentials.
-                        Write-Output ""
+                        Write-Host ""
                         $retryResponse = $null
                         while ($retryResponse -ne "Y" -and $retryResponse -ne "N") {
                             # Remove colon from prompt message as Read-Host adds it automatically.
@@ -1350,7 +1351,7 @@ Function Connect-Vcenter {
 
                         if ($retryResponse -eq "Y") {
                             # Re-prompt for password.
-                            Write-Output ""
+                            Write-Host ""
                             $username = $currentCredential.UserName
                             # Remove colon from prompt message as Read-Host adds it automatically.
                             $promptMessage = "Enter the password for the user `"$username`" on $ServerType `"$ServerName`""
@@ -1358,7 +1359,7 @@ Function Connect-Vcenter {
                             # Ensure no colon or colon-space at the end as Read-Host adds ": " automatically.
                             $promptMessage = $promptMessage.TrimEnd(": ")
                             $newPassword = Get-InteractiveInput -PromptMessage $promptMessage -AsSecureString
-                            Write-Output ""
+                            Write-Host ""
                             $currentCredential = New-Object System.Management.Automation.PSCredential($username, $newPassword)
                             Write-LogMessage -Type INFO -Message "Retrying connection with new credentials..."
                         } else {

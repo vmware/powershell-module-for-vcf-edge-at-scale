@@ -90,9 +90,9 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             module or copy files from the GitHub repository. Works for a new or existing configuration directory. When -TemplatesOnly is set, only YAML and Docs files are refreshed; root
             infrastructure.json and supervisor.json are not created or replaced. Otherwise seeds those JSON files when absent,
             and when they already exist offers optional replacement from module templates (infrastructure.json paths under
-            ServicesYaml are updated when written from the template). Persists VcfEdgeatScaleRootDirectory via
+            ServicesYaml are updated when written from the template). Persists VcfEdgeAtScaleRootDirectory via
             On Windows: [System.Environment]::SetEnvironmentVariable (User scope) persists it to the registry. On macOS/Linux: the line is automatically appended to $PROFILE so new sessions inherit it.
-            When VcfEdgeatScaleRootDirectory points at an existing initialized layout, asks whether to initialize a different directory instead of re-prompting for the base path.
+            When VcfEdgeAtScaleRootDirectory points at an existing initialized layout, asks whether to initialize a different directory instead of re-prompting for the base path.
 
         .PARAMETER TemplatesOnly
             When set, copies only ServicesYaml and Docs templates; does not create or replace infrastructure.json or supervisor.json at the base directory.
@@ -121,17 +121,17 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
 
     $baseDirectory = $null
     $envRootResolved = $null
-    $envRootRaw = $env:VcfEdgeatScaleRootDirectory
+    $envRootRaw = $env:VcfEdgeAtScaleRootDirectory
     if (-not [String]::IsNullOrWhiteSpace($envRootRaw)) {
         $trimmedEnvRoot = $envRootRaw.Trim()
         if (-not (Test-Path -LiteralPath $trimmedEnvRoot)) {
             Write-Host ""
-            Write-Host "  Note: `$env:VcfEdgeatScaleRootDirectory pointed at a path that does not exist:" -ForegroundColor Yellow
+            Write-Host "  Note: `$env:VcfEdgeAtScaleRootDirectory pointed at a path that does not exist:" -ForegroundColor Yellow
             Write-Host "    $trimmedEnvRoot" -ForegroundColor White
-            $env:VcfEdgeatScaleRootDirectory = $null
+            $env:VcfEdgeAtScaleRootDirectory = $null
             if ($IsWindows) {
                 try {
-                    [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", $null, [System.EnvironmentVariableTarget]::User)
+                    [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", $null, [System.EnvironmentVariableTarget]::User)
                     Write-Host "  Stale value cleared from session and user environment. Choose a folder below." -ForegroundColor Green
                 } catch {
                     Write-Host "  Stale value cleared from session. User-level clear failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -141,7 +141,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             }
         } elseif (-not (Test-Path -LiteralPath $trimmedEnvRoot -PathType Container)) {
             Write-Host ""
-            Write-Host "  Note: `$env:VcfEdgeatScaleRootDirectory points at a path that exists but is not a folder:" -ForegroundColor Yellow
+            Write-Host "  Note: `$env:VcfEdgeAtScaleRootDirectory points at a path that exists but is not a folder:" -ForegroundColor Yellow
             Write-Host "    $trimmedEnvRoot" -ForegroundColor White
             Write-Host "  Choose a deployment root folder below (default: $defaultBaseDirectory)." -ForegroundColor Gray
         } else {
@@ -152,7 +152,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             }
             if ($envRootResolved -and (Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot $envRootResolved)) {
                 Write-Host ""
-                Write-Host "  Detected: `$env:VcfEdgeatScaleRootDirectory` is set in this session." -ForegroundColor Green
+                Write-Host "  Detected: `$env:VcfEdgeAtScaleRootDirectory` is set in this session." -ForegroundColor Green
                 Write-Host "    Value: $envRootRaw" -ForegroundColor White
                 Write-Host "  That path resolves to a full Initialize layout (Docs, Logs, ServicesYaml, root JSON, shipped YAML under ServicesYaml):" -ForegroundColor Green
                 Write-Host "    $envRootResolved" -ForegroundColor White
@@ -171,7 +171,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
                 }
             } elseif ($envRootResolved) {
                 Write-Host ""
-                Write-Host "  Note: VcfEdgeatScaleRootDirectory is set, but this folder is not a complete initialized layout:" -ForegroundColor Yellow
+                Write-Host "  Note: VcfEdgeAtScaleRootDirectory is set, but this folder is not a complete initialized layout:" -ForegroundColor Yellow
                 Write-Host "  $envRootResolved" -ForegroundColor Yellow
                 Write-Host "  You will be prompted for the base directory below (default: $defaultBaseDirectory)." -ForegroundColor Gray
             }
@@ -481,16 +481,16 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
     }
 
     # Set for the current session.
-    $env:VcfEdgeatScaleRootDirectory = $resolvedBaseDirectory
+    $env:VcfEdgeAtScaleRootDirectory = $resolvedBaseDirectory
     $persistedEnvSucceeded = $false
 
     if ($IsWindows) {
         # On Windows, persist to the user environment registry so new sessions inherit it automatically.
         try {
-            [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
+            [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
             $persistedEnvSucceeded = $true
         } catch {
-            Write-Warning "Could not persist VcfEdgeatScaleRootDirectory to the user environment: $($_.Exception.Message)"
+            Write-Warning "Could not persist VcfEdgeAtScaleRootDirectory to the user environment: $($_.Exception.Message)"
         }
     }
     # On macOS/Linux, [System.EnvironmentVariableTarget]::User is not supported by .NET
@@ -519,18 +519,18 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
     }
     if ($IsWindows) {
         if ($persistedEnvSucceeded) {
-            Write-Host "  VcfEdgeatScaleRootDirectory -> $resolvedBaseDirectory (session + user environment persisted)." -ForegroundColor Green
+            Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (session + user environment persisted)." -ForegroundColor Green
         } else {
-            Write-Host "  VcfEdgeatScaleRootDirectory -> $resolvedBaseDirectory (current session only; user-level persist failed — see warning above)." -ForegroundColor Yellow
-            Write-Host '  To set manually: [System.Environment]::SetEnvironmentVariable("VcfEdgeatScaleRootDirectory", "<path>", [System.EnvironmentVariableTarget]::User)' -ForegroundColor Cyan
+            Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (current session only; user-level persist failed — see warning above)." -ForegroundColor Yellow
+            Write-Host '  To set manually: [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", "<path>", [System.EnvironmentVariableTarget]::User)' -ForegroundColor Cyan
         }
     } else {
-        Write-Host "  VcfEdgeatScaleRootDirectory -> $resolvedBaseDirectory (set for this session)." -ForegroundColor Green
+        Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (set for this session)." -ForegroundColor Green
         Write-Host ""
 
         # Append to $PROFILE automatically so new sessions inherit the variable,
         # creating the profile file if it does not yet exist.
-        $profileLine = "`$env:VcfEdgeatScaleRootDirectory = `"$resolvedBaseDirectory`""
+        $profileLine = "`$env:VcfEdgeAtScaleRootDirectory = `"$resolvedBaseDirectory`""
         $appendedToProfile = $false
         try {
             $profileDir = Split-Path $PROFILE -Parent
@@ -541,7 +541,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
                 New-Item -ItemType File -Path $PROFILE -Force | Out-Null
             }
             $existingContent = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
-            if ($existingContent -notmatch [Regex]::Escape("VcfEdgeatScaleRootDirectory")) {
+            if ($existingContent -notmatch [Regex]::Escape("VcfEdgeAtScaleRootDirectory")) {
                 Add-Content -LiteralPath $PROFILE -Value "`n$profileLine" -Encoding UTF8
                 $appendedToProfile = $true
             }
@@ -553,7 +553,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             Write-Host "  Line appended to: $PROFILE" -ForegroundColor Green
             Write-Host "  New terminal sessions will inherit this variable automatically." -ForegroundColor Gray
         } else {
-            Write-Host "  Note: `$PROFILE already contains VcfEdgeatScaleRootDirectory — no change made." -ForegroundColor Gray
+            Write-Host "  Note: `$PROFILE already contains VcfEdgeAtScaleRootDirectory — no change made." -ForegroundColor Gray
             Write-Host "  Profile: $PROFILE" -ForegroundColor Gray
         }
     }
@@ -568,7 +568,7 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
 
         .DESCRIPTION
         Prompts whether to use infrastructure.json and supervisor.json under the deployment root (from
-        VcfEdgeatScaleRootDirectory or a typed path), or custom paths. Copies those files plus the contents of
+        VcfEdgeAtScaleRootDirectory or a typed path), or custom paths. Copies those files plus the contents of
         Logs and ServicesYaml under the deployment root into a zip under the user home directory.
 
         .OUTPUTS
@@ -581,13 +581,13 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
     [CmdletBinding()]
     Param ()
 
-    $deploymentRootRaw = $env:VcfEdgeatScaleRootDirectory
+    $deploymentRootRaw = $env:VcfEdgeAtScaleRootDirectory
     if ([String]::IsNullOrWhiteSpace($deploymentRootRaw)) {
-        Write-Host "VcfEdgeatScaleRootDirectory is not set."
+        Write-Host "VcfEdgeAtScaleRootDirectory is not set."
         try {
             $deploymentRootRaw = Read-Host "Enter deployment root (folder that contains Logs and ServicesYaml)"
         } catch {
-            throw "CollectLogs requires an interactive session or set VcfEdgeatScaleRootDirectory. $($_.Exception.Message)"
+            throw "CollectLogs requires an interactive session or set VcfEdgeAtScaleRootDirectory. $($_.Exception.Message)"
         }
     }
     if ([String]::IsNullOrWhiteSpace($deploymentRootRaw)) {
@@ -649,7 +649,7 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
     $servicesYamlSourcePath = Join-Path -Path $deploymentRoot -ChildPath "ServicesYaml"
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
-    $zipFileName = "VcfEdgeatScale-logs-$stamp.zip"
+    $zipFileName = "VcfEdgeAtScale-logs-$stamp.zip"
     $zipDestinationPath = Join-Path -Path $HOME -ChildPath $zipFileName
     $stagingParent = Join-Path -Path ([System.IO.Path]::GetTempPath()) -ChildPath "VcfEdgeAtScale-collect-$stamp"
     $stagingRoot = Join-Path -Path $stagingParent -ChildPath "archive"
@@ -724,10 +724,10 @@ Function Start-VcfEdgeAtScale {
         - vSphere Supervisor Deployment
         - ArgoCD installation and configuration for GitOps workflows
 
-        For normal runs (not -Version or -Initialize), the environment variable VcfEdgeatScaleRootDirectory must
+        For normal runs (not -Version or -Initialize), the environment variable VcfEdgeAtScaleRootDirectory must
         point at your configuration base directory. Defaults for -InfrastructureJson and -SupervisorJson join that
         directory with infrastructure.json and supervisor.json when you omit those parameters. Logs are written
-        under Join-Path(VcfEdgeatScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
+        under Join-Path(VcfEdgeAtScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
         refresh the recommended layout from module Templates (new or existing base directory; use
         -Initialize -InitializeTemplatesOnly to refresh only ServicesYaml and Docs without changing root JSON).
         Use Start-VcfEdgeAtScale -CollectLogs to zip infrastructure.json, supervisor.json, Logs, and ServicesYaml for support (interactive prompts).
@@ -735,7 +735,7 @@ Function Start-VcfEdgeAtScale {
     .PARAMETER InfrastructureJson
         Path to the infrastructure configuration JSON file.
 
-        When omitted, the path is Join-Path($env:VcfEdgeatScaleRootDirectory, "infrastructure.json").
+        When omitted, the path is Join-Path($env:VcfEdgeAtScaleRootDirectory, "infrastructure.json").
 
         Supervisor service YAML files and Harbor TLS PEM files are referenced by
         supervisorServices.parentDirectory plus file name properties (and harborConfiguration.parentDirectory
@@ -745,7 +745,7 @@ Function Start-VcfEdgeAtScale {
     .PARAMETER SupervisorJson
         Path to the Supervisor Cluster configuration JSON file.
 
-        When omitted, the path is Join-Path($env:VcfEdgeatScaleRootDirectory, "supervisor.json").
+        When omitted, the path is Join-Path($env:VcfEdgeAtScaleRootDirectory, "supervisor.json").
 
     .PARAMETER LogLevel
         Sets the minimum log level for console output.
@@ -776,7 +776,7 @@ Function Start-VcfEdgeAtScale {
         Optional. When specified, the script authenticates to vCenter, performs cleanup per scope, then exits without deploying. Must be one of: Supervisor, Compute, All, ArgoCD, Harbor. Supervisor = disable supervisor only (compute remains). Compute = remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed. All = disable supervisor first, then remove compute. ArgoCD = remove only the ArgoCD supervisor namespace for each cluster. Harbor = remove only the Harbor Supervisor Service from the supervisor for each cluster. Confirmation requires typing exactly "delete <scope> for <edgeSite>" unless -Force is used with common.labenvironment true in infrastructure JSON.
 
     .PARAMETER CollectLogs
-        Interactive support bundle. Prompts whether to use infrastructure.json and supervisor.json under the deployment root (from VcfEdgeatScaleRootDirectory, or a prompted path if unset), or custom full paths. Includes those files plus the Logs and ServicesYaml folders under that deployment root in Join-Path($HOME, "VcfEdgeatScale-logs-<timestamp>.zip"). Does not deploy. Do not combine with -Initialize, -InitializeTemplatesOnly, or -Version.
+        Interactive support bundle. Prompts whether to use infrastructure.json and supervisor.json under the deployment root (from VcfEdgeAtScaleRootDirectory, or a prompted path if unset), or custom full paths. Includes those files plus the Logs and ServicesYaml folders under that deployment root in Join-Path($HOME, "VcfEdgeAtScale-logs-<timestamp>.zip"). Does not deploy. Do not combine with -Initialize, -InitializeTemplatesOnly, or -Version.
 
     .PARAMETER ComputeOnly
         When specified, the script runs all pre-supervisor steps (clusters, hosts, storage, VDS, vLCM compliance/remediation) then exits without enabling the supervisor or deploying Argo CD or Harbor. Use to prepare compute and storage only. Does not conflict with -CleanUp (deployment scope vs cleanup scope). Harbor $env: preflight is not run: clusters may still define harborConfiguration (for example for a later full deploy) without setting HARBOR_ADMIN_PASSWORD and other variables referenced there.
@@ -791,9 +791,9 @@ Function Start-VcfEdgeAtScale {
         Interactive setup: prompts for a base directory (default ~/VCFEdgeAtScale), creates Docs, Logs, and ServicesYaml
         when missing, copies module YAML and documentation into ServicesYaml and Docs (overwrite prompts; default N).
         Seeds or optionally replaces infrastructure.json and supervisor.json from Templates (see -InitializeTemplatesOnly).
-        When VcfEdgeatScaleRootDirectory resolves to a fully initialized layout (Docs, Logs, ServicesYaml, root JSON, all
+        When VcfEdgeAtScaleRootDirectory resolves to a fully initialized layout (Docs, Logs, ServicesYaml, root JSON, all
         shipped YAML files under ServicesYaml), asks whether to initialize a different directory; answering N reuses that path without re-typing it.
-        Section output uses console colors. Sets VcfEdgeatScaleRootDirectory for the current session. On
+        Section output uses console colors. Sets VcfEdgeAtScaleRootDirectory for the current session. On
         Windows, persists it via [System.Environment]::SetEnvironmentVariable (User scope). On macOS/Linux,
         automatically appends the export line to $PROFILE so new sessions inherit it. Prints a fallback
         manual command if the Windows persist step fails. Other switches are ignored except -LogLevel and
@@ -821,7 +821,7 @@ Function Start-VcfEdgeAtScale {
     .EXAMPLE
         Start-VcfEdgeAtScale -Initialize
 
-        Runs interactive setup to create the configuration directory layout, copy templates, and print VcfEdgeatScaleRootDirectory profile instructions.
+        Runs interactive setup to create the configuration directory layout, copy templates, and print VcfEdgeAtScaleRootDirectory profile instructions.
 
     .EXAMPLE
         Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly
@@ -836,7 +836,7 @@ Function Start-VcfEdgeAtScale {
     .EXAMPLE
         Start-VcfEdgeAtScale
 
-        Executes the deployment using infrastructure.json and supervisor.json under $env:VcfEdgeatScaleRootDirectory when those parameters are omitted.
+        Executes the deployment using infrastructure.json and supervisor.json under $env:VcfEdgeAtScaleRootDirectory when those parameters are omitted.
 
     .EXAMPLE
         Start-VcfEdgeAtScale -InfrastructureJson "config/site-a-infrastructure.json" -SupervisorJson "config/site-a-supervisor.json"
@@ -895,70 +895,40 @@ Function Start-VcfEdgeAtScale {
 
     #>
 
-    [CmdletBinding()]
+    [CmdletBinding(DefaultParameterSetName = "Deploy")]
     Param (
-        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
-        [Parameter(Mandatory = $false)] [Switch]$CheckForUpdates,
-        [Parameter(Mandatory = $false)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
-        [Parameter(Mandatory = $false)] [Switch]$CollectLogs,
-        [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
-        [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
-        [Parameter(Mandatory = $false)] [Switch]$Force,
-        [Parameter(Mandatory = $false)] [Switch]$Initialize,
-        [Parameter(Mandatory = $false)] [Switch]$InitializeTemplatesOnly,
-        [Parameter(Mandatory = $false)] [String]$InfrastructureJson,
-        [Parameter(Mandatory = $false)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO",
-        [Parameter(Mandatory = $false)] [Nullable[bool]]$RollbackOnFailure,
-        [Parameter(Mandatory = $false)] [Switch]$SaveHarborYaml,
-        [Parameter(Mandatory = $false)] [String]$SupervisorJson,
-        [Parameter(Mandatory = $false)] [Switch]$ValidateOnly,
-        [Parameter(Mandatory = $false)] [Switch]$Version
+        # --- Deploy (default) ---
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$AcceptBadCheckResults,
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$ComputeOnly,
+        [Parameter(ParameterSetName = "Deploy")] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
+        [Parameter(ParameterSetName = "Deploy")] [Nullable[bool]]$RollbackOnFailure,
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$SaveHarborYaml,
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$ValidateOnly,
+        # --- CleanUp ---
+        [Parameter(ParameterSetName = "CleanUp", Mandatory = $true)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(ParameterSetName = "CleanUp")] [Switch]$Force,
+        # --- Initialize ---
+        [Parameter(ParameterSetName = "Initialize", Mandatory = $true)] [Switch]$Initialize,
+        [Parameter(ParameterSetName = "Initialize")] [Switch]$InitializeTemplatesOnly,
+        # --- CollectLogs ---
+        [Parameter(ParameterSetName = "CollectLogs", Mandatory = $true)] [Switch]$CollectLogs,
+        # --- Version ---
+        [Parameter(ParameterSetName = "Version", Mandatory = $true)] [Switch]$Version,
+        # --- CheckForUpdates ---
+        [Parameter(ParameterSetName = "CheckForUpdates", Mandatory = $true)] [Switch]$CheckForUpdates,
+        # --- Deploy + CleanUp ---
+        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [String]$SupervisorJson,
+        # --- Deploy + CleanUp + CheckForUpdates ---
+        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [Parameter(ParameterSetName = "CheckForUpdates")] [String]$InfrastructureJson,
+        # --- All sets ---
+        [Parameter()] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO"
     )
 
     # Initialize configured log level from parameter (normalize to uppercase). Set before -Version so Write-LogMessage honors the threshold.
     $Script:ConfiguredLogLevel = $LogLevel.ToUpper()
 
-    if ($Initialize -and $CollectLogs) {
-        throw "Do not combine -Initialize with -CollectLogs."
-    }
-    if ($CollectLogs -and $InitializeTemplatesOnly) {
-        throw "Do not combine -CollectLogs with -InitializeTemplatesOnly."
-    }
-    if ($CollectLogs -and $Version) {
-        throw "Do not combine -CollectLogs with -Version."
-    }
-
-    if ($InitializeTemplatesOnly -and -not $Initialize) {
-        throw "InitializeTemplatesOnly must be used with -Initialize. Example: Start-VcfEdgeAtScale -Initialize -InitializeTemplatesOnly"
-    }
-
     if ($Initialize) {
-        $deploymentParameterNames = @(
-            "AcceptBadCheckResults",
-            "CheckForUpdates",
-            "CleanUp",
-            "CollectLogs",
-            "ComputeOnly",
-            "DelayBeforeAddingNextHostSeconds",
-            "EdgeSite",
-            "Force",
-            "InfrastructureJson",
-            "RollbackOnFailure",
-            "SaveHarborYaml",
-            "SupervisorJson",
-            "ValidateOnly",
-            "Version"
-        )
-        $ignoredParameterNames = @()
-        foreach ($boundParameterName in $PSBoundParameters.Keys) {
-            if ($deploymentParameterNames -contains $boundParameterName) {
-                $ignoredParameterNames += $boundParameterName
-            }
-        }
-        if ($ignoredParameterNames.Count -gt 0) {
-            Write-Output "Note: -Initialize runs alone; ignoring these parameters for this run: $($ignoredParameterNames -join ', ')."
-        }
         $initBaseDirectory = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $initBaseDirectory -PathType Container)) {
             New-LogFile -BaseDirectory $initBaseDirectory -Directory "Logs"
@@ -983,39 +953,12 @@ Function Start-VcfEdgeAtScale {
     }
 
     if ($CollectLogs) {
-        $deploymentParameterNamesForCollectLogs = @(
-            "AcceptBadCheckResults",
-            "CheckForUpdates",
-            "CleanUp",
-            "ComputeOnly",
-            "DelayBeforeAddingNextHostSeconds",
-            "EdgeSite",
-            "Force",
-            "InfrastructureJson",
-            "Initialize",
-            "InitializeTemplatesOnly",
-            "LogLevel",
-            "RollbackOnFailure",
-            "SaveHarborYaml",
-            "SupervisorJson",
-            "ValidateOnly",
-            "Version"
-        )
-        $ignoredParameterNamesForCollectLogs = @()
-        foreach ($boundParameterName in $PSBoundParameters.Keys) {
-            if ($deploymentParameterNamesForCollectLogs -contains $boundParameterName) {
-                $ignoredParameterNamesForCollectLogs += $boundParameterName
-            }
-        }
-        if ($ignoredParameterNamesForCollectLogs.Count -gt 0) {
-            Write-Output "Note: -CollectLogs runs alone; ignoring these parameters for this run: $($ignoredParameterNamesForCollectLogs -join ', ')."
-        }
         $null = Invoke-VcfEdgeAtScaleCollectLogs
         return
     }
 
     if ($Version) {
-        $versionLogBase = $env:VcfEdgeatScaleRootDirectory
+        $versionLogBase = $env:VcfEdgeAtScaleRootDirectory
         if (-not [String]::IsNullOrWhiteSpace($versionLogBase) -and (Test-Path -LiteralPath $versionLogBase.Trim() -PathType Container)) {
             New-LogFile -BaseDirectory $versionLogBase.Trim() -Directory "Logs"
         } else {
@@ -1068,7 +1011,7 @@ Function Start-VcfEdgeAtScale {
     }
 
     if ($CheckForUpdates) {
-        $checkLogBase = $env:VcfEdgeatScaleRootDirectory
+        $checkLogBase = $env:VcfEdgeAtScaleRootDirectory
         if (-not [String]::IsNullOrWhiteSpace($checkLogBase) -and (Test-Path -LiteralPath $checkLogBase.Trim() -PathType Container)) {
             New-LogFile -BaseDirectory $checkLogBase.Trim() -Directory "Logs"
         } else {
@@ -1087,13 +1030,13 @@ Function Start-VcfEdgeAtScale {
         return
     }
 
-    $vcfEdgeRootRaw = $env:VcfEdgeatScaleRootDirectory
+    $vcfEdgeRootRaw = $env:VcfEdgeAtScaleRootDirectory
     if ([String]::IsNullOrWhiteSpace($vcfEdgeRootRaw)) {
         $exampleVcfEdgeRootDirectory = Join-Path -Path $HOME -ChildPath "VCFEdgeAtScale"
         Write-Warning (
-            "VcfEdgeatScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
+            "VcfEdgeAtScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
             "The following is an example only (your default Initialize path is Join-Path `$HOME 'VCFEdgeAtScale'; use the directory you chose at Initialize if different): " +
-            "`$env:VcfEdgeatScaleRootDirectory = `"$exampleVcfEdgeRootDirectory`""
+            "`$env:VcfEdgeAtScaleRootDirectory = `"$exampleVcfEdgeRootDirectory`""
         )
         return
     }
@@ -1101,7 +1044,7 @@ Function Start-VcfEdgeAtScale {
     try {
         $vcfEdgeRootDirectory = (Resolve-Path -LiteralPath $vcfEdgeRootRaw.Trim()).Path
     } catch {
-        throw "VcfEdgeatScaleRootDirectory is set but the path could not be resolved. Ensure the directory exists. Value: $vcfEdgeRootRaw. $($_.Exception.Message)"
+        throw "VcfEdgeAtScaleRootDirectory is set but the path could not be resolved. Ensure the directory exists. Value: $vcfEdgeRootRaw. $($_.Exception.Message)"
     }
 
     if (-not $PSBoundParameters.ContainsKey("InfrastructureJson") -or [String]::IsNullOrWhiteSpace($InfrastructureJson)) {
@@ -1111,10 +1054,10 @@ Function Start-VcfEdgeAtScale {
         $SupervisorJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "supervisor.json"
     }
     if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
-        throw "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeatScaleRootDirectory."
+        throw "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeAtScaleRootDirectory."
     }
     if ([String]::IsNullOrWhiteSpace($SupervisorJson)) {
-        throw "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeatScaleRootDirectory."
+        throw "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeAtScaleRootDirectory."
     }
 
     New-LogFile -BaseDirectory $vcfEdgeRootDirectory -Directory "Logs"
@@ -1152,7 +1095,7 @@ Function Start-VcfEdgeAtScale {
         Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
 
         # Perform validation with progress indication.
-        Write-Output ""
+        Write-Host ""
         $validationStartTime = Get-Date
         $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
         if ($null -eq $inputData) {
@@ -1393,7 +1336,7 @@ Function Start-VcfEdgeAtScale {
     # If -CleanUp was specified but value is null or empty, show usage and return.
     if ($PSBoundParameters.ContainsKey("CleanUp") -and [String]::IsNullOrWhiteSpace($CleanUp)) {
         Write-LogMessage -Type WARNING -Message "-CleanUp requires one of: Supervisor, Compute, All, ArgoCD, Harbor."
-        Write-Output ""
+        Write-Host ""
         Write-Output "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
         Write-Output "  Supervisor - Remove only the supervisor (compute remains)."
         Write-Output "  Compute   - Remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed."
@@ -1745,7 +1688,7 @@ Function Get-ConfigurationHelpData {
         Loads and validates a configuration help JSON file from the deployment Docs directory or module Templates directory.
 
         .DESCRIPTION
-        When $env:VcfEdgeatScaleRootDirectory is set and Join-Path(Docs, HelpFileName) exists under that root, that file is loaded first so operators can refresh help JSON beside their deployment files. Otherwise the module Templates path is used. The function validates array structure and required fields (Key, Required, Notes), optionally filters by Key wildcard, and returns an array of PSCustomObject. Returns $null on any failure (path, file missing, invalid JSON, validation). Used by Show-InfrastructureJsonConfigurationHelp and Show-SupervisorJsonConfigurationHelp.
+        When $env:VcfEdgeAtScaleRootDirectory is set and Join-Path(Docs, HelpFileName) exists under that root, that file is loaded first so operators can refresh help JSON beside their deployment files. Otherwise the module Templates path is used. The function validates array structure and required fields (Key, Required, Notes), optionally filters by Key wildcard, and returns an array of PSCustomObject. Returns $null on any failure (path, file missing, invalid JSON, validation). Used by Show-InfrastructureJsonConfigurationHelp and Show-SupervisorJsonConfigurationHelp.
 
         .PARAMETER HelpFileName
         Name of the help JSON file (e.g. "infrastructure-config-help.json", "supervisor-config-help.json").
@@ -1773,7 +1716,7 @@ Function Get-ConfigurationHelpData {
 
     $templateHelpJsonPath = Join-Path $templatesPath $HelpFileName
     $helpJsonPath = $null
-    $vcfEdgeRootForHelp = $env:VcfEdgeatScaleRootDirectory
+    $vcfEdgeRootForHelp = $env:VcfEdgeAtScaleRootDirectory
     if (-not [String]::IsNullOrWhiteSpace($vcfEdgeRootForHelp)) {
         $docsHelpCandidatePath = Join-Path -Path $vcfEdgeRootForHelp.Trim() -ChildPath (Join-Path -Path "Docs" -ChildPath $HelpFileName)
         if (Test-Path -LiteralPath $docsHelpCandidatePath -PathType Leaf) {

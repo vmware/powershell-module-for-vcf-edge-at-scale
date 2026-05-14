@@ -3,8 +3,14 @@
     #
     # PSAvoidUsingConvertToSecureStringWithPlainText / PSAvoidUsingPlainTextForPassword /
     # PSAvoidUsingUsernameAndPasswordParams / UsePSCredentialType:
-    #   These rules are now suppressed per-function using [Diagnostics.CodeAnalysis.SuppressMessageAttribute]
-    #   on the 7 functions that legitimately handle plain-text credentials or YAML password fields.
+    #   Globally excluded because:
+    #   (a) The 7 production functions that legitimately handle plain-text credentials are already
+    #       suppressed per-function using [Diagnostics.CodeAnalysis.SuppressMessageAttribute]; those
+    #       annotations remain as documentation of intent.
+    #   (b) Pester It/BeforeAll blocks in test files are not function declarations, so
+    #       [Diagnostics.CodeAnalysis.SuppressMessageAttribute] cannot be applied to them.
+    #       A single global exclusion covers both production per-function suppressions and
+    #       test fixture credentials.
     #   See each function's declaration in Private/Logging.ps1 and Private/Supervisor.ps1.
     #
     # PSAvoidUsingWriteHost:
@@ -35,6 +41,7 @@
     #   This is intentional and documented in those functions' comment-based help.
     ExcludeRules = @(
         'PSAvoidGlobalVars',
+        'PSAvoidUsingConvertToSecureStringWithPlainText',
         'PSAvoidUsingWriteHost',
         'PSReviewUnusedParameter',
         'PSUseBOMForUnicodeEncodedFile',

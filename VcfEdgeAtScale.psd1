@@ -36,7 +36,7 @@
 RootModule = 'VcfEdgeAtScale.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.3.1006'
+ModuleVersion = '1.0.3.1007'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Core')
@@ -92,15 +92,20 @@ PowerShellVersion = '7.4'
 # Processor architecture (None, X86, Amd64) required by this module
 # ProcessorArchitecture = ''
 
-# Modules that must be imported into the global environment prior to importing this module
-# ModuleVersion 13.4 = VCF PowerCLI 9.0 (minimum supported); 13.5 = VCF PowerCLI 9.1.
-RequiredModules = @(
-    @{ ModuleName = 'VMware.Sdk.vSphere';                 ModuleVersion = '13.4' }
-    @{ ModuleName = 'VMware.VimAutomation.Core';          ModuleVersion = '13.4' }
-    @{ ModuleName = 'VMware.VimAutomation.Storage';       ModuleVersion = '13.4' }
-    @{ ModuleName = 'VMware.VimAutomation.Vds';           ModuleVersion = '13.4' }
-    @{ ModuleName = 'VMware.VimAutomation.WorkloadManagement'; ModuleVersion = '13.4' }
-)
+# Modules that must be imported into the global environment prior to importing this module.
+#
+# NOTE: RequiredModules is intentionally empty. VCF PowerCLI 9.0+ (which provides
+# VMware.Sdk.vSphere, VMware.VimAutomation.Core, VMware.VimAutomation.Storage,
+# VMware.VimAutomation.Vds, VMware.VimAutomation.WorkloadManagement) is distributed by
+# Broadcom's own installer and is NOT installed from PSGallery. Listing those modules in
+# RequiredModules caused PowerShellGet v2 to attempt a recursive PSGallery install of the
+# entire 10-level VMware dependency chain, which fails with "Unable to resolve module
+# reference ''" due to a known bug in PowerShellGet v2's dependency resolver.
+# VCF PowerCLI presence and minimum version are validated at runtime by
+# Initialize-ScriptVcfPowerCliModuleVersion, which is called on every Start-VcfEdgeAtScale run.
+# PowerShell's auto-import mechanism loads the VMware cmdlets on first use as long as
+# VCF PowerCLI is installed (i.e. on $env:PSModulePath).
+RequiredModules = @()
 
 # Assemblies that must be loaded prior to importing this module
 # RequiredAssemblies = @()

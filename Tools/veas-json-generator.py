@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1006"
+UI_VERSION = "1.0.3.1007"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -100,6 +100,9 @@ _DEBUG = os.environ.get("VEAS_DEBUG", "").strip() not in ("", "0", "false")
 # Management and vSAN Witness VMkernels are always 1500 regardless of this setting.
 _MIN_VMK_MTU = 1500
 _MAX_VMK_MTU = 9190
+# Bind address for the HTTP server. Localhost only — the server has no TLS and is
+# not designed for network exposure. Use SSH port-forwarding for remote access.
+_BIND_HOST = "127.0.0.1"
 
 # ---------------------------------------------------------------------------
 # Validation helpers
@@ -1611,8 +1614,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
         X-Content-Type-Options prevents MIME-sniffing of JSON/ZIP responses as
         executable content. Cache-Control ensures configuration data is not
         cached by the browser. X-Frame-Options and CSP defend against
-        clickjacking and injection if the server is ever exposed beyond
-        localhost (e.g. via --host 0.0.0.0).
+        clickjacking and injection attacks.
 
         'unsafe-inline' in script-src and style-src is required because the
         SPA uses inline scripts and styles in veas-ui.html; browsers only
@@ -2042,7 +2044,6 @@ def main():
         description="VcfEdgeAtScale JSON Configuration UI — stdlib-only web server."
     )
     parser.add_argument("--port", type=int, default=8080, help="TCP port to listen on (default: 8080)")
-    parser.add_argument("--host", default="127.0.0.1", help="Host to bind to (default: 127.0.0.1)")
     parser.add_argument(
         "--base-dir",
         default=None,
@@ -2067,15 +2068,17 @@ def main():
     else:
         base_dir = _FALLBACK_TEMPLATES_DIR
 
+    browser_url = f"http://localhost:{args.port}"
+
     try:
-        server = HTTPServer((args.host, args.port), _make_handler(base_dir))
+        server = HTTPServer((_BIND_HOST, args.port), _make_handler(base_dir))
     except OSError as exc:
         if exc.errno == errno.EADDRINUSE:
             print(
                 f"ERROR: Port {args.port} is already in use.\n"
                 f"  Another instance of this server may already be running.\n"
                 f"  Try one of the following:\n"
-                f"    • Open http://{args.host}:{args.port} in your browser — it may already be ready.\n"
+                f"    • Open {browser_url} in your browser — it may already be ready.\n"
                 f"    • Run with a different port:  python3 veas-json-generator.py --port 8081\n"
                 f"    • Find and stop the existing process:\n"
                 f"        macOS/Linux:  lsof -ti :{args.port} | xargs kill\n"
@@ -2084,13 +2087,8 @@ def main():
             sys.exit(1)
         raise
 
-    # When binding to all interfaces (0.0.0.0) use localhost in the browser URL so the
-    # printed address is one the user can actually open in a browser.
-    browser_host = "localhost" if args.host in ("0.0.0.0", "::") else args.host
-    bind_addr    = f"{args.host}:{args.port}"
-    browser_url  = f"http://{browser_host}:{args.port}"
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on {bind_addr}")
+    print(f"Listening on {_BIND_HOST}:{args.port} (localhost only)")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")

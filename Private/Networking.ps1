@@ -1262,7 +1262,7 @@ Function Add-VsanOsaDiskGroupToCluster {
                 $defaultRole = if ($disk.Id -eq $cacheDisk.Id) { "Cache" } else { "Capacity" }
                 Add-Member -InputObject $disk -NotePropertyName "DefaultRole" -NotePropertyValue $defaultRole -Force
             }
-            Write-Output ""
+            Write-Host ""
             Write-Output "vSAN OSA disks claimed for cluster `"$ClusterName`" (cache/capacity per host):"
             $diskDisplayList | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model, IsSsd, DefaultRole -AutoSize
             Write-LogMessage -Type INFO -Message "vSAN OSA disk group assignment completed for $($uniqueHostNames.Count) host(s) (default cache/capacity)."
@@ -1593,7 +1593,7 @@ Function Add-VsanEsaStoragePoolDisk {
                     throw "Deployment failed. Not all data hosts have eligible disks for vSAN ESA. Host(s) with no eligible disks: $($hostsMissingDisksEsa -join ', '). Check logs and run cleanup if needed."
                 }
             }
-            Write-Output ""
+            Write-Host ""
             Write-Output "vSAN ESA disks claimed for cluster `"$ClusterName`":"
             $diskDisplayList | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize
             Write-LogMessage -Type INFO -Message "vSAN ESA storage pool: all $($diskDisplayList.Count) eligible disk(s) will be added."

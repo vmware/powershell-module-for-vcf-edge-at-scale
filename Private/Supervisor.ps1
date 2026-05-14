@@ -1288,14 +1288,14 @@ Function Wait-SupervisorReady {
                                 Write-LogMessage -Type WARNING -Message "vCenter appears to be unreachable. This may indicate a connectivity issue or vCenter service problem."
                             }
 
-                            Write-Output ""
+                            Write-Host ""
                             Write-LogMessage -Type WARNING -Message "RECOMMENDED ACTIONS:"
                             Write-LogMessage -Type WARNING -Message "  1. Check vCenter UI: Menu > Workload Management > Supervisor Clusters"
                             Write-LogMessage -Type WARNING -Message "  2. Look for error messages or failed state indicators"
                             Write-LogMessage -Type WARNING -Message "  3. Check supervisor control plane VM status and logs"
                             Write-LogMessage -Type WARNING -Message "  4. Review vCenter events for the supervisor cluster"
                             Write-LogMessage -Type WARNING -Message "  5. If supervisor has crashed, you may need to delete and recreate it"
-                            Write-Output ""
+                            Write-Host ""
                             $warningShown = $true
                         }
 
@@ -1305,7 +1305,7 @@ Function Wait-SupervisorReady {
                             [Console]::Out.Flush()
                             Write-LogMessage -Type ERROR -Message "Persistent 503 errors have exceeded maximum threshold ($maxPersistent503Threshold seconds). Exiting early to prevent infinite loop."
                             Write-LogMessage -Type ERROR -Message "The supervisor service appears to have crashed or vCenter is unreadable. Deployment cannot continue."
-                            Write-Output ""
+                            Write-Host ""
                             Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisor Clusters"
                             try {
                                 Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "persistent supervisor API errors (503) exceeded early-exit threshold" -SupervisorId $SupervisorId
@@ -1346,7 +1346,7 @@ Function Wait-SupervisorReady {
                         } else {
                             Write-LogMessage -Type ERROR -Message "The supervisor may still be initializing. Check vCenter UI for current status."
                         }
-                        Write-Output ""
+                        Write-Host ""
                         Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisor Clusters"
                         try {
                             Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "supervisor summary API unavailable until the wait window expired" -SupervisorId $SupervisorId
@@ -1404,12 +1404,12 @@ Function Wait-SupervisorReady {
         Write-Progress -Activity "Waiting for Supervisor services to become available" -Status "Error" -Completed
         [Console]::Out.Flush()
         Write-LogMessage -Type ERROR -Message "Error checking supervisor services status on cluster `"$ClusterName`": $($_.Exception.Message)"
-        Write-Output ""
+        Write-Host ""
         Write-LogMessage -Type ERROR -Message "This may indicate:"
         Write-LogMessage -Type ERROR -Message "  1. Network connectivity issues between the client and vCenter."
         Write-LogMessage -Type ERROR -Message "  2. vCenter API temporarily unavailable."
         Write-LogMessage -Type ERROR -Message "  3. Supervisor is in a failed state."
-        Write-Output ""
+        Write-Host ""
         Write-LogMessage -Type ERROR -Message "Check the supervisor status in vCenter UI: Menu > Workload Management > Supervisors."
         try {
             Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "exception during supervisor readiness polling" -SupervisorId $SupervisorId
@@ -5808,12 +5808,12 @@ Function Set-StoragePolicy {
                     Write-LogMessage -Type ERROR -Message "  - Tag being added: `"$TagName`" from catalog `"$TagCatalog`""
                     Write-LogMessage -Type ERROR -Message "  - Tag object type: $($tagObject.GetType().FullName)"
                     Write-LogMessage -Type ERROR -Message "  - Tag object properties: Name=$($tagObject.Name), Id=$($tagObject.Id), Category=$($tagObject.Category.Name)"
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "This error typically occurs when:"
                     Write-LogMessage -Type ERROR -Message "  1. Tag objects are not properly formatted or are missing required properties."
                     Write-LogMessage -Type ERROR -Message "  2. Rule objects cannot be reused and must be recreated."
                     Write-LogMessage -Type ERROR -Message "  3. Rule sets contain incompatible rule combinations."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION:"
                     Write-LogMessage -Type ERROR -Message "  1. Check the existing storage policy in vCenter UI: Menu > Policies and Profiles > VM Storage Policies"
                     Write-LogMessage -Type ERROR -Message "  2. Verify the policy's tag rules are valid."
@@ -8248,13 +8248,13 @@ Function Install-HarborSupervisorService {
                 "namespace \((\S+)\) is in terminating status" {
                     $terminatingNamespace = $Matches[1]
                     Write-LogMessage -Type ERROR -Message "Harbor installation failed: namespace `"$terminatingNamespace`" is still terminating on the Supervisor from a previous rollback."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Wait for the namespace to finish deleting, then re-run this script. To check status: kubectl get namespace $terminatingNamespace"
                     throw "SOLUTION: Wait for the namespace to finish deleting, then re-run this script. To check status: kubectl get namespace $terminatingNamespace"
                 }
                 "Supervisor Service is not in activated state" {
                     Write-LogMessage -Type ERROR -Message "Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`"."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: In vCenter UI go to Menu > Supervisor Management > Services, find `"$Service`", and either deactivate then delete the service, then re-run this script."
                     Write-LogMessage -Type WARNING -Message "If the service is stuck: kubectl delete namespace $serviceNamespace"
                     throw "Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`". Check logs for details."
@@ -8266,7 +8266,7 @@ Function Install-HarborSupervisorService {
                         $cleanErrorMessage = "Harbor service version $requestedVersion is not available on this supervisor."
                     }
                     Write-LogMessage -Type ERROR -Message "Harbor installation failed: $cleanErrorMessage."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update supervisorServices.harborServiceYamlFileName (and parentDirectory) to a compatible Carvel package file."
                     throw "SOLUTION: Upgrade your supervisor to a version that supports Harbor service $requestedVersion, or update supervisorServices.harborServiceYamlFileName (and parentDirectory) to a compatible Carvel package file."
                 }
@@ -8331,7 +8331,7 @@ Function Install-HarborSupervisorService {
                     } else {
                         Write-LogMessage -Type ERROR -Message "Harbor service `"$Service`" entered ERROR state on supervisor `"$SupervisorId`"."
                     }
-                    Write-Output ""
+                    Write-Host ""
                     # Discover actual Harbor namespaces via kubectl. The computed name (svc-harbor-$ClusterId)
                     # uses the cluster MoRef value but the Supervisor Services controller may use a different
                     # suffix — kubectl is the authoritative source for what actually exists on the Supervisor.
@@ -9192,18 +9192,18 @@ Function New-VCenterRestApiSession {
                 if ($innerException) {
                     Write-LogMessage -Type DEBUG -Message "Inner exception details: $($innerException.Message)"
                 }
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type WARNING -Message "SSL certificate validation failed when connecting to vCenter REST API."
                 Write-LogMessage -Type WARNING -Message "This typically occurs when:"
                 Write-LogMessage -Type WARNING -Message "  1. vCenter uses a self-signed certificate (common in lab environments)"
                 Write-LogMessage -Type WARNING -Message "  2. Certificate chain is incomplete or expired"
                 Write-LogMessage -Type WARNING -Message "  3. Certificate name doesn't match the vCenter hostname"
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type WARNING -Message "SOLUTION: For lab environments with self-signed certificates, you can:"
                 Write-LogMessage -Type WARNING -Message "  1. Import the vCenter certificate to the trusted certificate store"
                 Write-LogMessage -Type WARNING -Message "  2. Use a properly signed certificate for vCenter"
                 Write-LogMessage -Type WARNING -Message "  3. Note: The content library association will be skipped, but deployment will continue"
-                Write-Output ""
+                Write-Host ""
                 break
             }
             default {
@@ -10620,7 +10620,7 @@ Function Install-ArgoCDOperator {
                 "Supervisor Service is not in activated state" {
                     # Service exists but is in a non-activated state (likely failed previous installation).
                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: Failed to create Supervisor Service ($Service) version ($Version) on cluster ($SupervisorId). Supervisor Service is not in activated state."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "This error indicates the ArgoCD service already exists but is in a broken or deactivated state."
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Delete and recreate the ArgoCD operator service:"
                     Write-LogMessage -Type ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
@@ -10631,7 +10631,7 @@ Function Install-ArgoCDOperator {
                     Write-LogMessage -Type ERROR -Message "  6. Click `"Delete`" to remove the service."
                     Write-LogMessage -Type ERROR -Message "  7. Wait for the service to be fully deleted."
                     Write-LogMessage -Type ERROR -Message "  8. Re-run this script to install a clean ArgoCD operator."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type WARNING -Message "If the service is stuck and cannot be deleted via UI:"
                     Write-LogMessage -Type WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
                     Write-LogMessage -Type WARNING -Message "  List namespaces with: kubectl get namespaces"
@@ -10650,10 +10650,10 @@ Function Install-ArgoCDOperator {
                     }
 
                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
                     Write-LogMessage -Type ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
                     Write-LogMessage -Type ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
                     throw "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
@@ -10662,10 +10662,10 @@ Function Install-ArgoCDOperator {
                     # Generic "version not found" error.
                     $requestedVersion = $matches[1]
                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: ArgoCD service version $requestedVersion is not available on this supervisor."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Either upgrade your supervisor to a version that includes ArgoCD service $requestedVersion,"
                     Write-LogMessage -Type ERROR -Message "         or modify your infrastructure.json to specify a different ArgoCD service version that is available."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "To list available ArgoCD service versions, use the vSphere API or vCenter UI:"
                     Write-LogMessage -Type ERROR -Message "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
                     throw "  Menu > Supervisor Management > Supervisors > ArgoCD Service > Manager Versions"
@@ -10677,7 +10677,7 @@ Function Install-ArgoCDOperator {
                     $cleanErrorMessage = Get-CleanErrorMessage -ErrorMessage $errMsg
 
                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Upgrade your supervisor to version 9.0.0.0-0100-24847555 or higher and try again."
                     Write-LogMessage -Type ERROR -Message "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
                     throw "This error indicates the supervisor version is too old to verify the ArgoCD service signature."
@@ -10708,13 +10708,13 @@ Function Install-ArgoCDOperator {
             if ($verifyError -match "not found|does not exist") {
                 Write-LogMessage -Type ERROR -Message "ArgoCD operator service was not created successfully on supervisor `"$SupervisorId`"."
                 Write-LogMessage -Type ERROR -Message "The service creation may have failed silently. Error: $verifyError"
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "SOLUTION:"
                 Write-LogMessage -Type ERROR -Message "  1. Verify the supervisor ID `"$SupervisorId`" is correct for this cluster."
                 Write-LogMessage -Type ERROR -Message "  2. Check vCenter UI: Menu > Workload Management > Supervisor Clusters"
                 Write-LogMessage -Type ERROR -Message "  3. Verify the supervisor cluster is in `"Running`" state."
                 Write-LogMessage -Type ERROR -Message "  4. Check for any error messages in the supervisor cluster status."
-                Write-Output ""
+                Write-Host ""
                 throw "Deployment failed. ArgoCD operator service was not created. Check logs for details."
             } else {
                 # Service might exist but API call failed - continue to monitoring loop.
@@ -10735,13 +10735,13 @@ Function Install-ArgoCDOperator {
                     Write-Progress -Activity "Waiting for ArgoCD operator configuration" -Status "Error" -Completed
                     Write-LogMessage -Type ERROR -Message "ArgoCD operator service does not exist on supervisor `"$SupervisorId`"."
                     Write-LogMessage -Type ERROR -Message "The service creation failed or the service was created on a different supervisor."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION:"
                     Write-LogMessage -Type ERROR -Message "  1. Verify the supervisor ID `"$SupervisorId`" matches the correct supervisor cluster."
                     Write-LogMessage -Type ERROR -Message "  2. Check vCenter UI: Menu > Workload Management > Supervisor Clusters"
                     Write-LogMessage -Type ERROR -Message "  3. Look for the ArgoCD service in the Services section of the supervisor cluster."
                     Write-LogMessage -Type ERROR -Message "  4. If the service exists on a different supervisor, verify the cluster ID and supervisor ID are correct."
-                    Write-Output ""
+                    Write-Host ""
                     throw "Deployment failed. ArgoCD operator service does not exist. Check logs for details."
                 }
                 # Handle JSON deserialization errors when config_status is empty or invalid.
@@ -10759,14 +10759,14 @@ Function Install-ArgoCDOperator {
                     $cleanMessage = Get-CleanErrorMessage -ErrorMessage $errorMessage
                     Write-LogMessage -Type ERROR -Message "The supervisor cluster is not in a running state. ArgoCD operator installation cannot proceed."
                     Write-LogMessage -Type ERROR -Message "Error details: $cleanMessage."
-                    Write-Output ""
+                    Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: Verify and ensure the supervisor cluster is running:"
                     Write-LogMessage -Type ERROR -Message "  1. Login to vCenter `"$Script:vCenterName`""
                     Write-LogMessage -Type ERROR -Message "  2. Navigate to: Menu > Workload Management > Supervisor Clusters"
                     Write-LogMessage -Type ERROR -Message "  3. Check the status of the supervisor cluster (should show as `"Running`")"
                     Write-LogMessage -Type ERROR -Message "  4. If the cluster is not running, check for errors in the cluster configuration."
                     Write-LogMessage -Type ERROR -Message "  5. Wait for the supervisor cluster to reach `"Running`" state before retrying"
-                    Write-Output ""
+                    Write-Host ""
                     throw "Deployment failed. Supervisor cluster is not running. Check logs for details."
                 }
                 else {
@@ -10824,7 +10824,7 @@ Function Install-ArgoCDOperator {
                                 if ([String]::IsNullOrWhiteSpace($missingNamespace)) {
                                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: supervisor service reported a required namespace is empty or missing."
                                     Write-LogMessage -Type ERROR -Message "This can occur when the ArgoCD workload namespace did not exist when the operator was created. This script now creates the namespace before installing the operator."
-                                    Write-Output ""
+                                    Write-Host ""
                                     Write-LogMessage -Type ERROR -Message "SOLUTION: Delete the ArgoCD service and re-run so the namespace is created first:"
                                     Write-LogMessage -Type ERROR -Message "  1. In vCenter UI: Menu > Supervisor Management > Services."
                                     Write-LogMessage -Type ERROR -Message "  2. Delete or deactivate the ArgoCD service if it is in ERROR state."
@@ -10832,7 +10832,7 @@ Function Install-ArgoCDOperator {
                                 } else {
                                     Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: Required namespace `"$missingNamespace`" does not exist."
                                     Write-LogMessage -Type ERROR -Message "This may indicate the supervisor service namespace was not created properly or was deleted."
-                                    Write-Output ""
+                                    Write-Host ""
                                     Write-LogMessage -Type ERROR -Message "SOLUTION: Verify the supervisor service namespace exists and retry:"
                                     Write-LogMessage -Type ERROR -Message "  1. Check if the namespace exists: kubectl get namespace $missingNamespace"
                                     Write-LogMessage -Type ERROR -Message "  2. If the namespace is missing, the supervisor service may need to be recreated."
@@ -10843,7 +10843,7 @@ Function Install-ArgoCDOperator {
                             } else {
                                 Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed due to conflicting resources from a previous installation."
                                 Write-LogMessage -Type ERROR -Message "$cleanErrorMessage"
-                                Write-Output ""
+                                Write-Host ""
                                 Write-LogMessage -Type ERROR -Message "SOLUTION: Clean up the existing ArgoCD operator and retry:"
                                 Write-LogMessage -Type ERROR -Message "  1. In vCenter UI, navigate to: Menu > Supervisor Management > Services."
                                 Write-LogMessage -Type ERROR -Message "  2. Find `"ArgoCD Service`" and the Actions dropdown menu."
@@ -17123,7 +17123,7 @@ Function Find-VlcmImage {
 
     if ($imageCount -eq 0) {
         Write-LogMessage -Type INFO -Message "Available vLCM images:"
-        Write-Output ""
+        Write-Host ""
         Write-LogMessage -Type ERROR -Message "No vLCM images found in the repository. Cannot proceed with deployment."
         throw "Deployment failed. No vLCM images available. Check logs for details."
     }
@@ -17325,7 +17325,7 @@ Function Find-VlcmImage {
 
             if ($selectedId -ge 1 -and $selectedId -le $imageSelectionList.Count) {
                 $selectedImage = $imageSelectionList | Where-Object { $_.ID -eq $selectedId }
-                Write-Output ""
+                Write-Host ""
                 Write-LogMessage -Type DEBUG -Message "Selected image: $($selectedImage.DisplayName) - ID: $($selectedImage.ImageId)"
                 # Return the image's ID.
                 return $selectedImage.ImageId

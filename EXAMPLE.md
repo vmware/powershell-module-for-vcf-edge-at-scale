@@ -40,7 +40,7 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
        Copyright (c) Broadcom. All Rights Reserved.
 
 
-  Module loaded (version 1.0.3.1006).
+  Module loaded (version 1.0.3.1007).
 
 Auto-load on every session
   Add the following line to your PowerShell profile (C:\Users\Administrator\Documents\PowerShell\Microsoft.PowerShell_profile.ps1):
@@ -62,7 +62,7 @@ PS C:\Users\Administrator> start-VcfEdgeAtScale -Initialize
 VcfEdgeAtScale initialize
   Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace.
 
-  Note: $env:VcfEdgeatScaleRootDirectory pointed at a path that does not exist:
+  Note: $env:VcfEdgeAtScaleRootDirectory pointed at a path that does not exist:
     C:\Users\Administrator\VCFEdgeAtScale
   Stale value cleared from session and user environment. Choose a folder below.
 
@@ -97,7 +97,7 @@ Press Enter to use the default, or type a full directory path:
   See sections above for YAML, Docs, Tools, and JSON actions.
   Optional Docs/Tools sources may show WARNING if your module install is missing files.
   Root JSON: created or refreshed per your answers above.
-  VcfEdgeatScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
+  VcfEdgeAtScaleRootDirectory -> C:\Users\Administrator\VCFEdgeAtScale (session + user environment persisted).
 
   Next step: customize infrastructure.json and supervisor.json.
   Option 1 — Direct JSON editing:
@@ -137,10 +137,10 @@ DESCRIPTION
     - vSphere Supervisor Deployment
     - ArgoCD installation and configuration for GitOps workflows
 
-    For normal runs (not -Version or -Initialize), the environment variable VcfEdgeatScaleRootDirectory must
+    For normal runs (not -Version or -Initialize), the environment variable VcfEdgeAtScaleRootDirectory must
     point at your configuration base directory. Defaults for -InfrastructureJson and -SupervisorJson join that
     directory with infrastructure.json and supervisor.json when you omit those parameters. Logs are written
-    under Join-Path(VcfEdgeatScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
+    under Join-Path(VcfEdgeAtScaleRootDirectory, "Logs"). Use Start-VcfEdgeAtScale -Initialize to create or
     refresh the recommended layout from module Templates (new or existing base directory; use
     -Initialize -InitializeTemplatesOnly to refresh only ServicesYaml and Docs without changing root JSON).
     Use Start-VcfEdgeAtScale -CollectLogs to zip infrastructure.json, supervisor.json, Logs, and ServicesYaml for
@@ -345,17 +345,17 @@ clusters[].networking.networkingVmKernelInterfaces[].gateway Conditional Optiona
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -checkForUpdates
 
-[ADVISORY] A new version of VcfEdgeAtScale is available: 1.0.3.1006 (you have 1.0.3.1003).
+[ADVISORY] A new version of VcfEdgeAtScale is available: 1.0.3.1007 (you have 1.0.3.1003).
 
 Install update now? [Y/n]: Y
-[INFO] Installing VcfEdgeAtScale 1.0.3.1006 from PSGallery...
-[INFO] VcfEdgeAtScale 1.0.3.1006 installed successfully.
-[INFO] Updating config UI tool: version 1.0.3.1003 → 1.0.3.1006.
-[INFO] Config UI tool updated to 1.0.3.1006 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py.
-  Config UI tool updated: veas-json-generator.py (1.0.3.1003 → 1.0.3.1006)
-[INFO] Updating UI template: version 1.0.3.1003 → 1.0.3.1006.
-[INFO] UI template updated to 1.0.3.1006 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-ui.html.
-  UI template updated: veas-ui.html (1.0.3.1003 → 1.0.3.1006)
+[INFO] Installing VcfEdgeAtScale 1.0.3.1007 from PSGallery...
+[INFO] VcfEdgeAtScale 1.0.3.1007 installed successfully.
+[INFO] Updating config UI tool: version 1.0.3.1003 → 1.0.3.1007.
+[INFO] Config UI tool updated to 1.0.3.1007 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py.
+  Config UI tool updated: veas-json-generator.py (1.0.3.1003 → 1.0.3.1007)
+[INFO] Updating UI template: version 1.0.3.1003 → 1.0.3.1007.
+[INFO] UI template updated to 1.0.3.1007 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-ui.html.
+  UI template updated: veas-ui.html (1.0.3.1003 → 1.0.3.1007)
 
 Update complete. Open a new PowerShell window to use the new version.
 
@@ -630,7 +630,7 @@ Default JSON files under deployment root:
 Use these two files in the zip? (Y/n): y
 
 CollectLogs finished. Archive saved to:
-  C:\Users\Administrator\VcfEdgeatScale-logs-20260508-073118.zip
+  C:\Users\Administrator\VcfEdgeAtScale-logs-20260508-073118.zip
 PS C:\Users\Administrator>
 ```
 
@@ -638,5 +638,5 @@ PS C:\Users\Administrator>
 
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -Version
-[INFO] VcfEdgeAtScale version: 1.0.3.1006
+[INFO] VcfEdgeAtScale version: 1.0.3.1007
 ```
