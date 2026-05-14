@@ -4015,14 +4015,14 @@ Function Invoke-VcfEdgeAtScaleUpdateCheck {
     if ($installChoice -notmatch '^[Yy]') {
         Write-Host ""
         Write-Host "To update manually, run:" -ForegroundColor Yellow
-        Write-Host "  Update-Module -Name VcfEdgeAtScale -Force" -ForegroundColor Cyan
+        Write-Host "  Update-Module -Name VcfEdgeAtScale" -ForegroundColor Cyan
         Write-Host ""
         return
     }
 
     Write-LogMessage -Type INFO -Message "Installing VcfEdgeAtScale $latestVersion from PSGallery..."
     try {
-        Update-Module -Name "VcfEdgeAtScale" -Force -ErrorAction Stop
+        Update-Module -Name "VcfEdgeAtScale" -ErrorAction Stop
         Write-LogMessage -Type INFO -Message "VcfEdgeAtScale $latestVersion installed successfully."
         Sync-VcfEdgeAtScaleConfigUiTool -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
         Sync-VcfEdgeAtScaleUiTemplate -UserBaseDirectory $env:VcfEdgeatScaleRootDirectory
@@ -4033,7 +4033,7 @@ Function Invoke-VcfEdgeAtScaleUpdateCheck {
         Write-LogMessage -Type ERROR -Message "Update failed: $($_.Exception.Message)"
         Write-Host ""
         Write-Host "To update manually, run:" -ForegroundColor Yellow
-        Write-Host "  Update-Module -Name VcfEdgeAtScale -Force" -ForegroundColor Cyan
+        Write-Host "  Update-Module -Name VcfEdgeAtScale" -ForegroundColor Cyan
         Write-Host ""
     }
 }

@@ -28,7 +28,7 @@
 #
 # PowerShell Module: VcfEdgeAtScale
 # Module Version: see VcfEdgeAtScale.psd1
-# Last modified: 2026-05-10
+# Last modified: 2026-05-14
 #
 # Private implementation files (dot-sourced below):
 #   Private/Logging.ps1     — logging, vCenter connectivity, content library, witness prep
@@ -39,26 +39,57 @@
 #   Private/EntryPoints.ps1 — Start-VcfEdgeAtScale, configuration help (exported)
 #
 
+# Module-scope initialization helpers. These are private functions called once during module load
+# to provide error-handled versions of Import-PowerShellDataFile and VCF CLI auto-detection.
+# try/catch at raw module scope triggers PSScriptAnalyzer LSP false positives in some editors;
+# extracting into named functions avoids those false positives while retaining proper error
+# handling and user-visible warnings. Both functions are removed from the Function: drive after
+# use so they do not appear in Get-Command -Module VcfEdgeAtScale.
+function Read-VcfEdgeAtScaleManifestVersion {
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ManifestPath
+    )
+    try {
+        return (Import-PowerShellDataFile -Path $ManifestPath).ModuleVersion
+    } catch {
+        Write-Warning "VcfEdgeAtScale: Could not read module version from '$ManifestPath' — $($_.Exception.Message). Version will be reported as 'unknown'."
+        return "unknown"
+    }
+}
+function Resolve-VcfEdgeAtScaleCliCommand {
+    try {
+        $candidates = if ($IsWindows) { @("vcf.exe", "vcf") } else { @("vcf") }
+        foreach ($name in $candidates) {
+            if (Get-Command -Name $name -CommandType Application -ErrorAction SilentlyContinue) {
+                return $name
+            }
+        }
+    } catch {
+        $defaultName = if ($IsWindows) { "vcf.exe" } else { "vcf" }
+        Write-Warning "VcfEdgeAtScale: VCF CLI auto-detection failed — $($_.Exception.Message). Defaulting to '$defaultName'."
+    }
+    return if ($IsWindows) { "vcf.exe" } else { "vcf" }
+}
+
 #region Script scope variables
-# The module Version object is always populated from the manifest by the time the psm1 runs.
-$Script:ModuleVersion = $ExecutionContext.SessionState.Module.Version.ToString()
+$local:manifestPath = Join-Path -Path $PSScriptRoot -ChildPath "VcfEdgeAtScale.psd1"
+$Script:ModuleVersion = if (Test-Path -LiteralPath $local:manifestPath) {
+    Read-VcfEdgeAtScaleManifestVersion -ManifestPath $local:manifestPath
+} else {
+    Write-Warning "VcfEdgeAtScale: Module manifest not found at '$local:manifestPath'. Version will be reported as 'unknown'."
+    "unknown"
+}
 
 # Set platform-specific command names for cross-platform compatibility.
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
 $Script:KubectlCmd = if ($IsWindows) { "kubectl.exe" } else { "kubectl" }
 
 # VCF CLI: on Windows, Broadcom ships `vcf.exe`; some environments expose the same binary as `vcf`. Prefer the first name found on PATH.
-$Script:VcfCmd = $null
-$local:vcfCliCandidates = if ($IsWindows) { @("vcf.exe", "vcf") } else { @("vcf") }
-foreach ($vcfCliName in $local:vcfCliCandidates) {
-    if (Get-Command -Name $vcfCliName -CommandType Application -ErrorAction SilentlyContinue) {
-        $Script:VcfCmd = $vcfCliName
-        break
-    }
-}
-if (-not $Script:VcfCmd) {
-    $Script:VcfCmd = if ($IsWindows) { "vcf.exe" } else { "vcf" }
-}
+$Script:VcfCmd = Resolve-VcfEdgeAtScaleCliCommand
+
+# Remove initialization helpers from the Function: drive; they must not appear in Get-Command -Module VcfEdgeAtScale.
+Remove-Item -Path Function:\Read-VcfEdgeAtScaleManifestVersion -ErrorAction SilentlyContinue
+Remove-Item -Path Function:\Resolve-VcfEdgeAtScaleCliCommand -ErrorAction SilentlyContinue
 
 # Define log level hierarchy (lower number = lower priority, higher number = higher priority)
 $Script:LogLevelHierarchy = @{
@@ -160,9 +191,3 @@ if ($PSVersionTable.PSVersion -lt [Version]"7.4") {
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Supervisor.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Validation.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/EntryPoints.ps1")
-
-# Pre-warm comment-based help for exported functions so that PSReadLine tab-completion tooltips
-# are populated from the cache on first use, rather than incurring a parse-on-demand delay.
-$null = Get-Help Start-VcfEdgeAtScale -ErrorAction SilentlyContinue
-$null = Get-Help Show-InfrastructureJsonConfigurationHelp -ErrorAction SilentlyContinue
-$null = Get-Help Show-SupervisorJsonConfigurationHelp -ErrorAction SilentlyContinue

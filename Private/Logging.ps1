@@ -604,6 +604,76 @@ Function Get-PythonExecutable {
     }
     return $null
 }
+Function Get-VcfEdgeAtScaleInstallSource {
+
+    <#
+        .SYNOPSIS
+        Resolves the install source of the VcfEdgeAtScale module as a human-readable string.
+
+        .DESCRIPTION
+        Queries PowerShellGet (Get-InstalledModule) as the authoritative source for gallery
+        installs. If no PowerShellGet record exists for the given version, falls back to
+        Get-Module to locate the module path and reports it as a local path install. Returns
+        "N/A (manifest unreadable)" immediately when ModuleVersion is "unknown", surfacing
+        .psd1 read failures without silently producing a misleading fallback.
+
+        .PARAMETER ModuleVersion
+        The module version string to look up (e.g. "1.0.3.1006"). Used to match the exact
+        installed version rather than the latest.
+
+        .OUTPUTS
+        System.String
+        A descriptive install source string such as "PSGallery (v1.0.3.1006)" or
+        "Local path (C:\Users\admin\VCFEdgeAtScale\1.0.3.1006)". Returns "N/A" if the
+        module cannot be located, or "N/A (manifest unreadable)" when ModuleVersion is
+        "unknown" (indicating the .psd1 could not be read at import time).
+
+        .EXAMPLE
+        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "1.0.3.1006"
+        Returns "PSGallery (v1.0.3.1006)" when installed from the gallery.
+
+        .EXAMPLE
+        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "unknown"
+        Returns "N/A (manifest unreadable)" without attempting a PSGet lookup.
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ModuleVersion
+    )
+
+    # "unknown" means Import-PowerShellDataFile failed at import time; a PSGet lookup would
+    # produce a non-terminating error (invalid version format) that is silently swallowed.
+    # Surface the real problem rather than silently degrading to "Local path".
+    if ($ModuleVersion -eq "unknown") {
+        return "N/A (manifest unreadable)"
+    }
+
+    try {
+        # -ErrorAction SilentlyContinue suppresses non-terminating errors (e.g. version not found).
+        # The surrounding try/catch handles terminating errors (e.g. PSGallery unreachable, corrupted
+        # PowerShellGet state). Both guards are intentional — Get-InstalledModule can produce either.
+        # -AllowPrerelease ensures prerelease-tagged installs are returned when the version matches.
+        $installedMod = Get-InstalledModule -Name "VcfEdgeAtScale" -RequiredVersion $ModuleVersion -AllowPrerelease -ErrorAction SilentlyContinue
+        if ($null -ne $installedMod -and -not [String]::IsNullOrWhiteSpace($installedMod.Repository)) {
+            return "$($installedMod.Repository) (v$($installedMod.Version))"
+        }
+
+        # No PowerShellGet record — could be a git-clone install, a corrupted PSGet database,
+        # or a private-gallery install without a PSGet record. Label as "Local path" rather than
+        # "Manual install" to avoid misleading a support engineer into thinking PSGallery was not used.
+        # | Select-Object -First 1 on the loaded-module check ensures ?? null-coalescing always
+        # receives a single object or $null, never an empty array (which ?? would not fall through).
+        $thisModule = (Get-Module -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue | Select-Object -First 1) ??
+                      (Get-Module -ListAvailable -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue | Select-Object -First 1)
+        if ($null -ne $thisModule) {
+            return "Local path ($($thisModule.ModuleBase))"
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Could not determine module install location: $($_.Exception.Message)"
+    }
+
+    return "N/A"
+}
 Function Get-EnvironmentSetup {
 
     <#
@@ -666,25 +736,7 @@ Function Get-EnvironmentSetup {
     $vmwarePowerCliVersion = ($powerCliModulesInstalled | Where-Object Name -eq "VMware.PowerCLI" | Sort-Object { [Version]$_.Version } -Descending | Select-Object -First 1).Version
     $vmwarePowerCliRelease = if ($null -eq $vmwarePowerCliVersion) { "N/A" } else { $vmwarePowerCliVersion.ToString() }
 
-    # Resolve VcfEdgeAtScale install source: PSGallery install populates RepositorySourceLocation;
-    # manual installs (git clone + Install-VcfEdgeAtScaleModule.ps1) leave it null.
-    $moduleInstallLocation = "N/A"
-    try {
-        $thisModule = Get-Module -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue
-        if ($null -eq $thisModule) {
-            $thisModule = Get-Module -ListAvailable -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue | Select-Object -First 1
-        }
-        if ($null -ne $thisModule) {
-            if (-not [String]::IsNullOrWhiteSpace($thisModule.Repository)) {
-                # Repository = "PSGallery" for gallery installs; cleaner than RepositorySourceLocation (full OData URL).
-                $moduleInstallLocation = "$($thisModule.Repository) (v$($thisModule.Version))"
-            } else {
-                $moduleInstallLocation = "Manual install ($($thisModule.ModuleBase))"
-            }
-        }
-    } catch {
-        Write-LogMessage -Type DEBUG -Message "Could not determine module install location: $($_.Exception.Message)"
-    }
+    $moduleInstallLocation = Get-VcfEdgeAtScaleInstallSource -ModuleVersion $Script:ModuleVersion
 
     # kubectl version — best-effort; suppressed on any error.
     # --short was deprecated in kubectl 1.25 and removed in 1.28; use plain --client instead.
