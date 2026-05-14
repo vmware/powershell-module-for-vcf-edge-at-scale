@@ -13571,7 +13571,11 @@ Function Test-JsonShallowValidation {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Validating supervisor service YAML and Harbor TLS paths (shallow check)..."
         # Resolve referenced file paths so relative paths in infrastructure.json are expanded before validation.
         Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
-        Test-JsonShallowSupervisorServicesPathConfiguration -ClustersToValidate $clustersInScope -InputData $inputData
+        $shallowPathFailures = Test-JsonShallowSupervisorServicesPathConfiguration -ClustersToValidate $clustersInScope -InputData $inputData
+        if ($shallowPathFailures -gt 0) {
+            Write-LogMessage -Type ERROR -Message "JSON configuration validation found $shallowPathFailures file path error(s). Verify all referenced paths exist and re-run."
+            throw "JSON configuration validation found $shallowPathFailures file path error(s). Verify all referenced paths exist and re-run."
+        }
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Supervisor service YAML and Harbor TLS shallow path validation passed."
     }
 
@@ -15765,13 +15769,15 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
         Parsed infrastructure JSON (Harbor TLS paths must already be expanded by Update-InfrastructureJsonReferencedFilePaths).
 
         .OUTPUTS
-        None. Throws when a required path is missing or not a leaf file.
+        [Int] The number of validation failures found.
     #>
 
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClustersToValidate,
         [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$InputData
     )
+
+    $validationFailures = 0
 
     foreach ($cluster in $ClustersToValidate) {
         $currentEdgeSite = $cluster.edgeSite
@@ -15780,12 +15786,13 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
             foreach ($logicalName in @("argoCdOperatorYamlPath", "argoCdDeploymentYamlPath")) {
                 $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
                 if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
-                    Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
-                    throw "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    Write-LogMessage -Type ERROR -Message "Could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    $validationFailures++
+                    continue
                 }
                 if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
-                    Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
-                    throw "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    Write-LogMessage -Type ERROR -Message "File not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    $validationFailures++
                 }
             }
         }
@@ -15794,12 +15801,13 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
             foreach ($logicalName in @("harborDataTemplateYamlPath", "harborServiceYamlPath")) {
                 $resolvedPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName $logicalName
                 if ([String]::IsNullOrWhiteSpace($resolvedPath)) {
-                    Write-LogMessage -Type ERROR -Message "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
-                    throw "Shallow path check: could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    Write-LogMessage -Type ERROR -Message "Could not resolve $logicalName for edgeSite `"$currentEdgeSite`". Configure supervisorServices.parentDirectory with the matching *YamlFileName at cluster or common level, or set the legacy supervisorServices.$logicalName property."
+                    $validationFailures++
+                    continue
                 }
                 if (-not (Test-Path -LiteralPath $resolvedPath -PathType Leaf)) {
-                    Write-LogMessage -Type ERROR -Message "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
-                    throw "Shallow path check: file not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    Write-LogMessage -Type ERROR -Message "File not found for $logicalName at `"$resolvedPath`" (edgeSite `"$currentEdgeSite`")."
+                    $validationFailures++
                 }
             }
 
@@ -15814,13 +15822,15 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
                         continue
                     }
                     if (-not (Test-Path -LiteralPath $tlsPath -PathType Leaf)) {
-                        Write-LogMessage -Type ERROR -Message "Shallow path check: clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
-                        throw "Shallow path check: clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
+                        Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.$tlsProperty file not found: `"$tlsPath`" for edgeSite `"$currentEdgeSite`". Use parentDirectory plus file name, or a resolvable full path."
+                        $validationFailures++
                     }
                 }
             }
         }
     }
+
+    return $validationFailures
 }
 Function Test-JsonYamlFilePaths {
 

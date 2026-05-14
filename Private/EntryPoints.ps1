@@ -968,7 +968,7 @@ Function Start-VcfEdgeAtScale {
 
         # Try to get version from loaded module first.
 
-        $loadedModule = Get-Module -Name "VcfEdgeAtScale"
+        $loadedModule = Get-Module -Name "VcfEdgeAtScale" | Select-Object -First 1
         if ($loadedModule -and $loadedModule.Version -and $loadedModule.Version -ne [version]"0.0") {
             $versionToDisplay = $loadedModule.Version.ToString()
         } else {

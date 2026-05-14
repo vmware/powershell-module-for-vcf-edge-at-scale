@@ -98,15 +98,32 @@ function Invoke-ProfileCleanup {
 
     <#
     .SYNOPSIS
-        Prompts the user to confirm removal of a stale VcfEdgeAtScale profile entry.
+        Shows the user what will be removed from $PROFILE and prompts for confirmation.
     .NOTES
-        Caller is responsible for building $CleanedContent before calling this function.
+        Always previews what will be deleted before writing. If the cleaned content is
+        identical to the original (no match), the function skips without prompting.
     #>
 
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$CleanedContent,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ProfilePath
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ProfilePath,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$OriginalContent,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$CleanedContent
     )
+
+    if ($OriginalContent -eq $CleanedContent) {
+        Write-Host "  (Nothing matched for removal — skipping to prevent unintended edits.)" -ForegroundColor Gray
+        return
+    }
+
+    # Show exactly which non-blank lines will disappear so the user can verify before confirming.
+    $originalLines = $OriginalContent -split "`n"
+    $cleanedLines  = $CleanedContent  -split "`n"
+    $removedLines  = $originalLines | Where-Object { $cleanedLines -notcontains $_ -and -not [String]::IsNullOrWhiteSpace($_) }
+    if ($removedLines) {
+        Write-Host "  Lines that will be removed:" -ForegroundColor DarkGray
+        $removedLines | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+        Write-Host ""
+    }
 
     $response = Read-Host "Remove it now? (Y/N, Enter=no)"
     if ($response -match '^Y(es)?$') {
@@ -215,11 +232,17 @@ try {
             Write-Host "  $PROFILE contains a VcfEdgeAtScale lazy-load stub from an earlier install." -ForegroundColor Yellow
             Write-Host "  It is no longer needed — PowerShell auto-imports the module on first use." -ForegroundColor Yellow
             Write-Host ""
-            # Remove the stub block from the sentinel comment line through its stand-alone closing '}'.
-            # (?ms): multiline (^ matches line start) + singleline (. matches newlines).
-            # The outer if-block '}' is the only one that appears at column 0 in the stub structure.
-            $cleanedContent = $profileContent -replace "(?ms)^$([regex]::Escape($lazyStubSentinel)).*?^}", ""
-            Invoke-ProfileCleanup -ProfilePath $PROFILE -CleanedContent $cleanedContent
+            # Locate the stub block using [regex]::Match so we can remove it by index/length
+            # rather than a global -replace. This prevents the pattern from accidentally
+            # consuming a closing '}' that belongs to other code in the profile.
+            $stubPattern = "(?ms)^$([regex]::Escape($lazyStubSentinel)).*?^}"
+            $stubMatch = [regex]::Match($profileContent, $stubPattern)
+            if ($stubMatch.Success) {
+                $cleanedContent = $profileContent.Remove($stubMatch.Index, $stubMatch.Length)
+            } else {
+                $cleanedContent = $profileContent
+            }
+            Invoke-ProfileCleanup -ProfilePath $PROFILE -OriginalContent $profileContent -CleanedContent $cleanedContent
         } elseif ($hasEagerLine) {
             Write-Host ""
             Write-Host "Profile warning" -ForegroundColor Yellow
@@ -230,7 +253,7 @@ try {
             # Remove the Import-Module line and any installer comment immediately preceding it.
             $cleanedContent = ($profileContent -replace "(?m)^\s*# VcfEdgeAtScale[^\n]*\r?\n?", "") `
                 -replace "(?m)^\s*$([regex]::Escape($eagerProfileLine))\r?\n?", ""
-            Invoke-ProfileCleanup -ProfilePath $PROFILE -CleanedContent $cleanedContent
+            Invoke-ProfileCleanup -ProfilePath $PROFILE -OriginalContent $profileContent -CleanedContent $cleanedContent
         } else {
             Write-Host ""
             Write-Host "  No profile changes needed — Start-VcfEdgeAtScale auto-loads on first use." -ForegroundColor Green

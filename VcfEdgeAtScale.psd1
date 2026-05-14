@@ -36,7 +36,7 @@
 RootModule = 'VcfEdgeAtScale.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.3.1007'
+ModuleVersion = '1.0.3.1008'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Core')
