@@ -112,6 +112,10 @@ $Script:ModuleVersion = if (Test-Path -LiteralPath $local:manifestPath) {
     "unknown"
 }
 
+# Root directory of this module; used by private files that need to locate the manifest at runtime
+# (e.g. Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck).
+$Script:ModuleRoot = $PSScriptRoot
+
 # Set platform-specific command names for cross-platform compatibility.
 $Script:ArgocdCmd = if ($IsWindows) { "argocd.exe" } else { "argocd" }
 $Script:KubectlCmd = if ($IsWindows) { "kubectl.exe" } else { "kubectl" }

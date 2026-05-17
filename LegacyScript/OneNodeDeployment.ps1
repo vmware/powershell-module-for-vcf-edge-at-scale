@@ -7883,7 +7883,6 @@ Function ConvertFrom-JsonSafely {
         $errorMessage = $_.Exception.Message
 
         Write-LogMessage -Type ERROR -Message "JSON validation failed for file: $jsonFilePath"
-        Write-Host ""
 
         # Extract the specific JSON error and location
         if ($errorMessage -match "Bad JSON escape sequence: \\([A-Za-z])\..*'([^']+)'.*line (\d+).*position (\d+)") {
@@ -7894,12 +7893,10 @@ Function ConvertFrom-JsonSafely {
 
             Write-LogMessage -Type ERROR -Message "Invalid escape sequence: '\$badChar' in JSON property '$jsonPath'"
             Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-            Write-Host ""
             Write-LogMessage -Type ERROR -Message "Common causes:"
             Write-LogMessage -Type ERROR -Message "  1. Windows file paths must use forward slashes (/) or escaped backslashes (\\\\)"
             Write-LogMessage -Type ERROR -Message "     Example: `"C:/Users/Admin/file.yml`" or `"C:\\\\Users\\\\Admin\\\\file.yml`""
             Write-LogMessage -Type ERROR -Message "  2. Backslash (\) is a special character in JSON and must be escaped"
-            Write-Host ""
             Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$jsonFilePath' at line $lineNum and try again."
         }
         elseif ($errorMessage -match "Conversion from JSON failed with error: (.+?)\. Path '([^']+)'.*line (\d+).*position (\d+)") {
@@ -7911,7 +7908,6 @@ Function ConvertFrom-JsonSafely {
             Write-LogMessage -Type ERROR -Message "JSON parsing error: $jsonError"
             Write-LogMessage -Type ERROR -Message "Property: '$jsonPath'"
             Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-            Write-Host ""
             Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in '$jsonFilePath' and try again."
         }
         else {

@@ -432,7 +432,7 @@ Function Update-Cluster {
                     "slotBased" {
                         $haFailoverLevel = 1
                         $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$true -HAFailoverLevel $haFailoverLevel -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View $cluster.Id
+                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
                         $currentDas = $clusterView.ConfigurationEx.DasConfig
                         $currentVmMonitoring = if ($null -ne $currentDas.VmMonitoring) { $currentDas.VmMonitoring } else { $currentDas.VMMonitoring }
                         $needHostMonitoring = ($currentDas.HostMonitoring -ne "enabled")
@@ -448,7 +448,7 @@ Function Update-Cluster {
                     }
                     "reservationBased" {
                         $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View $cluster.Id
+                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
                         if ($HaClusterResourceFailoverPercent -eq 0) {
                             $failoverResourcePercent = [int][Math]::Ceiling(100.0 / $hostCount)
                             if ($failoverResourcePercent -gt 100) {
@@ -472,7 +472,7 @@ Function Update-Cluster {
                     }
                     "disabled" {
                         $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View $cluster.Id
+                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
                         $configSpecDis = New-Object VMware.Vim.ClusterConfigSpecEx
                         $configSpecDis.dasConfig = $clusterView.ConfigurationEx.DasConfig
                         $configSpecDis.dasConfig.HostMonitoring = "enabled"
@@ -1034,8 +1034,7 @@ Function Add-VsanWitnessTrafficToVmkViaEsxcli {
             }
             $summary = if ($createArgsArgNamesLog) { " $createArgsArgNamesLog" } else { " CreateArgs returned null or no usable params." }
             Write-LogMessage -Type ERROR -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: All attempts failed.$summary Last error: $lastError"
-            $detail = if ($lastError) { " Last error: $lastError" } else { "" }
-            throw "Invoke failed with all parameter name variants.$detail"
+            throw [VcfDeploymentException]::new()
         }
         Write-LogMessage -Type INFO -Message "Added vSAN witness traffic to $VmkernelName on host `"$hostName`"."
         if ($PostSuccessDelaySeconds -gt 0) {
@@ -1273,8 +1272,8 @@ Function Invoke-AddHostToClusterRunningVmSafetyCheck {
     }
 
     $runningVms = @(
-        Get-VM -VMHost $VMHost -Server $Server -ErrorAction SilentlyContinue |
-            Where-Object { "$($_.PowerState)" -eq "PoweredOn" }
+        Get-VM -Server $Server -ErrorAction SilentlyContinue |
+            Where-Object { $_.VMHost.Name -eq $VMHost.Name -and "$($_.PowerState)" -eq "PoweredOn" }
     )
 
     if ($runningVms.Count -eq 0) {
@@ -1314,7 +1313,8 @@ Function Invoke-AddHostToClusterRunningVmSafetyCheck {
     }
 
     if (-not $continueAnyway) {
-        throw "Deployment aborted. Host `"$EsxHostName`" has $($runningVms.Count) powered-on VM(s) on vCenter `"$Server`". Power off or migrate the VMs, then re-run."
+        Write-LogMessage -Type ERROR -Message "Deployment aborted. Host `"$EsxHostName`" has $($runningVms.Count) powered-on VM(s) on vCenter `"$Server`". Power off or migrate the VMs, then re-run."
+        throw [VcfDeploymentException]::new()
     }
 }
 Function Add-HostToCluster {
@@ -2499,7 +2499,10 @@ Function Invoke-AsyncPowerShellOperation {
             $operationError = $ps.Streams.Error[0].Exception.Message
         }
     } catch {
-        $operationError = $_.Exception.Message
+        # EndInvoke throws a MethodInvocationException that wraps the actual runspace error.
+        # Use InnerException when present so the logged message is the real error, not the
+        # "Exception calling EndInvoke with 1 argument(s): ..." wrapper.
+        $operationError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
     }
     finally {
         $ps.Dispose()
@@ -3110,7 +3113,7 @@ Function Get-UserDiskSelection {
 
         if ($deselectInput -eq "C" -or $deselectInput -eq "c") {
             Write-LogMessage -Type INFO -Message "User cancelled disk selection workflow."
-            throw "Deployment cancelled by user."
+            throw [RollbackSkippedException]::new()
         }
 
         # Parse the input and remove selected IDs from the default selection.
@@ -3298,7 +3301,7 @@ Function Add-VsanOsaDiskToDiskGroup {
                         Write-LogMessage -Type ERROR -Message "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg"
                     }
                 }
-                throw "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg. Check logs for details."
+                throw [VcfDeploymentException]::new()
             }
         } catch [VcfDeploymentException] {
             throw  # already logged and typed — propagate without re-wrapping
@@ -3375,7 +3378,7 @@ Function Add-VsanEsaDiskToStoragePool {
                 while ($claimAttempt -lt $ClaimRetryMaxAttempts) {
                     $claimAttempt++
                     try {
-                        Add-VsanStoragePoolDisk -VMHost $vmHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalName $canonicalNames -ErrorAction Stop | Out-Null
+                        Add-VsanStoragePoolDisk -VMHost $vmHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalNames $canonicalNames -ErrorAction Stop | Out-Null
                         break
                     } catch {
                         $rawMsg = $_.Exception.Message
@@ -3416,7 +3419,7 @@ Function Add-VsanEsaDiskToStoragePool {
                     Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
                     Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
                 }
-                throw "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
+                throw [VcfDeploymentException]::new()
             }
         } catch {
             if ($null -ne $Script:LogMessagePending) {
@@ -3498,7 +3501,8 @@ Function Wait-ForVsanDatastoreAndRename {
                     }
                 }
             }
-            throw "Deployment failed. vSAN datastore was not created within the timeout period. Check logs for details."
+            Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN datastore was not created within the timeout period. Check logs for details."
+            throw [VcfDeploymentException]::new()
         }
 
         # Look for vSAN datastores accessible by hosts in the cluster.
@@ -3812,8 +3816,8 @@ Function Initialize-VsanWitnessDiskGroup {
             $msg = $_.Exception.Message
             if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
             if ($singleSsdWitness) {
-                Write-LogMessage -Type WARNING -Message "Single-disk witness disk group failed on `"$vSanWitnessVmName`": $msg. This platform requires distinct cache and capacity disks."
-                throw "Deployment failed. Witness host `"$vSanWitnessVmName`" has only one vSAN-eligible disk; this platform requires one distinct cache (SSD) and one distinct capacity disk. Add a second non-boot disk to the witness appliance and re-run. Check logs for details."
+                Write-LogMessage -Type ERROR -Message "Deployment failed. Witness host `"$vSanWitnessVmName`" has only one vSAN-eligible disk; this platform requires one distinct cache (SSD) and one distinct capacity disk. Add a second non-boot disk to the witness appliance and re-run."
+                throw [VcfDeploymentException]::new()
             }
             if ($msg -match "Sequence contains no elements") {
                 # Disks may already be in a vSAN disk group (e.g. created earlier or by another process); re-check and treat as success if so.
@@ -4095,7 +4099,8 @@ Function Set-VsanWitness {
                 }
             }
             if (-not $continueAnyway) {
-                throw "Deployment failed configuring vSAN witness for cluster `"$ClusterName`": $mismatchDetail Upgrade or patch the witness and data hosts to the same ESX release (same build number), then re-run. The deployment will be rolled back."
+                Write-LogMessage -Type ERROR -Message "Deployment failed configuring vSAN witness for cluster `"$ClusterName`": $mismatchDetail Upgrade or patch the witness and data hosts to the same ESX release (same build number), then re-run. The deployment will be rolled back."
+                throw [VcfDeploymentException]::new()
             }
         } else {
             Write-LogMessage -Type DEBUG -Message "Witness and cluster hosts have matching ESX release (version $refVersion, build $refBuild)."
@@ -4299,7 +4304,7 @@ Function Set-VsanWitness {
         if ($errorMessage -match "preferred fault domain|witness host is not specified|witness.*not specified") {
             Write-LogMessage -Type ERROR -Message "vSAN stretched cluster requires both a witness host and a preferred fault domain. Ensure common.vSanWitnessVmName (or cluster-level clusters[].vSanWitnessVmName) and the preferred fault domain name (e.g. edge site name) are set. If the API still reports missing preferred fault domain, the PowerCLI/API version may not expose it; check VCF PowerCLI documentation for Set-VsanClusterConfiguration."
         }
-        throw "Deployment failed. $cleanMessage"
+        throw [VcfDeploymentException]::new()
     }
 }
 Function Get-VsanClusterHealthSummaryViaView {
@@ -4840,7 +4845,9 @@ Function Enable-VsanAutomaticDiskClaimIfSupported {
         }
         if ($null -ne $automaticClaimValue -and $currentMode -ne $automaticClaimValue) {
             Write-LogMessage -Type INFO -Message "Enabling vSAN Managed Disk Claim (VsanDiskClaimMode Automatic) for cluster `"$ClusterName`"."
-            Set-VsanClusterConfiguration -Configuration $vsanClusterConfig -VsanDiskClaimMode $automaticClaimValue -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+            $setVsanParams = @{ Configuration = $vsanClusterConfig; Server = $Script:vCenterName; ErrorAction = 'Stop' }
+            $setVsanParams['VsanDiskClaimMode'] = $automaticClaimValue
+            Set-VsanClusterConfiguration @setVsanParams | Out-Null
             Write-LogMessage -Type DEBUG -Message "vSAN Managed Disk Claim enabled for cluster `"$ClusterName`"."
             return $true
         }
@@ -5338,8 +5345,8 @@ Function Invoke-VsanClusterAlarmCheckAndRemediate {
                 }
                 if ([String]::IsNullOrWhiteSpace($continueResponse) -or $continueResponse -match '^[nN](o)?$') {
                     $redNames = ($blockingRedAlarms | ForEach-Object { $_.AlarmName }) -join "; "
-                    Write-LogMessage -Type INFO -Message "User declined to continue (or accepted default N) due to red vSAN triggered alarm(s) on cluster `"$ClusterName`". Deployment will stop; you will be prompted whether to roll back compute if applicable."
-                    throw "Deployment failed. vSAN cluster `"$ClusterName`" has triggered alarm(s) with red status: $redNames"
+                    Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN cluster `"$ClusterName`" has triggered alarm(s) with red status: $redNames"
+                    throw [VcfDeploymentException]::new()
                 }
                 Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)."
             } while ($true)
@@ -6420,7 +6427,8 @@ Function Invoke-VsanClusterHealthCheckAfterWitness {
                     if (-not $StoragePolicyType) {
                         Write-LogMessage -Type WARNING -Message "StoragePolicyType not passed to health check; caller will need to perform rollback."
                     }
-                    throw "Deployment failed. vSAN cluster health is red: $retryFailureReasons"
+                    Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN cluster health is red: $retryFailureReasons"
+                    throw [VcfDeploymentException]::new()
                 }
                 Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N."
             } while ($true)

@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1008 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1009 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
@@ -91,7 +91,7 @@
   .toggle-row { display: flex; align-items: center; gap: 10px; cursor: pointer; }
   .toggle-row input[type="checkbox"] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--accent); }
   .toggle-row label { font-size: 13px; cursor: pointer; }
-  .collapsible-content { overflow: hidden; transition: max-height 0.3s ease; }
+  .collapsible-content { overflow: visible; transition: max-height 0.3s ease; }
   .collapsible-content.collapsed { display: none; }
   .section-toggle { color: var(--accent); font-size: 11px; cursor: pointer; font-weight: 600; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 4px; padding: 3px 11px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
   .section-toggle:hover { background: var(--success); border-color: var(--success); color: #fff; }
@@ -357,7 +357,7 @@
             <div class="field">
               <label>vSAN Witness VM Name<span class="tt"><span class="tt-icon">?</span><span class="tt-body">FQDN or IPv4 of the vSAN witness appliance. Required for vSAN-OSA and vSAN-ESA clusters. Can be set here (common) or overridden per cluster.</span></span></label>
               <input type="text" id="vSanWitnessVmName" placeholder="vsanwitness.example.com"
-                oninput="_restrictFqdnInput(this);_updateAllWitnessHints()"
+                oninput="_restrictFqdnInput(this);_updateAllWitnessHints();validateSegField(this,'fqdn',null,true)"
                 onblur="validateSegField(this,'fqdn',null,true)">
               <span class="field-inline-err"></span>
               <span class="field-hint">Overridable per cluster.</span>
@@ -1530,7 +1530,10 @@ function toggleSection(id) {
   // buttons) are injected between the header and the collapsible content.
   const header = el.closest('.card') && el.closest('.card').querySelector('.card-header');
   const btn = header && header.querySelector('.section-toggle');
-  if (btn) btn.textContent = collapsed ? 'expand' : 'collapse';
+  if (btn) {
+    const hasConfig = btn.textContent.trim().endsWith('config');
+    btn.textContent = (collapsed ? 'expand' : 'collapse') + (hasConfig ? ' config' : '');
+  }
 }
 
 // Shows the "Preserve Harbor key/cert" row only when lab mode is enabled.
@@ -1660,6 +1663,10 @@ function _restoreCheckpoint() {
   siteCounter = sites.reduce((max, s) => Math.max(max, s.id), 0);
   renderSites();
   rebuildSupervisorSites();
+  // Clear any lingering connectivity-check result so stale "unreachable" badges from
+  // the pre-checkpoint vCenter FQDN do not persist after the state is rolled back.
+  const connResult = document.getElementById('vcenterConnResult');
+  if (connResult) connResult.innerHTML = '';
   document.getElementById('checkpointBar').querySelector('span').textContent =
     `✓ Restored ${sites.length} site${sites.length !== 1 ? 's' : ''} from checkpoint.`;
 }
@@ -2269,7 +2276,7 @@ function _renderSiteHeaderFields(site) {
         <label>vSAN Witness VM Name <span class="tip">optional; overrides common</span>${tt('FQDN or IPv4 of the vSAN witness appliance for this site. Overrides the common-level setting when set; leave blank to inherit from Common Settings.')}</label>
         <input type="text" value="${esc(site.vSanWitnessVmName)}" placeholder="vsanwitness.example.com"
           data-err-id="witnessErr_${site.id}"
-          oninput="_restrictFqdnInput(this);updateSiteField(${site.id},'vSanWitnessVmName',this.value)"
+          oninput="_restrictFqdnInput(this);updateSiteField(${site.id},'vSanWitnessVmName',this.value);validateSegField(this,'fqdn',null,true)"
           onblur="validateSegField(this,'fqdn',null,true)">
         <span class="field-inline-err" id="witnessErr_${site.id}"></span>
         <span id="witnessHint_${site.id}">${_witnessHintHtml(site.vSanWitnessVmName || '', v('vSanWitnessVmName'))}</span>

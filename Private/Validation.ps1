@@ -187,7 +187,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
 
         if ($cleanupScope -eq "Compute" -and $supervisorEnabled) {
             Write-LogMessage -Type ERROR -Message "Supervisor is deployed on cluster `"$clusterName`" (edgeSite `"$currentEdgeSite`"). Cannot cleanup only compute when supervisor is deployed. Use -CleanUp Supervisor to remove the supervisor first, or -CleanUp All to remove both."
-            throw [VcfDeploymentException]::new("CleanUp Compute is not allowed when supervisor is deployed. Use -CleanUp Supervisor or -CleanUp All.")
+            throw [VcfDeploymentException]::new()
         }
 
         $promptType = $cleanupScope.ToLower()
@@ -219,7 +219,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
             $userInputNormalized = if ($userInput) { $userInput.Trim() } else { "" }
             if ($userInputNormalized -ne $expectedPromptText) {
                 Write-LogMessage -Type ERROR -Message "Cleanup confirmation failed. Expected: `"$expectedPromptText`". Got: `"$userInputNormalized`". Script will terminate."
-                throw [VcfDeploymentException]::new("Cleanup not confirmed. You must type exactly: $expectedPromptText")
+                throw [VcfDeploymentException]::new()
             }
         } else {
             Write-LogMessage -Type ADVISORY -Message "Skipping cleanup confirmation (labEnvironment=true and -Force)."
@@ -235,7 +235,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                     Write-LogMessage -Type INFO -Message "Supervisor deactivated on cluster `"$clusterName`". Compute (VDS, vSAN/VMFS, cluster) remains."
                 } else {
                     Write-LogMessage -Type ERROR -Message "Supervisor deactivation failed: $($disableResult.ErrorMessage)."
-                    throw [VcfDeploymentException]::new("Supervisor cleanup failed. Check logs.")
+                    throw [VcfDeploymentException]::new()
                 }
             } else {
                 Write-LogMessage -Type INFO -Message "No supervisor enabled on cluster `"$clusterName`". Nothing to remove for Supervisor-only cleanup."
@@ -544,7 +544,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
         } # end if Compute/All
     if ($cleanupHadErrors) {
         Write-LogMessage -Type ERROR -Message "CleanUp ($cleanupScope) did not complete successfully. One or more clusters had errors (e.g. management restore failed, VDS or cluster removal failed). Review the log and resolve the issues, then retry cleanup or remove resources manually."
-        throw [VcfDeploymentException]::new("Cleanup did not complete successfully. Check the log for details.")
+        throw [VcfDeploymentException]::new()
     }
 }
 Function Get-VsanWitnessNameForCluster {
@@ -1051,7 +1051,8 @@ Function Invoke-HarborDeploymentPhase {
     $requiredKeys = @("Cluster", "ClusterId", "ClusterName", "ContextName", "CurrentEdgeSite", "InputData", "StoragePolicyName", "SupervisorId")
     foreach ($key in $requiredKeys) {
         if (-not $Context.ContainsKey($key) -or $null -eq $Context[$key]) {
-            throw "Invoke-HarborDeploymentPhase: required context key '$key' is missing or null."
+            Write-LogMessage -Type ERROR -Message "Invoke-HarborDeploymentPhase: required context key '$key' is missing or null."
+            throw [VcfDeploymentException]::new()
         }
     }
 
@@ -1103,7 +1104,7 @@ Function Invoke-HarborDeploymentPhase {
                 throw  # already logged and typed — propagate without re-wrapping
             } catch {
                 Write-LogMessage -Type ERROR -Message "Cannot create HarborYaml directory `"$harborYamlSaveDir`": $($_.Exception.Message)"
-                throw [VcfDeploymentException]::new("Cannot create HarborYaml directory `"$harborYamlSaveDir`": $($_.Exception.Message)")
+                throw [VcfDeploymentException]::new()
             }
         }
     }
@@ -1116,11 +1117,11 @@ Function Invoke-HarborDeploymentPhase {
         $effectiveHarborHostname = Get-EffectiveHarborHostnameForInfrastructureCluster -Cluster $cluster -CommonData $inputData.common -LabEnvironmentEnabled $labEnvironment
         if ([String]::IsNullOrWhiteSpace($effectiveHarborHostname)) {
             Write-LogMessage -Type ERROR -Message "Could not resolve Harbor hostname for edge site `"$currentEdgeSite`". Set clusters[].harborConfiguration.hostname or use lab mode with a Harbor data values template that defines hostname."
-            throw [VcfDeploymentException]::new("Could not resolve Harbor hostname for edge site `"$currentEdgeSite`". Set clusters[].harborConfiguration.hostname or use lab mode with a Harbor data values template that defines hostname.")
+            throw [VcfDeploymentException]::new()
         }
         if (-not (Test-JsonPropertyFormat -InputData $effectiveHarborHostname -ValidationPreset "IpAddressOrFqdn" -ValidationLabel "harborConfiguration.hostname (deploy)")) {
             Write-LogMessage -Type ERROR -Message "Resolved Harbor hostname `"$effectiveHarborHostname`" for edge site `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address (deploy-time check)."
-            throw [VcfDeploymentException]::new("Resolved Harbor hostname `"$effectiveHarborHostname`" for edge site `"$currentEdgeSite`" is not a valid DNS-compatible FQDN or IP address (deploy-time check).")
+            throw [VcfDeploymentException]::new()
         }
         if ($harborConfig.PSObject.Properties["hostname"]) {
             $harborConfig.hostname = $effectiveHarborHostname
@@ -1268,6 +1269,10 @@ Function Invoke-HarborDeploymentPhase {
                 }
             }
         }
+        # Clear Harbor credentials that were resolved into process environment by Resolve-HarborSecretValue.
+        [System.Environment]::SetEnvironmentVariable("HARBOR_ADMIN_PASSWORD", $null)
+        [System.Environment]::SetEnvironmentVariable("SECRET_KEY", $null)
+        Write-LogMessage -Type DEBUG -Message "Cleared Harbor credential environment variables from process scope."
     }
 
     return $harborServiceName
@@ -1306,7 +1311,8 @@ Function Invoke-ArgoCDDeploymentPhase {
     $requiredKeys = @("ArgoCdDeploymentYamlPath", "ArgoCDyaml", "ArgocdNameSpace", "ClusterId", "ClusterName", "ContextName", "StoragePolicyId", "SupervisorId", "VcenterCredential")
     foreach ($key in $requiredKeys) {
         if (-not $Context.ContainsKey($key) -or $null -eq $Context[$key]) {
-            throw "Invoke-ArgoCDDeploymentPhase: required context key '$key' is missing or null."
+            Write-LogMessage -Type ERROR -Message "Invoke-ArgoCDDeploymentPhase: required context key '$key' is missing or null."
+            throw [VcfDeploymentException]::new()
         }
     }
 
@@ -1351,7 +1357,8 @@ Function Invoke-ArgoCDDeploymentPhase {
         # Note: $Script:VCenterUser is still read from script scope — it is the SSO username, not a secret.
         # VcenterCredential is passed through the context object; the plain password is extracted only at env-var assignment.
         if ($ctxResult -and -not $ctxResult.Success) {
-            throw "Deployment failed. VCF context switch failed. Check logs for details."
+            Write-LogMessage -Type ERROR -Message "Deployment failed. VCF context switch failed. Check logs for details."
+            throw [VcfDeploymentException]::new()
         }
         Write-LogMessage -Type DEBUG -Message "Calling Add-ArgoCDInstance with namespace: `"$argocdNameSpace`", YAML path: `"$argoCdDeploymentYamlPath`"."
         Add-ArgoCDInstance -ArgoCdNamespace $argocdNameSpace -ArgoCdDeploymentYamlPath $argoCdDeploymentYamlPath -ContextName $contextName -ClusterId $clusterId -Service $argoServiceName -InsecureTls:$insecureTlsArgoCD
@@ -1501,9 +1508,12 @@ Function Initialize-VcfEdgeAtScale {
             }
         } else {
             Write-LogMessage -Type ERROR -Message "No clusters found in infrastructure JSON."
-            throw [VcfDeploymentException]::new("No clusters found in infrastructure JSON.")
+            throw [VcfDeploymentException]::new()
         }
 
+        # Ensure VcfCmd is resolved even when today's log file already existed at startup
+        # (New-LogFile only calls Get-EnvironmentSetup on first creation of the daily log file).
+        $null = Get-VcfEdgeAtScaleVcfCmd
         Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
         Test-CommandAvailability -Command $Script:KubectlCmd -Description "kubectl"
 
@@ -1568,8 +1578,8 @@ Function Initialize-VcfEdgeAtScale {
         # Check if the vCenter version is supported.
         $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
-            # Connection cleanup handled by function-level finally block.
-            throw "vCenter version check failed: $($result.ErrorMessage)"
+            Write-LogMessage -Type ERROR -Message "vCenter version check failed: $($result.ErrorMessage)"
+            throw [VcfDeploymentException]::new()
         }
 
         # Enforce vCenter 9 supervisor limit (default 50 per vCenter per product guidance); fail if already at limit so we cannot add another.
@@ -1580,7 +1590,7 @@ Function Initialize-VcfEdgeAtScale {
             if ($currentSupervisorCount -ge $MaximumSupervisorsPerVcenter) {
                 Write-LogMessage -Type ERROR -Message "vCenter `"$Script:vCenterName`" has $currentSupervisorCount supervisor(s). vCenter 9 supports a maximum of $MaximumSupervisorsPerVcenter supervisors per vCenter."
                 Write-LogMessage -Type ERROR -Message "Deploy your new edge cluster to a different vCenter, or remove existing supervisors from this vCenter before re-running."
-                throw [VcfDeploymentException]::new("[E-SUPERVISOR-LIMIT-001] Deployment failed. vCenter supervisor limit ($MaximumSupervisorsPerVcenter) reached or exceeded. Deploy to a new vCenter or free capacity. Check logs for details.")
+                throw [VcfDeploymentException]::new()
             }
         }
 
@@ -1628,7 +1638,7 @@ Function Initialize-VcfEdgeAtScale {
                 $witnessHostForCheck = Get-VMHost -Name $witnessNameForCheck -Server $Script:vCenterName -ErrorAction SilentlyContinue
                 if (-not $witnessHostForCheck) {
                     Write-LogMessage -Type ERROR -Message "vSAN witness host `"$witnessNameForCheck`" is not present in vCenter inventory. Add the witness host to vCenter before creating the cluster to avoid cleanup."
-                    throw [VcfDeploymentException]::new("Deployment failed. vSAN witness host `"$witnessNameForCheck`" was not found in vCenter. Add the witness host to vCenter and ensure the name or IP (common.vSanWitnessVmName or clusters[].vSanWitnessVmName) matches the host name in vCenter, then re-run.")
+                    throw [VcfDeploymentException]::new()
                 }
                 Write-LogMessage -Type DEBUG -Message "vSAN witness host `"$witnessNameForCheck`" is present in vCenter inventory; proceeding."
             }
@@ -1678,7 +1688,7 @@ Function Initialize-VcfEdgeAtScale {
                     $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                     if (-not $esxVerResult.Success) {
                         Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                        throw $esxVerResult.ErrorMessage
+                        throw [VcfDeploymentException]::new()
                     }
                     $esxVersionChecked[$esxHost] = $true
                 } catch {
@@ -1734,7 +1744,7 @@ Function Initialize-VcfEdgeAtScale {
                 $networkSegments = $cluster.networking.networkSegments
             } else {
                 Write-LogMessage -Type ERROR -Message "Cluster with edgeSite `"$currentEdgeSite`" has no network segments specified."
-                throw [VcfDeploymentException]::new("Cluster with edgeSite `"$currentEdgeSite`" has no network segments specified.")
+                throw [VcfDeploymentException]::new()
             }
 
             # Extract supervisor services (ArgoCD configuration). Cluster level takes priority over common.
@@ -1805,7 +1815,7 @@ Function Initialize-VcfEdgeAtScale {
                             $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                             if (-not $esxVerResult.Success) {
                                 Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                throw $esxVerResult.ErrorMessage
+                                throw [VcfDeploymentException]::new()
                             }
                             $esxVersionChecked[$esxHost] = $true
                         }
@@ -1829,7 +1839,7 @@ Function Initialize-VcfEdgeAtScale {
                                     $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                                     if (-not $esxVerResult.Success) {
                                         Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                        throw $esxVerResult.ErrorMessage
+                                        throw [VcfDeploymentException]::new()
                                     }
                                     $esxVersionChecked[$esxHost] = $true
                                 }
@@ -1855,7 +1865,8 @@ Function Initialize-VcfEdgeAtScale {
                 }
 
                 if ($esxConnectionFailed) {
-                    throw "One or more ESX hosts could not be connected or verified. Check logs for details."
+                    Write-LogMessage -Type ERROR -Message "One or more ESX hosts could not be connected or verified. Check logs for details."
+                    throw [VcfDeploymentException]::new()
                 }
             }
             elseif ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
@@ -1879,7 +1890,7 @@ Function Initialize-VcfEdgeAtScale {
                                 $esxVerResult = Test-ESXVersion -ServerName $esxHost -MinimumVersion "9.0.0"
                                 if (-not $esxVerResult.Success) {
                                     Write-LogMessage -Type ERROR -Message $esxVerResult.ErrorMessage
-                                    throw $esxVerResult.ErrorMessage
+                                    throw [VcfDeploymentException]::new()
                                 }
                                 $esxVersionChecked[$esxHost] = $true
                             }
@@ -1920,7 +1931,7 @@ Function Initialize-VcfEdgeAtScale {
                         }
                         if ($retryResponse -ne "Y") {
                             Write-LogMessage -Type ERROR -Message "User chose not to retry. Exiting."
-                            throw [VcfDeploymentException]::new("Authentication failed")
+                            throw [VcfDeploymentException]::new()
                         }
                         Write-Host ""
                         if ($esxUniquePassword) {
@@ -1945,7 +1956,7 @@ Function Initialize-VcfEdgeAtScale {
                         Write-LogMessage -Type INFO -Message "Retrying credential validation with new password..."
                     } else {
                         Write-LogMessage -Type ERROR -Message "Maximum retry attempts reached or non-authentication error occurred."
-                        throw [VcfDeploymentException]::new("Maximum retry attempts reached or non-authentication error occurred.")
+                        throw [VcfDeploymentException]::new()
                     }
                 }
             }
@@ -2062,7 +2073,7 @@ Function Initialize-VcfEdgeAtScale {
                         }
                         if (-not $vsanCheck.HasCompliantInterface) {
                             Write-LogMessage -Type ERROR -Message "No VMkernel with vSAN and vSAN witness traffic found on host `"$dataHostName`" (post-VDS). Use networkingVmKernelInterfaces for vMotion and vSAN (e.g. vmk2); vmk0 may carry vSAN witness only when there is no dedicated vmk3."
-                            throw [VcfDeploymentException]::new("Deployment failed. vSAN data nodes require at least one VMkernel with vSAN (e.g. vmk2) and at least one with vSAN witness (vmk0 or vmk3). Configure networkingVmKernelInterfaces and ensure Add-VmkernelInterfacesFromNetworkingConfig created the VMkernels. Check logs for details.")
+                            throw [VcfDeploymentException]::new()
                         }
                     }
                 }
@@ -2141,7 +2152,7 @@ Function Initialize-VcfEdgeAtScale {
                     throw  # already logged and typed — propagate without re-wrapping
                 } catch {
                     Write-LogMessage -Type ERROR -Message "Get-Datastore failed for vSAN ESA datastore `"$datastoreName`": $($_.Exception.Message)."
-                    throw [VcfDeploymentException]::new("Deployment failed. Could not find vSAN ESA datastore `"$datastoreName`". If the datastore is not yet visible, wait for vSAN to finish initializing and retry. Check logs for details.")
+                    throw [VcfDeploymentException]::new()
                 }
                 $storagePolicyTagObject = Get-Tag -Name $Script:SupervisorName -Category $storagePolicyTagCatalog -Server $Script:vCenterName -ErrorAction Stop
                 $existingTagAssignment = Get-TagAssignment -Entity $vsanDatastoreObject -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Tag.Id -eq $storagePolicyTagObject.Id }
@@ -2168,7 +2179,7 @@ Function Initialize-VcfEdgeAtScale {
                     throw  # already logged and typed — propagate without re-wrapping
                 } catch {
                     Write-LogMessage -Type ERROR -Message "Get-Datastore failed for vSAN OSA datastore `"$datastoreName`": $($_.Exception.Message)."
-                    throw [VcfDeploymentException]::new("Deployment failed. Could not find vSAN OSA datastore `"$datastoreName`". If the datastore is not yet visible, wait for vSAN to finish initializing and retry. Check logs for details.")
+                    throw [VcfDeploymentException]::new()
                 }
                 $storagePolicyTagObject = Get-Tag -Name $Script:SupervisorName -Category $storagePolicyTagCatalog -Server $Script:vCenterName -ErrorAction Stop
                 $existingTagAssignment = Get-TagAssignment -Entity $vsanDatastoreObject -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Tag.Id -eq $storagePolicyTagObject.Id }
@@ -2189,7 +2200,7 @@ Function Initialize-VcfEdgeAtScale {
                     throw  # already logged and typed — propagate without re-wrapping
                 } catch {
                     Write-LogMessage -Type ERROR -Message "Failed to get the ESX host `"$firstEsxHost`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to get the ESX host `"$firstEsxHost`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+                    throw [VcfDeploymentException]::new()
                 }
                 $storageAlreadyProvisioned = Set-NewDatastore -DatastoreName $datastoreName -EsxHost $esxHostObject -DiskCanonicalName $diskCanonicalName -TagName $Script:SupervisorName
             }
@@ -2231,12 +2242,12 @@ Function Initialize-VcfEdgeAtScale {
                 } else {
                     Write-LogMessage -Type ERROR -Message "Get-SpbmCompatibleStorage failed for storage policy `"$storagePolicyName`": $errMsg"
                 }
-                throw "Deployment failed. Could not verify storage policy compatibility. Check logs for details."
+                throw [VcfDeploymentException]::new()
             }
             if (-not $compatibleStorage -or $compatibleStorage.Count -eq 0) {
                 Write-LogMessage -Type ERROR -Message "No compatible datastore found for storage policy `"$storagePolicyName`" (required for supervisor Default Kubernetes Content Library)."
                 Write-LogMessage -Type ERROR -Message "Ensure a datastore is tagged with tag `"$Script:SupervisorName`" from catalog `"$storagePolicyTagCatalog`" (same tag used by the policy)."
-                throw [VcfDeploymentException]::new("Deployment failed. No compatible datastore for storage policy `"$storagePolicyName`". Check logs for details.")
+                throw [VcfDeploymentException]::new()
             }
             Write-LogMessage -Type DEBUG -Message "Storage policy `"$storagePolicyName`" has $($compatibleStorage.Count) compatible datastore(s). Proceeding with supervisor enablement."
 
@@ -2277,7 +2288,7 @@ Function Initialize-VcfEdgeAtScale {
                     Write-LogMessage -Type ERROR -Message "  - The file path specified in infrastructure.json may be incorrect"
                     Write-LogMessage -Type ERROR -Message "  - The file may not exist at the specified location"
                     Write-LogMessage -Type ERROR -Message "  - If using a relative path, ensure you're running from the correct directory"
-                    throw [VcfDeploymentException]::new("Deployment failed: ArgoCD deployment YAML file validation failed. Please check the logs above for specific error details.")
+                    throw [VcfDeploymentException]::new()
                 } else {
                     Write-LogMessage -Type DEBUG -Message "The namespace specified in $InfrastructureJson is consistent in the ArgoCD deployment yaml file."
                 }
@@ -2322,7 +2333,7 @@ Function Initialize-VcfEdgeAtScale {
                     ContextName                  = $contextName
                     CurrentEdgeSite              = $currentEdgeSite
                     InputData                    = $inputData
-                    InsecureTls                  = $InsecureTls
+                    InsecureTls                  = $true
                     LabEnvironment               = $labEnvironment
                     PreserveAutoGeneratedKeyCert = $preserveAutoGeneratedKeyCertPair
                     SaveHarborYaml               = $SaveHarborYaml
@@ -2415,7 +2426,8 @@ Function Initialize-VcfEdgeAtScale {
                     if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "vSAN deployment failure (edgeSite `"$currentEdgeSite`")" -SingleSite:($clustersToProcess.Count -eq 1)
                         if ($rollbackDecision -eq "DoNotRollback") {
-                            throw [RollbackSkippedException]::new()
+                            Write-LogMessage -Type WARNING -Message "Rollback skipped for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                            continue
                         }
                         $deploymentFailureMessage = $_.Exception.Message
                         $vsanRollbackCompleted = $false
@@ -2451,7 +2463,7 @@ Function Initialize-VcfEdgeAtScale {
                             if ($restoreResult.RestoreAttempted -and -not $restoreResult.Success) {
                                 $Script:RollbackFailed = $true
                                 Write-LogMessage -Type ERROR -Message "Management was not moved back to VSS for cluster `"$clusterName`" during rollback. $($restoreResult.Message) Move vmk0 off the VDS manually on each host, then retry cleanup or rollback. Skipping VDS and cluster removal."
-                                throw [VcfDeploymentException]::new("Management restore did not succeed during rollback; cannot safely remove VDS and cluster.")
+                                throw [VcfDeploymentException]::new()
                             }
                             Invoke-VsanDeploymentRollback @rollbackParams
                             # Guard: a supervisor from a prior deployment may still be running. Attempting VDS
@@ -2459,7 +2471,7 @@ Function Initialize-VcfEdgeAtScale {
                             if (Test-SupervisorDeployedOnCluster -ClusterName $clusterName) {
                                 $Script:RollbackFailed = $true
                                 Write-LogMessage -Type ERROR -Message "Supervisor is active on cluster `"$clusterName`" from a prior deployment. VDS and cluster cannot be removed while the supervisor is running. Deactivate it first with -CleanUp Supervisor, then remove compute with -CleanUp Compute."
-                                throw [VcfDeploymentException]::new("Rollback incomplete: supervisor is active on cluster `"$clusterName`" from a prior deployment. Run -CleanUp Supervisor first, then -CleanUp Compute.")
+                                throw [VcfDeploymentException]::new()
                             }
                             $vdsRemovalSucceeded = $true
                             Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
@@ -2488,7 +2500,7 @@ Function Initialize-VcfEdgeAtScale {
                                 $Script:RollbackFailed = $true
                                 Write-LogMessage -Type WARNING -CompletePending -Message "Partial (see warnings above)"
                                 Write-LogMessage -Type ERROR -Message "VDS removal failed during vSAN rollback; could not remove cluster. Remove VMkernel adapters and VDS manually, then remove the cluster. Script will exit with failure."
-                                throw [VcfDeploymentException]::new("Deployment failed. VDS could not be removed during rollback (port groups in use). Remove VMkernel adapters and VMs off the VDS port groups, then remove the VDS and cluster manually. Check logs for details.")
+                                throw [VcfDeploymentException]::new()
                             }
                             Write-LogMessage -Type INFO -Message "Complete rollback finished for edgeSite `"$currentEdgeSite`" (VDS and cluster removed)."
                             $vsanRollbackCompleted = $true
@@ -2498,15 +2510,17 @@ Function Initialize-VcfEdgeAtScale {
                         } catch {
                             throw
                         }
-                        # Rollback succeeded; throw a clean message describing what failed and what to fix.
+                        # Rollback succeeded; log what failed and signal clean failure.
                         if ($vsanRollbackCompleted) {
-                            throw "Deployment failed for edgeSite `"$currentEdgeSite`" (rollback completed). $deploymentFailureMessage"
+                            Write-LogMessage -Type ERROR -Message "Deployment failed for edgeSite `"$currentEdgeSite`" (rollback completed). $deploymentFailureMessage"
+                            throw [VcfDeploymentException]::new()
                         }
                     } elseif ($storagePolicyType -eq "VMFS") {
                         $rollbackDecision = Invoke-PauseBeforeRollbackIfRequested -ForcePrompt -RollbackContext "deployment failure (edgeSite `"$currentEdgeSite`"); compute rollback" -SingleSite:($clustersToProcess.Count -eq 1)
                         $restoreResult = $null
                         if ($rollbackDecision -eq "DoNotRollback") {
-                            throw [RollbackSkippedException]::new()
+                            Write-LogMessage -Type WARNING -Message "Rollback skipped for edgeSite `"$currentEdgeSite`"; leaving site in current state. Continuing to next site."
+                            continue
                         }
                         Write-LogMessage -Type INFO -Message "Running complete rollback for edgeSite `"$currentEdgeSite`" (VMFS: remove VDS, datastore, cluster)."
                         $nicListForRestore = Get-EffectiveNicListForCluster -Cluster $cluster -CommonNicList $inputData.common.nicList
@@ -2531,7 +2545,7 @@ Function Initialize-VcfEdgeAtScale {
                         if (Test-SupervisorDeployedOnCluster -ClusterName $clusterName) {
                             $Script:RollbackFailed = $true
                             Write-LogMessage -Type ERROR -Message "Supervisor is active on cluster `"$clusterName`" from a prior deployment. VDS and cluster cannot be removed while the supervisor is running. Deactivate it first with -CleanUp Supervisor, then remove compute with -CleanUp Compute."
-                            throw [VcfDeploymentException]::new("Rollback incomplete: supervisor is active on cluster `"$clusterName`" from a prior deployment. Run -CleanUp Supervisor first, then -CleanUp Compute.")
+                            throw [VcfDeploymentException]::new()
                         }
                         $vdsRemovalSucceeded = $true
                         Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
@@ -2553,7 +2567,7 @@ Function Initialize-VcfEdgeAtScale {
                         Write-LogMessage -Type INFO -Message "Compute rollback completed for edgeSite `"$currentEdgeSite`"."
                     }
                 }
-                throw
+                throw [VcfDeploymentException]::new()
             }
         }
         if ($ComputeOnly) {
@@ -2669,7 +2683,7 @@ Function ConvertFrom-Yaml {
         } catch {
             # Provide detailed error information for troubleshooting YAML parsing issues.
 
-            Write-Error "Failed to parse YAML: $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message "Failed to parse YAML: $($_.Exception.Message)"
             return Write-ErrorAndReturn -ErrorMessage "YAML parsing failed: $($_.Exception.Message)" -ErrorCode "ERR_YAML_PARSE"
         }
     }

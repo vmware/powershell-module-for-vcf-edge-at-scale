@@ -687,7 +687,7 @@ Function Wait-HarborServiceNamespaceTermination {
             if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($pvcOutput) -and $pvcOutput -notmatch "No resources found") {
                 Write-LogMessage -Type WARNING -Message "Stuck PVCs in `"$stuckNs`" (Retain reclaim policy may block namespace termination):"
                 $pvcOutput -split "`n" | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | ForEach-Object {
-                    Write-LogMessage -Type WARNING -Message "  $($_.Exception.Message)"
+                    Write-LogMessage -Type WARNING -Message "  $_"
                 }
                 Write-LogMessage -Type WARNING -Message "Delete PVCs manually if present: kubectl delete pvc --all -n $stuckNs"
             }
@@ -701,7 +701,7 @@ Function Wait-HarborServiceNamespaceTermination {
             if ($LASTEXITCODE -eq 0 -and -not [String]::IsNullOrWhiteSpace($podOutput) -and $podOutput -notmatch "No resources found") {
                 Write-LogMessage -Type WARNING -Message "Stuck pods in `"$stuckNs`" (pods in Terminating state can delay namespace GC):"
                 $podOutput -split "`n" | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | ForEach-Object {
-                    Write-LogMessage -Type WARNING -Message "  $($_.Exception.Message)"
+                    Write-LogMessage -Type WARNING -Message "  $_"
                 }
                 Write-LogMessage -Type WARNING -Message "Force-delete stuck pods: kubectl delete pod --all -n $stuckNs --force --grace-period=0"
             }
@@ -1614,7 +1614,8 @@ Function Invoke-SupervisorUpgrade {
             "Initialize-VcenterNamespaceManagementSoftwareClustersUpgradeSpec"
         )
         if ($null -eq $upgradeSpecCmd) {
-            throw "Required cmdlet for supervisor upgrade spec was not found (Initialize-NamespaceManagementSoftwareClustersUpgradeSpec or Initialize-VcenterNamespaceManagementSoftwareClustersUpgradeSpec)."
+            Write-LogMessage -Type ERROR -Message "Required cmdlet for supervisor upgrade spec was not found (Initialize-NamespaceManagementSoftwareClustersUpgradeSpec or Initialize-VcenterNamespaceManagementSoftwareClustersUpgradeSpec)."
+            throw [VcfDeploymentException]::new("Required cmdlet for supervisor upgrade spec was not found (Initialize-NamespaceManagementSoftwareClustersUpgradeSpec or Initialize-VcenterNamespaceManagementSoftwareClustersUpgradeSpec).")
         }
 
         $upgradeSpec = & $upgradeSpecCmd -DesiredVersion $DesiredVersion -IgnorePrecheckWarnings $ignorePrecheckWarningsBool
@@ -3524,7 +3525,8 @@ Function Invoke-VlcmClusterComplianceAndRemediate {
                 return
             }
             if ($proceedResponse -match '^N(o)?$') {
-                throw "Deployment failed. Cluster must be compliant to the vLCM image before supervisor creation. vLCM reported: $summary"
+                Write-LogMessage -Type ERROR -Message "Deployment failed. Cluster must be compliant to the vLCM image before supervisor creation. vLCM reported: $summary"
+                throw [VcfDeploymentException]::new("Deployment failed. Cluster must be compliant to the vLCM image before supervisor creation. vLCM reported: $summary")
             }
             Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N."
         } while ($true)
@@ -3883,7 +3885,8 @@ Function Add-Supervisor {
                 Write-LogMessage -Type WARNING -Message "Supervisor deactivation failed or did not complete in time: $($disableResult.ErrorMessage). Manually disable the supervisor in vCenter if needed."
             }
             $Script:RollbackAttempted = $true
-            throw "Supervisor deployment failed for cluster `"$ClusterName`": $($disableResult.ErrorMessage). Check logs for details."
+            Write-LogMessage -Type ERROR -Message "Supervisor deployment failed for cluster `"$ClusterName`": $($disableResult.ErrorMessage). Check logs for details."
+            throw [VcfDeploymentException]::new("Supervisor deployment failed for cluster `"$ClusterName`": $($disableResult.ErrorMessage). Check logs for details.")
         }
 
         Write-LogMessage -Type DEBUG -Message "[Step 5/5] Supervisor is ready (elapsed: $($waitResult.ElapsedSeconds) seconds)"
@@ -4095,7 +4098,8 @@ Function Invoke-MigrateHostManagementToVds {
         if (-not [String]::IsNullOrWhiteSpace($name)) { $nicNames += $name }
     }
     if ($nicNames.Count -eq 0) {
-        throw "Deployment failed. NicList is empty for host `"$hostDisplay`"."
+        Write-LogMessage -Type ERROR -Message "Deployment failed. NicList is empty for host `"$hostDisplay`"."
+        throw [VcfDeploymentException]::new("Deployment failed. NicList is empty for host `"$hostDisplay`".")
     }
 
     $prevWarningPreference = $WarningPreference
@@ -4206,7 +4210,8 @@ Function Invoke-MigrateHostManagementToVds {
                         if (-not $mgmtPortGroup) { $mgmtPortGroup = Get-VDPortgroup -Name $ManagementPortGroupName -VDSwitch $vdsObject -WarningAction SilentlyContinue -ErrorAction SilentlyContinue }
                     }
                     if (-not $mgmtPortGroup) {
-                        throw "Management port group `"$ManagementPortGroupName`" was reported as already existing on VDS `"$VdsName`" but could not be found. Check the VDS in vCenter and retry, or remove the conflicting port group if it exists on another switch."
+                        Write-LogMessage -Type ERROR -Message "Management port group `"$ManagementPortGroupName`" was reported as already existing on VDS `"$VdsName`" but could not be found. Check the VDS in vCenter and retry, or remove the conflicting port group if it exists on another switch."
+                        throw [VcfDeploymentException]::new("Management port group `"$ManagementPortGroupName`" was reported as already existing on VDS `"$VdsName`" but could not be found. Check the VDS in vCenter and retry, or remove the conflicting port group if it exists on another switch.")
                     }
                     break
                 }
@@ -4221,7 +4226,8 @@ Function Invoke-MigrateHostManagementToVds {
         } while ($mgmtPgAttempt -le $mgmtPgMaxAttempts)
     }
     if (-not $mgmtPortGroup) {
-        throw "Deployment failed. Could not get or create management port group `"$ManagementPortGroupName`" on VDS `"$VdsName`"."
+        Write-LogMessage -Type ERROR -Message "Deployment failed. Could not get or create management port group `"$ManagementPortGroupName`" on VDS `"$VdsName`"."
+        throw [VcfDeploymentException]::new("Deployment failed. Could not get or create management port group `"$ManagementPortGroupName`" on VDS `"$VdsName`".")
     }
 
     if (-not $hostAlreadyHasPnicOnVds) {
@@ -5410,7 +5416,8 @@ Function Set-VirtualDistributedSwitch {
             foreach ($vmHost in $hosts) {
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $VdsName
                 if ($result -and -not $result.Success) {
-                    throw "Failed to add host `"$vmHost`" to VDS `"$VdsName`": $($result.ErrorMessage)"
+                    Write-LogMessage -Type ERROR -Message "Failed to add host `"$vmHost`" to VDS `"$VdsName`": $($result.ErrorMessage)"
+                    throw [VcfDeploymentException]::new("Failed to add host `"$vmHost`" to VDS `"$VdsName`": $($result.ErrorMessage)")
                 }
             }
             Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$VdsName`" for $($hosts.Count) host(s)... "
@@ -5420,7 +5427,8 @@ Function Set-VirtualDistributedSwitch {
             Write-LogMessage -Type INFO -CompletePending -Message "Done"
             $result = New-VDSPortGroups -PortGroups $PortGroups -VdsName $VdsName
             if ($result -and -not $result.Success) {
-                throw "Failed to create VDS port groups on `"$VdsName`": $($result.ErrorMessage)"
+                Write-LogMessage -Type ERROR -Message "Failed to create VDS port groups on `"$VdsName`": $($result.ErrorMessage)"
+                throw [VcfDeploymentException]::new("Failed to create VDS port groups on `"$VdsName`": $($result.ErrorMessage)")
             }
             Set-VDSUplinkTeamingActiveStandby -VdsName $VdsName
         } else {
@@ -5431,9 +5439,15 @@ Function Set-VirtualDistributedSwitch {
             $vdsObjectSw2 = Invoke-VDSCreation -DatacenterObject $datacenterObject -Mtu $Mtu -NumUplinks "2" -VdsName $vdsNameSw2
             foreach ($vmHost in $hosts) {
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $vdsNameSw1
-                if ($result -and -not $result.Success) { throw "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw1`": $($result.ErrorMessage)" }
+                if ($result -and -not $result.Success) {
+                    Write-LogMessage -Type ERROR -Message "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw1`": $($result.ErrorMessage)"
+                    throw [VcfDeploymentException]::new("Failed to add host `"$vmHost`" to VDS `"$vdsNameSw1`": $($result.ErrorMessage)")
+                }
                 $result = Add-HostToVDS -Hostname $vmHost -VdsName $vdsNameSw2
-                if ($result -and -not $result.Success) { throw "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)" }
+                if ($result -and -not $result.Success) {
+                    Write-LogMessage -Type ERROR -Message "Failed to add host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)"
+                    throw [VcfDeploymentException]::new("Failed to add host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)")
+                }
             }
             $nicListFirstTwo = @($NicList | Select-Object -First 2)
             Write-LogMessage -Type INFO -NoNewline -Message "Migrating management (vmk0) to VDS `"$vdsNameSw1`" for $($hosts.Count) host(s)... "
@@ -5445,13 +5459,15 @@ Function Set-VirtualDistributedSwitch {
             foreach ($vmHost in $hosts) {
                 $result = Add-PhysicalAdaptersToVDS -Hostname $vmHost -NicList $nicListLastTwo -VdsName $vdsNameSw2 -VdsObject $vdsObjectSw2
                 if ($result -and -not $result.Success) {
-                    throw "Failed to add physical adapters for host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)"
+                    Write-LogMessage -Type ERROR -Message "Failed to add physical adapters for host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)"
+                    throw [VcfDeploymentException]::new("Failed to add physical adapters for host `"$vmHost`" to VDS `"$vdsNameSw2`": $($result.ErrorMessage)")
                 }
             }
             # Network segment (guest) port groups on first VDS only.
             $result = New-VDSPortGroups -PortGroups $PortGroups -VdsName $vdsNameSw1
             if ($result -and -not $result.Success) {
-                throw "Failed to create VDS port groups on `"$vdsNameSw1`": $($result.ErrorMessage)"
+                Write-LogMessage -Type ERROR -Message "Failed to create VDS port groups on `"$vdsNameSw1`": $($result.ErrorMessage)"
+                throw [VcfDeploymentException]::new("Failed to create VDS port groups on `"$vdsNameSw1`": $($result.ErrorMessage)")
             }
             Set-VDSUplinkTeamingActiveStandby -VdsName $vdsNameSw1
             Set-VDSUplinkTeamingActiveStandby -VdsName $vdsNameSw2
@@ -6136,7 +6152,7 @@ Function Set-VCFContextCreate {
             $createOutputText -match "Login failed for the following") {
             Write-LogMessage -Type ERROR -Message "VCF CLI context `"$ContextName`" was partially created but authentication to the supervisor cluster at `"$Endpoint`" failed. Check network connectivity and credentials."
             Write-LogMessage -Type DEBUG -Message "Partial login failure output:`n$createOutputText"
-            throw "Deployment failed. Supervisor authentication failed. Check logs for details."
+            throw [VcfDeploymentException]::new("Deployment failed. Supervisor authentication failed. Check logs for details.")
         }
 
         # Step 3: Verify context was created.
@@ -7415,7 +7431,7 @@ Function Add-ArgoCDInstance {
                 $errorMessage = $_.Exception.Message
                 Write-LogMessage -Type ERROR -Message "Error during kubectl authentication check: $errorMessage."
                 Write-Progress -Activity "Waiting for kubectl authentication" -Status "Error" -Completed
-                throw "kubectl authentication failed: $errorMessage"
+                throw [VcfDeploymentException]::new("kubectl authentication failed: $errorMessage")
             }
         } while ($elapsedTime -lt $authTimeoutSeconds)
 
@@ -7616,6 +7632,8 @@ Function Show-ArgoCDInstanceDetails {
     Write-LogMessage -Type INFO -ForceToScreen -Message "╚═══════════════════════════════════════╝"
 
     # Cleanup credentials.
+    $secretErrorOutput = $null
+    Remove-Variable -Name secretErrorOutput -Force -ErrorAction SilentlyContinue
     Remove-Variable -Name decodedPassword -Force
     Remove-Variable -Name encodedPassword -Force
     [System.GC]::Collect()
@@ -7861,7 +7879,8 @@ Function Get-Base64FromYml {
 
     try {
         if (-not (Test-Path -Path $Path)) {
-            throw "YAML file not found: $Path"
+            Write-LogMessage -Type ERROR -Message "YAML file not found: $Path"
+            throw [VcfDeploymentException]::new("YAML file not found: $Path")
         }
 
         $raw = Get-Content -Path $Path -Raw -ErrorAction Stop
@@ -7910,7 +7929,8 @@ Function Set-ArgoCDService {
             "Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec"
         )
         if (-not $createSpecCmd) {
-            throw "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
+            Write-LogMessage -Type ERROR -Message "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
+            throw [VcfDeploymentException]::new("Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec).")
         }
         $vcenterNamespaceManagementSupervisorServicesCheckContentRequest = & $createSpecCmd -CarvelSpec $vcenterNamespaceManagementSupervisorServicesCarvelCreateSpec
         Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction Stop | Out-Null
@@ -7966,7 +7986,8 @@ Function Set-HarborService {
             "Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec"
         )
         if (-not $createSpecCmd) {
-            throw "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
+            Write-LogMessage -Type ERROR -Message "Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec)."
+            throw [VcfDeploymentException]::new("Required cmdlet for Supervisor Services CreateSpec was not found (Initialize-NamespaceManagementSupervisorServicesCreateSpec or Initialize-VcenterNamespaceManagementSupervisorServicesCreateSpec).")
         }
         $vcenterNamespaceManagementSupervisorServicesCheckContentRequest = & $createSpecCmd -CarvelSpec $vcenterNamespaceManagementSupervisorServicesCarvelCreateSpec
         Invoke-CreateNamespaceManagementSupervisorServices -vcenterNamespaceManagementSupervisorServicesCreateSpec $vcenterNamespaceManagementSupervisorServicesCheckContentRequest -Confirm:$false -ErrorAction Stop | Out-Null
@@ -8301,7 +8322,7 @@ Function Install-HarborSupervisorService {
                     Write-Host ""
                     Write-LogMessage -Type ERROR -Message "SOLUTION: In vCenter UI go to Menu > Supervisor Management > Services, find `"$Service`", and either deactivate then delete the service, then re-run this script."
                     Write-LogMessage -Type WARNING -Message "If the service is stuck: kubectl delete namespace $serviceNamespace"
-                    throw "Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`". Check logs for details."
+                    throw [VcfDeploymentException]::new("Harbor service `"$Service`" version `"$Version`" is not in activated state on supervisor `"$SupervisorId`". Check logs for details.")
                 }
                 "Signature verification result for Service Version ([0-9.-]+) not found" {
                     $requestedVersion = $matches[1]
@@ -8334,7 +8355,7 @@ Function Install-HarborSupervisorService {
                     } else {
                         Write-LogMessage -Type ERROR -Message "Unexpected error in Install-HarborSupervisorService: $errMsg."
                     }
-                    throw "Harbor installation failed: $cleanMessage"
+                    throw [VcfDeploymentException]::new("Harbor installation failed: $cleanMessage")
                 }
             }
         }
@@ -8500,7 +8521,7 @@ Function Install-HarborSupervisorService {
                     } catch {
                         Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor ERROR): $($_.Exception.Message)"
                     }
-                    throw "Deployment failed. Harbor service entered ERROR state. Check logs."
+                    throw [VcfDeploymentException]::new("Deployment failed. Harbor service entered ERROR state. Check logs.")
                 }
             } catch {
                 if ($_.Exception.Message -match "Deployment failed") { throw }
@@ -8515,7 +8536,8 @@ Function Install-HarborSupervisorService {
         } catch {
             Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Harbor timeout): $($_.Exception.Message)"
         }
-        throw "Deployment failed. Harbor service configuration timed out. Check logs."
+        Write-LogMessage -Type ERROR -Message "Deployment failed. Harbor service configuration timed out. Check logs."
+        throw [VcfDeploymentException]::new("Deployment failed. Harbor service configuration timed out. Check logs.")
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
@@ -8874,7 +8896,7 @@ Function Get-ArgoCDServiceDetail {
     Write-LogMessage -Type DEBUG -Message "Entered Get-ArgoCDServiceDetail function..."
 
     try {
-        $yamlContent = Get-Content -Raw -Path $Path
+        $yamlContent = Get-Content -Raw -Path $Path -ErrorAction Stop
 
         # Split multi-document YAML by --- separator.
 
@@ -8946,7 +8968,7 @@ Function Get-ArgoCDServiceDetail {
                 }
             }
         }
-        throw "ArgoCD service context key validation failed. Check logs for details."
+        throw [VcfDeploymentException]::new("ArgoCD service context key validation failed. Check logs for details.")
     }
 }
 Function Get-ContentLibraryId {
@@ -10047,7 +10069,7 @@ Function Get-StoragePolicyId {
         return $storagePolicyId
     } catch {
         Write-LogMessage -Type "ERROR" -Message "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new("Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
 Function Get-OrCreateSupervisor {
@@ -10217,10 +10239,12 @@ Function Get-AvailableVmClassNames {
         }
     } catch {
         Write-LogMessage -Type DEBUG -Message "Get-AvailableVmClassNames: Invoke-ListNamespaceManagementVirtualMachineClasses failed: $($_.Exception.Message)"
-        throw "Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium)."
+        Write-LogMessage -Type ERROR -Message "Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium)."
+        throw [VcfDeploymentException]::new("Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium).")
     }
     if ($vmClassNames.Count -eq 0) {
-        throw "Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium)."
+        Write-LogMessage -Type ERROR -Message "Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium)."
+        throw [VcfDeploymentException]::new("Could not list VM classes from vCenter. Set clusters[].supervisorServices.vmClass in infrastructure.json to an array of VM class names (e.g. best-effort-small, best-effort-medium).")
     }
     Write-LogMessage -Type INFO -Message "Using all available VM classes for ArgoCD namespace."
     return $vmClassNames
@@ -10374,7 +10398,8 @@ Function Add-ArgoCDNamespace {
     $invalidVmClasses = @($VmClasses | Where-Object { [string]$_ -match '\$' })
     if ($invalidVmClasses.Count -gt 0) {
         $invalidList = $invalidVmClasses -join ', '
-        throw "Invalid VM class name(s): $invalidList. VM class names must not contain '$' (dollar sign)."
+        Write-LogMessage -Type ERROR -Message "Invalid VM class name(s): $invalidList. VM class names must not contain '$' (dollar sign)."
+        throw [VcfDeploymentException]::new("Invalid VM class name(s): $invalidList. VM class names must not contain '$' (dollar sign).")
     }
 
     try {
@@ -10420,7 +10445,7 @@ Function Add-ArgoCDNamespace {
                 Write-LogMessage -Type ERROR -Message "Resolution: Wait for the supervisor to reach a stable state and retry."
             }
 
-            throw "Supervisor update failed; supervisor did not reach stable state. Check logs for details."
+            throw [VcfDeploymentException]::new("Supervisor update failed; supervisor did not reach stable state. Check logs for details.")
         }
         Start-Sleep $NamespaceStabilizationDelaySeconds
 
@@ -10495,7 +10520,8 @@ Function Add-ArgoCDNamespace {
                 Write-LogMessage -Type WARNING -Message "You may need to manually delete the namespace."
             }
 
-            throw "ArgoCD namespace `"$argocdNameSpace`" could not be deleted. Check logs for details."
+            Write-LogMessage -Type ERROR -Message "ArgoCD namespace `"$argocdNameSpace`" could not be deleted. Check logs for details."
+            throw [VcfDeploymentException]::new("ArgoCD namespace `"$argocdNameSpace`" could not be deleted. Check logs for details.")
         }
 
         Start-Sleep $NamespaceStabilizationDelaySeconds
@@ -10503,7 +10529,7 @@ Function Add-ArgoCDNamespace {
     } catch {
         $namespaceError = $_.Exception.Message
         Write-LogMessage -Type "ERROR" -Message "The namespace could not be created: $namespaceError"
-        throw "The namespace could not be created: $namespaceError"
+        throw [VcfDeploymentException]::new("The namespace could not be created: $namespaceError")
     }
 }
 Function Install-ArgoCDOperator {
@@ -10692,7 +10718,7 @@ Function Install-ArgoCDOperator {
                     Write-LogMessage -Type WARNING -Message "  Use kubectl to manually clean up the namespace: kubectl delete namespace $serviceNamespace"
                     Write-LogMessage -Type WARNING -Message "  List namespaces with: kubectl get namespaces"
                     Write-LogMessage -Type WARNING -Message "  Then manually remove the service via vCenter REST API or contact VMware support."
-                    throw "ArgoCD service is not in activated state on supervisor `"$SupervisorId`". Check logs for details."
+                    throw [VcfDeploymentException]::new("ArgoCD service is not in activated state on supervisor `"$SupervisorId`". Check logs for details.")
                 }
                 "Signature verification result for Service Version ([0-9.-]+) not found" {
                     # Service version not available on this supervisor (signature verification failed)
@@ -10749,7 +10775,7 @@ Function Install-ArgoCDOperator {
                         Write-LogMessage -Type ERROR -Message "Unexpected error in Install-ArgoCDOperator: $errMsg."
                     }
 
-                    throw "ArgoCD operator installation failed: $errMsg"
+                    throw [VcfDeploymentException]::new("ArgoCD operator installation failed: $errMsg")
                 }
             }
         }
@@ -10771,7 +10797,7 @@ Function Install-ArgoCDOperator {
                 Write-LogMessage -Type ERROR -Message "  3. Verify the supervisor cluster is in `"Running`" state."
                 Write-LogMessage -Type ERROR -Message "  4. Check for any error messages in the supervisor cluster status."
                 Write-Host ""
-                throw "Deployment failed. ArgoCD operator service was not created. Check logs for details."
+                throw [VcfDeploymentException]::new("Deployment failed. ArgoCD operator service was not created. Check logs for details.")
             } else {
                 # Service might exist but API call failed - continue to monitoring loop.
                 Write-LogMessage -Type DEBUG -Message "Could not verify service existence (may be initializing): $verifyError"
@@ -10798,7 +10824,7 @@ Function Install-ArgoCDOperator {
                     Write-LogMessage -Type ERROR -Message "  3. Look for the ArgoCD service in the Services section of the supervisor cluster."
                     Write-LogMessage -Type ERROR -Message "  4. If the service exists on a different supervisor, verify the cluster ID and supervisor ID are correct."
                     Write-Host ""
-                    throw "Deployment failed. ArgoCD operator service does not exist. Check logs for details."
+                    throw [VcfDeploymentException]::new("Deployment failed. ArgoCD operator service does not exist. Check logs for details.")
                 }
                 # Handle JSON deserialization errors when config_status is empty or invalid.
                 elseif ($errorMessage -match "Error converting value.*config_status") {
@@ -10823,7 +10849,7 @@ Function Install-ArgoCDOperator {
                     Write-LogMessage -Type ERROR -Message "  4. If the cluster is not running, check for errors in the cluster configuration."
                     Write-LogMessage -Type ERROR -Message "  5. Wait for the supervisor cluster to reach `"Running`" state before retrying"
                     Write-Host ""
-                    throw "Deployment failed. Supervisor cluster is not running. Check logs for details."
+                    throw [VcfDeploymentException]::new("Deployment failed. Supervisor cluster is not running. Check logs for details.")
                 }
                 else {
                     # Re-throw unexpected errors
@@ -10918,7 +10944,7 @@ Function Install-ArgoCDOperator {
                             Write-LogMessage -Type ERROR -Message "ArgoCD operator installation failed: $cleanErrorMessage"
                         }
                     }
-                    throw "ArgoCD operator installation failed: $cleanErrorMessage"
+                    throw [VcfDeploymentException]::new("ArgoCD operator installation failed: $cleanErrorMessage")
                 }
                 default {
                     $statusMessage = "Elapsed Time: $elapsedTime seconds - Status: $($serviceOutput.ConfigStatus)"
@@ -10959,7 +10985,7 @@ Function Install-ArgoCDOperator {
         } catch {
             Write-LogMessage -Type DEBUG -Message "Supervisor Kubernetes diagnostics (Argo CD operator outer catch): $($_.Exception.Message)"
         }
-        throw "ArgoCD operator deployment failed. Check logs for details."
+        throw [VcfDeploymentException]::new("ArgoCD operator deployment failed. Check logs for details.")
     }
 }
 Function Resolve-HarborSecretValue {
@@ -11306,7 +11332,8 @@ Function Update-HarborYamlContent {
         # a safety net.
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "secretKey" -Value $SecretKey -RequiredLength 16
         if ($resolvedSecret.Length -ne 16) {
-            throw "Harbor secretKey must be exactly 16 characters but the resolved value is $($resolvedSecret.Length) character(s). Update the `"SECRET_KEY`" environment variable (or harborConfiguration.secretKey) to a 16-character string."
+            Write-LogMessage -Type ERROR -Message "Harbor secretKey must be exactly 16 characters but the resolved value is $($resolvedSecret.Length) character(s). Update the `"SECRET_KEY`" environment variable (or harborConfiguration.secretKey) to a 16-character string."
+            throw [VcfDeploymentException]::new("Harbor secretKey must be exactly 16 characters but the resolved value is $($resolvedSecret.Length) character(s). Update the `"SECRET_KEY`" environment variable (or harborConfiguration.secretKey) to a 16-character string.")
         }
         $YamlContent = $YamlContent -replace '(?m)^(?:#\s*)?secretKey:.*$', ('secretKey: ' + $resolvedSecret.Replace('$', '$$'))
     }
@@ -11583,7 +11610,8 @@ Function New-HarborDataValuesFile {
                 }
                 Write-LogMessage -Type DEBUG -Message "YAML line $($lineNumPre.ToString().PadLeft(4)): $logLinePre"
             }
-            throw "Deployment failed. Generated Harbor YAML is structurally invalid. Check DEBUG logs for the full numbered content."
+            Write-LogMessage -Type ERROR -Message "Deployment failed. Generated Harbor YAML is structurally invalid. Check DEBUG logs for the full numbered content."
+            throw [VcfDeploymentException]::new("Deployment failed. Generated Harbor YAML is structurally invalid. Check DEBUG logs for the full numbered content.")
         }
 
         # Write secrets file with owner-only permissions to prevent other OS users from reading secrets.
@@ -11594,11 +11622,28 @@ Function New-HarborDataValuesFile {
         } finally {
             $fileStream.Dispose()
         }
-        # Restrict file to owner-only on non-Windows platforms (equivalent to chmod 600).
+        # Restrict file to owner-only to prevent other OS users from reading secrets.
         if (-not $IsWindows) {
             & chmod 600 $tempYamlFile
             if ($LASTEXITCODE -ne 0) {
                 Write-LogMessage -Type WARNING -Message "New-HarborDataValuesFile: chmod 600 failed (exit $LASTEXITCODE) on `"$tempYamlFile`". Harbor secrets file may be readable by other OS users."
+            }
+        } else {
+            try {
+                $acl = Get-Acl -Path $tempYamlFile
+                $acl.SetAccessRuleProtection($true, $false)
+                $currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+                $rule = [System.Security.AccessControl.FileSystemAccessRule]::new(
+                    $currentUser,
+                    [System.Security.AccessControl.FileSystemRights]::FullControl,
+                    [System.Security.AccessControl.InheritanceFlags]::None,
+                    [System.Security.AccessControl.PropagationFlags]::None,
+                    [System.Security.AccessControl.AccessControlType]::Allow
+                )
+                $acl.AddAccessRule($rule)
+                Set-Acl -Path $tempYamlFile -AclObject $acl
+            } catch {
+                Write-LogMessage -Type WARNING -Message "New-HarborDataValuesFile: Could not restrict ACL on Harbor secrets file `"$tempYamlFile`": $($_.Exception.Message). File may be readable by other OS users."
             }
         }
 
@@ -11641,7 +11686,7 @@ Function New-HarborDataValuesFile {
         if ($tempYamlFile -and (Test-Path -Path $tempYamlFile)) {
             Remove-Item -Path $tempYamlFile -Force -ErrorAction SilentlyContinue
         }
-        throw "New-HarborDataValuesFile: Failed to create Harbor data values file from template `"$HarborTemplateFilePath`": $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new("New-HarborDataValuesFile: Failed to create Harbor data values file from template `"$HarborTemplateFilePath`": $($_.Exception.Message)")
     }
 }
 Function Convert-CountToInt {
@@ -12160,7 +12205,6 @@ Function ConvertFrom-JsonSafely {
         $errorMessage = $_.Exception.Message
 
         Write-LogMessage -Type ERROR -Message "JSON validation failed for file: $JsonFilePath."
-        Write-Host ""
 
         switch -Regex ($errorMessage) {
             "Bad JSON escape sequence: \\([A-Za-z])\..*'([^']+)'.*line (\d+).*position (\d+)" {
@@ -12170,12 +12214,10 @@ Function ConvertFrom-JsonSafely {
                 $position = $Matches[4]
                 Write-LogMessage -Type ERROR -Message "Invalid escape sequence: `"\$badChar`" in JSON property `"$jsonFilePathPath`""
                 Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Common causes:"
                 Write-LogMessage -Type ERROR -Message "  1. Windows file paths must use forward slashes (/) or escaped backslashes (\\\\)"
                 Write-LogMessage -Type ERROR -Message "     Example: `"C:/Users/Admin/file.yml`" or `"C:\\\\Users\\\\Admin\\\\file.yml`""
                 Write-LogMessage -Type ERROR -Message "  2. Backslash (\) is a special character in JSON and must be escaped"
-                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in `"$JsonFilePath`" at line $lineNum and try again."
                 break
             }
@@ -12187,16 +12229,17 @@ Function ConvertFrom-JsonSafely {
                 Write-LogMessage -Type ERROR -Message "JSON parsing error: $jsonFilePathError."
                 Write-LogMessage -Type ERROR -Message "Property: `"$jsonFilePathPath`""
                 Write-LogMessage -Type ERROR -Message "Location: Line $lineNum, Position $position"
-                Write-Host ""
                 Write-LogMessage -Type ERROR -Message "Please correct the JSON syntax in `"$JsonFilePath`" and try again."
                 break
             }
             default {
-                Write-LogMessage -Type ERROR -Message "JSON parsing error: $errorMessage."
+                # Do not append a period — exception messages may already end with one.
+                Write-LogMessage -Type ERROR -Message "JSON parsing error: $errorMessage"
             }
         }
 
-        throw "JSON validation failed for `"$JsonFilePath`": $errorMessage"
+        Write-LogMessage -Type ERROR -Message "JSON validation failed for `"$JsonFilePath`": $errorMessage"
+        throw [VcfDeploymentException]::new("JSON validation failed for `"$JsonFilePath`": $errorMessage")
     }
 }
 Function Test-CommandAvailability {
@@ -14777,7 +14820,7 @@ Function Test-TagCatalogCategory {
             } else {
                 Write-LogMessage -Type ERROR -Message "Error creating tag catalog `"$TagCatalog`" on `"$Script:vCenterName`": $errorMessage"
             }
-            throw "Error creating tag catalog `"$TagCatalog`" on `"$Script:vCenterName`": $errorMessage"
+            throw [VcfDeploymentException]::new("Error creating tag catalog `"$TagCatalog`" on `"$Script:vCenterName`": $errorMessage")
         }
 
     } else {
