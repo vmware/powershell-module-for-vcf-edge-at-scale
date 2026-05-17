@@ -618,19 +618,19 @@ Function Get-VcfEdgeAtScaleInstallSource {
         .psd1 read failures without silently producing a misleading fallback.
 
         .PARAMETER ModuleVersion
-        The module version string to look up (e.g. "1.0.3.1008"). Used to match the exact
+        The module version string to look up (e.g. "1.0.3.1009"). Used to match the exact
         installed version rather than the latest.
 
         .OUTPUTS
         System.String
-        A descriptive install source string such as "PSGallery (v1.0.3.1008)" or
-        "Local path (C:\Users\admin\VCFEdgeAtScale\1.0.3.1008)". Returns "N/A" if the
+        A descriptive install source string such as "PSGallery (v1.0.3.1009)" or
+        "Local path (C:\Users\admin\VCFEdgeAtScale\1.0.3.1009)". Returns "N/A" if the
         module cannot be located, or "N/A (manifest unreadable)" when ModuleVersion is
         "unknown" (indicating the .psd1 could not be read at import time).
 
         .EXAMPLE
-        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "1.0.3.1008"
-        Returns "PSGallery (v1.0.3.1008)" when installed from the gallery.
+        Get-VcfEdgeAtScaleInstallSource -ModuleVersion "1.0.3.1009"
+        Returns "PSGallery (v1.0.3.1009)" when installed from the gallery.
 
         .EXAMPLE
         Get-VcfEdgeAtScaleInstallSource -ModuleVersion "unknown"

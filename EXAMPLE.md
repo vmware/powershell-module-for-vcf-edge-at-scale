@@ -40,7 +40,7 @@ If you need more help, visit the PowerCLI community: Get-PowerCLICommunity
        Copyright (c) Broadcom. All Rights Reserved.
 
 
-  Module loaded (version 1.0.3.1008).
+  Module loaded (version 1.0.3.1009).
 
 
   No profile changes needed — Start-VcfEdgeAtScale auto-loads on first use.
@@ -340,17 +340,17 @@ clusters[].networking.networkingVmKernelInterfaces[].gateway Conditional Optiona
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -checkForUpdates
 
-[ADVISORY] A new version of VcfEdgeAtScale is available: 1.0.3.1008 (you have 1.0.3.1003).
+[ADVISORY] A new version of VcfEdgeAtScale is available: 1.0.3.1009 (you have 1.0.3.1003).
 
 Install update now? [Y/n]: Y
-[INFO] Installing VcfEdgeAtScale 1.0.3.1008 from PSGallery...
-[INFO] VcfEdgeAtScale 1.0.3.1008 installed successfully.
-[INFO] Updating config UI tool: version 1.0.3.1003 → 1.0.3.1008.
-[INFO] Config UI tool updated to 1.0.3.1008 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py.
-  Config UI tool updated: veas-json-generator.py (1.0.3.1003 → 1.0.3.1008)
-[INFO] Updating UI template: version 1.0.3.1003 → 1.0.3.1008.
-[INFO] UI template updated to 1.0.3.1008 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-ui.html.
-  UI template updated: veas-ui.html (1.0.3.1003 → 1.0.3.1008)
+[INFO] Installing VcfEdgeAtScale 1.0.3.1009 from PSGallery...
+[INFO] VcfEdgeAtScale 1.0.3.1009 installed successfully.
+[INFO] Updating config UI tool: version 1.0.3.1003 → 1.0.3.1009.
+[INFO] Config UI tool updated to 1.0.3.1009 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-json-generator.py.
+  Config UI tool updated: veas-json-generator.py (1.0.3.1003 → 1.0.3.1009)
+[INFO] Updating UI template: version 1.0.3.1003 → 1.0.3.1009.
+[INFO] UI template updated to 1.0.3.1009 at C:\Users\Administrator\VCFEdgeAtScale\Tools\veas-ui.html.
+  UI template updated: veas-ui.html (1.0.3.1003 → 1.0.3.1009)
 
 Update complete. Open a new PowerShell window to use the new version.
 
@@ -633,5 +633,5 @@ PS C:\Users\Administrator>
 
 ```Powershell
 PS C:\Users\Administrator> start-VcfEdgeAtScale -Version
-[INFO] VcfEdgeAtScale version: 1.0.3.1008
+[INFO] VcfEdgeAtScale version: 1.0.3.1009
 ```

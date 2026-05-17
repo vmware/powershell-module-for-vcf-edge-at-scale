@@ -732,7 +732,8 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
             }
 
             if (-not $moved) {
-                throw "Moving vmk0 to VSS failed on host `"$hostName`" (Set-VMHostNetworkAdapter and HostNetworkSystem.UpdateVirtualNic did not succeed). In vCenter use Networking → Migrate VMkernel Adapter to move vmk0 to the standard switch (e.g. vSwitch0-restore / Management), then retry cleanup."
+                Write-LogMessage -Type ERROR -Message "Moving vmk0 to VSS failed on host `"$hostName`" (Set-VMHostNetworkAdapter and HostNetworkSystem.UpdateVirtualNic did not succeed). In vCenter use Networking → Migrate VMkernel Adapter to move vmk0 to the standard switch (e.g. vSwitch0-restore / Management), then retry cleanup."
+                throw [VcfDeploymentException]::new()
             }
             $hostsRestoredCount++
         } catch {
@@ -1784,7 +1785,7 @@ Function Get-EsxUnformattedDisk {
 
         $usedDisks = [System.Collections.ArrayList]::new()
         foreach ($ds in $mountedDatastores) {
-            $dsView = Get-View -Id $ds.ExtensionData.MoRef
+            $dsView = Get-View -Id $ds.ExtensionData.MoRef -Server $Script:vCenterName
             if ($dsView.Info.Vmfs) {
                 foreach ($extent in $dsView.Info.Vmfs.Extent) {
                     [void]$usedDisks.Add($extent.DiskName)
@@ -2101,10 +2102,11 @@ Function Get-EsxDatastoreInfo {
 
         # Return the result object.
         return $result
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
     } catch {
         Write-LogMessage -Type ERROR -SuppressOutputToScreen:$Silence -Message "Failed to scan ESX host `"$EsxHostName`": $($_.Exception.Message)"
-        Write-LogMessage -Type EXCEPTION -Message $_.Exception.Message
-        throw "Failed to scan ESX host `"$EsxHostName`": $($_.Exception.Message)"
+        throw [VcfDeploymentException]::new()
     }
 }
 

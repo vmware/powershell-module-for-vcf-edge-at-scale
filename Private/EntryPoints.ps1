@@ -708,6 +708,43 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
     return $zipDestinationPath
 }
 
+Function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
+
+    <#
+        .SYNOPSIS
+        Warns when the module on disk differs from the version loaded in the current session.
+
+        .DESCRIPTION
+        Reads the ModuleVersion from the .psd1 on disk and compares it to $Script:ModuleVersion,
+        which was captured when the module was imported. A mismatch means the module files have
+        been updated since this PowerShell session started; the user must open a new window for
+        the changes to take effect.
+
+        Failures (missing manifest, unreadable file) are silently swallowed at DEBUG level so they
+        never interrupt a deployment run.
+
+        .NOTES
+        Called at the start of every Start-VcfEdgeAtScale run, after New-LogFile opens the log.
+    #>
+
+    $manifestPath = Join-Path -Path $Script:ModuleRoot -ChildPath "VcfEdgeAtScale.psd1"
+    if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
+        return
+    }
+    try {
+        $diskVersion = (Import-PowerShellDataFile -Path $manifestPath).ModuleVersion
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Module staleness check skipped — could not read manifest: $($_.Exception.Message)"
+        return
+    }
+    if ($diskVersion -ne $Script:ModuleVersion) {
+        Write-LogMessage -Type WARNING -Message (
+            "Module on disk is version $diskVersion but this session loaded version $Script:ModuleVersion. " +
+            "Open a new PowerShell window to run the updated module."
+        )
+    }
+}
+
 Function Write-VcfDeploymentFailureFooter {
     Write-Host ""
     if (-not [String]::IsNullOrWhiteSpace($Script:LogFile) -and (Test-Path -LiteralPath $Script:LogFile -PathType Leaf)) {
@@ -1088,6 +1125,9 @@ Function Start-VcfEdgeAtScale {
         $Script:RollbackAlwaysFromPrompt = $false
         $Script:CleanUpOnly = $false
 
+        # Warn if the module on disk has been updated since this session imported it.
+        Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck
+
         # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
         Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
 
@@ -1431,14 +1471,14 @@ Function Start-VcfEdgeAtScale {
         Initialize-VcfEdgeAtScale @initParams
     } catch [VcfDeploymentException] {
         # Known deployment failure — already surfaced to the user via Write-LogMessage -Type ERROR.
-        # Show the friendly footer without rethrowing so the raw "Exception: file:line" block is suppressed.
+        # Show the friendly footer; no further output needed since the error was already logged.
         Write-VcfDeploymentFailureFooter
-        Write-Error $_.Exception.Message
     } catch {
-        # Unexpected exception — not previously logged. Surface the full exception so the developer
-        # can diagnose the root cause via file path and line number.
+        # Unexpected exception — not previously logged. Log the full exception to the file for
+        # debugging and show a clean message on screen; do not rethrow to avoid ugly stack traces.
+        Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Unexpected error: $($_.Exception.ToString())"
+        Write-LogMessage -Type ERROR -Message "An unexpected error occurred: $($_.Exception.Message). Check the log file for full details."
         Write-VcfDeploymentFailureFooter
-        throw
     } finally {
         $Global:ProgressPreference = $savedProgressPreference
     }
