@@ -1,5 +1,18 @@
 # Release Notes
 
+<a id="v1.0.3.1010"></a>
+## 1.0.3.1010
+
+### Release date: 2026-05-18
+
+### Details
+
+- Fix : Bypasses the vSAN witness inventory check for 1-node VMFS edge deployments. This ensures that benign, misconfigured witness parameters no longer block installations where a witness isn't actually required.
+- Feature: Allows hosts from existing clusters to be added, provided they have no running VMs.
+- Feature: Added Light-mode support for JSON Generator UI
+
+---
+
 <a id="v1.0.3.1009"></a>
 ## 1.0.3.1009
 

@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1009"
+UI_VERSION = "1.0.3.1010"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -317,6 +317,16 @@ def _validate_harbor(harbor: dict, prefix: str, errors: list[str]) -> None:
             errors.append(
                 f"{prefix}.harborConfiguration.{vol_field}: "
                 "must be a positive integer followed by 'Gi' (e.g. 10Gi)."
+            )
+
+    for secret_field in ("harborAdminPassword", "databasePassword", "coreSecret",
+                         "jobserviceSecret", "registrySecret"):
+        val = harbor.get(secret_field, "")
+        if val and val.startswith("$") and not ENV_VAR_RE.match(val):
+            errors.append(
+                f"{prefix}.harborConfiguration.{secret_field}: value starting with '$' must be a "
+                "valid environment variable reference using the format $env:VARNAME "
+                "(VARNAME must start with a letter or underscore and contain only letters, digits, and underscores)."
             )
 
 
@@ -1125,6 +1135,63 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
     return messages
 
 
+def _validate_step2_harbor_files(infra: dict, base_dir: Path | None) -> list[str]:
+    """
+    Checks harborConfiguration.parentDirectory + TLS filename existence on disk for each
+    cluster.  Only runs in launcher mode (when base_dir is available).
+
+    Rules:
+    - When parentDirectory is set but the directory does not exist, and at least one TLS
+      filename (tlsCrt, tlsKey, caCrt) is also specified, emit an error for the directory.
+    - When the directory exists, check each specified TLS filename (tlsCrt, tlsKey, caCrt)
+      for existence and emit an error for any that are missing.
+    - parentDirectory alone (without any TLS filename) is valid in lab mode and is not
+      flagged here.
+
+    Returns PS-style [ERROR]/[WARNING]/[INFO] messages.
+    """
+    if base_dir is None:
+        return []
+    messages: list[str] = []
+    tls_fields = (
+        ("tlsCrt", "TLS certificate"),
+        ("tlsKey",  "TLS key"),
+        ("caCrt",   "CA certificate"),
+    )
+    for cluster in infra.get("clusters", []) or []:
+        site = cluster.get("edgeSite", "?")
+        harbor = cluster.get("harborConfiguration") or {}
+        parent_dir_str = (harbor.get("parentDirectory") or "").strip()
+        if not parent_dir_str:
+            continue
+        parent_dir = Path(parent_dir_str)
+        tls_filenames_set = any((harbor.get(f) or "").strip() for f, _ in tls_fields)
+        if not parent_dir.is_dir():
+            if tls_filenames_set:
+                messages.append(
+                    f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.parentDirectory: "
+                    f"'{parent_dir}' does not exist or is not a directory. "
+                    "Correct the path or remove parentDirectory if TLS is auto-generated (lab mode)."
+                )
+            continue
+        for field, label in tls_fields:
+            filename = (harbor.get(field) or "").strip()
+            if not filename:
+                continue
+            full_path = parent_dir / filename
+            if full_path.exists():
+                messages.append(
+                    f"[INFO] Site '{site}': {label} '{filename}' found in '{parent_dir}' — OK."
+                )
+            else:
+                messages.append(
+                    f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.{field}: "
+                    f"'{filename}' not found in '{parent_dir}'. "
+                    "Verify the filename and parentDirectory are correct."
+                )
+    return messages
+
+
 def _format_infra_messages(errors: list[str], infra: dict) -> list[str]:
     """
     Converts infrastructure validation errors into PS-style messages,
@@ -1851,6 +1918,7 @@ class ConfigHandler(BaseHTTPRequestHandler):
                 messages = (
                     _format_infra_messages(infra_result.errors, infra_built)
                     + [f"[WARNING] {w}" for w in infra_result.warnings]
+                    + _validate_step2_harbor_files(infra_built, base_dir=self.base_dir)
                 )
             elif step == 3:
                 # Validate infrastructure first so those errors are also surfaced on Step 3,

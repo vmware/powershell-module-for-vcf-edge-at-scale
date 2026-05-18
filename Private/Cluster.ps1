@@ -265,7 +265,7 @@ Function Remove-ClusterSafely {
         throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
     }
 
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found; nothing to remove."
         return
@@ -1234,6 +1234,185 @@ Function Set-VmkernelIpv4StaticGatewayViaEsxcli {
     Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: all attempts failed on `"$hostName`" for $VmkernelName. Last error: $lastError"
     throw [VcfDeploymentException]::new("Could not set default gateway on VMkernel `"$VmkernelName`" on host `"$hostName`" via esxcli. Last error: $lastError")
 }
+Function Invoke-PrepareHostForClusterMove {
+
+    <#
+        .SYNOPSIS
+        Prepares a host in one cluster for migration to another cluster within the same vCenter.
+
+        .DESCRIPTION
+        When a host with no powered-on VMs is found in vCenter inventory under a different cluster than the deployment target, this function: (1) checks whether vmk0 is already on a standard switch or on a VDS; (2) prompts the operator to confirm the cluster move in both cases; (3) if vmk0 is on a VDS, verifies that VDS has at least two physical NIC uplinks (prerequisite for automated restore), then removes all non-management VMkernel interfaces, migrates vmk0 to a standard switch (vSwitch0-restore) via Restore-ManagementToVssBeforeVdsRemoval, and detaches the host from all Distributed Virtual Switches; (4) if vmk0 is already on a standard switch, skips the VDS cleanup steps entirely. After this function returns, Add-HostToCluster proceeds with the normal Add-VMHost call.
+
+        .PARAMETER DestinationClusterName
+        Name of the cluster the host will be added to.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the host, used in log messages and prompts.
+
+        .PARAMETER Server
+        vCenter server name. Defaults to $Script:vCenterName.
+
+        .PARAMETER SourceClusterName
+        Name of the cluster the host currently belongs to.
+
+        .PARAMETER VMHost
+        The VMHost object for the host to prepare.
+
+        .EXAMPLE
+        Invoke-PrepareHostForClusterMove -DestinationClusterName "cl0-site2" -EsxHostName "esx01.example.com" -SourceClusterName "cl0-site1" -VMHost $vmhost
+
+        .NOTES
+        Throws [VcfDeploymentException] when the dual-uplink prerequisite is not met, the operator declines the move, or management restore fails. VDS objects are not deleted; only the host's physical NIC uplinks are removed. Requires Restore-ManagementToVssBeforeVdsRemoval and Test-HostManagementVdsDualUplink (Networking.ps1).
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DestinationClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SourceClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in vCenter `"$Server`" under cluster `"$SourceClusterName`" with no powered-on VMs."
+
+    # Check whether vmk0 is already on a standard switch or on a VDS. When vmk0 is already on a
+    # standard switch (MgmtVdsName is empty), no VDS cleanup is needed — we skip straight to the
+    # operator prompt and then the Add-VMHost call. When vmk0 is on a VDS we must also verify
+    # dual uplinks before proceeding, since the automated restore path requires them.
+    $dualUplinkCheck = Test-HostManagementVdsDualUplink -VMHost $VMHost -Server $Server
+    $vmk0OnStandardSwitch = [String]::IsNullOrWhiteSpace($dualUplinkCheck.MgmtVdsName)
+
+    if ($vmk0OnStandardSwitch) {
+        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" management (vmk0) is already on a standard vSwitch; no VDS cleanup required before cluster move."
+    } else {
+        # vmk0 is on a VDS — verify dual uplinks before committing to the automated restore path.
+        if (-not $dualUplinkCheck.HasDualUplink) {
+            Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" management VDS `"$($dualUplinkCheck.MgmtVdsName)`" has fewer than two physical NIC uplinks. Manually move vmk0 to a standard vSwitch in vCenter before re-running deployment to reclaim this host."
+            throw [VcfDeploymentException]::new("Host `"$EsxHostName`" management VDS does not have two physical uplinks. Move vmk0 to a standard vSwitch manually, then re-run.")
+        }
+    }
+
+    # Prompt operator to confirm the cluster move in all cases — whether vmk0 is on a VSS or a VDS.
+    try {
+        $confirmed = $false
+        while (-not $confirmed) {
+            $response = (Read-Host "Move host `"$EsxHostName`" from cluster `"$SourceClusterName`" to `"$DestinationClusterName`"? (y/N; press Enter for N)").Trim()
+            switch -Regex ($response) {
+                '^[yY](es)?$' {
+                    $actionDetail = if ($vmk0OnStandardSwitch) { "no VDS cleanup required" } else { "will clean up VDS attachments" }
+                    Write-LogMessage -Type INFO -Message "User confirmed move of host `"$EsxHostName`" from cluster `"$SourceClusterName`" to `"$DestinationClusterName`" ($actionDetail)."
+                    $confirmed = $true
+                }
+                '^$|^[nN](o)?$' {
+                    Write-LogMessage -Type ERROR -Message "Deployment aborted. User declined to move host `"$EsxHostName`" from cluster `"$SourceClusterName`" to `"$DestinationClusterName`"."
+                    throw [VcfDeploymentException]::new()
+                }
+                default { Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)." }
+            }
+        }
+    } catch [VcfDeploymentException] {
+        throw
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Treating as N."
+        throw [VcfDeploymentException]::new()
+    }
+
+    # When vmk0 is already on a standard switch, the host is ready to move — no VDS cleanup needed.
+    if ($vmk0OnStandardSwitch) {
+        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" ready for cluster move (vmk0 already on standard switch). Proceeding to add to cluster `"$DestinationClusterName`"."
+        return
+    }
+
+    # vmk0 is on a VDS with dual uplinks — remove non-management VMkernel adapters, restore vmk0
+    # to a standard switch, then detach all pNICs from every VDS on the host.
+    $vmkAdapters = @(Get-NonMgmtVmkernelAdaptersOnHost -VMHost $VMHost -Server $Server)
+    $vmkRemovalFailed = $false
+    foreach ($vmk in $vmkAdapters) {
+        try {
+            Remove-VMHostNetworkAdapter -Nic $vmk -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type DEBUG -Message "Removed VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`"."
+        } catch {
+            Write-LogMessage -Type WARNING -Message "Could not remove VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`": $($_.Exception.Message). Proceeding with management restore; verify host state after move."
+            $vmkRemovalFailed = $true
+        }
+    }
+    if ($vmkRemovalFailed) {
+        Write-LogMessage -Type WARNING -Message "One or more non-management VMkernel adapters could not be removed from host `"$EsxHostName`". Verify and clean up stale VMkernel adapters manually after the cluster move."
+    }
+
+    $restoreResult = Restore-ManagementToVssBeforeVdsRemoval -VMHost $VMHost -VdsNameWithMgmt $dualUplinkCheck.MgmtVdsName -Server $Server
+    if ($restoreResult.RestoreAttempted -and -not $restoreResult.Success) {
+        Write-LogMessage -Type ERROR -Message "Could not restore management to standard switch on host `"$EsxHostName`": $($restoreResult.Message)"
+        throw [VcfDeploymentException]::new("Management restore failed on host `"$EsxHostName`". $($restoreResult.Message)")
+    }
+
+    $allVdsOnHost = @(Get-VdsListOnHost -VMHost $VMHost -Server $Server)
+    foreach ($vds in $allVdsOnHost) {
+        $pnicsOnVds = @(Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vds -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+        foreach ($pnic in $pnicsOnVds) {
+            try {
+                $pnic | Remove-VDSwitchPhysicalNetworkAdapter -Confirm:$false -ErrorAction Stop
+                Write-LogMessage -Type DEBUG -Message "Detached pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`"."
+            } catch {
+                Write-LogMessage -Type WARNING -Message "Could not detach pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`": $($_.Exception.Message)."
+            }
+        }
+    }
+
+    Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" VDS cleanup complete. Proceeding to add to cluster `"$DestinationClusterName`"."
+}
+
+Function Get-RunningVmsOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns all powered-on VMs on a host. Thin wrapper over Get-VM -Location enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object to filter VMs for.
+
+        .EXAMPLE
+        Get-RunningVmsOnHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    @(Get-VM -Location $VMHost -Server $Server -ErrorAction SilentlyContinue |
+        Where-Object { $_.PowerState -eq "PoweredOn" })
+}
+
+Function Get-NonMgmtVmkernelAdaptersOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns all non-management VMkernel adapters (vmk1 and above) for a host. Thin wrapper over Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object whose non-management VMkernel adapters are returned.
+
+        .EXAMPLE
+        Get-NonMgmtVmkernelAdaptersOnHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -Server $Server -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "vmk0" }
+}
+
 Function Invoke-AddHostToClusterRunningVmSafetyCheck {
     <#
         .SYNOPSIS
@@ -1259,7 +1438,7 @@ Function Invoke-AddHostToClusterRunningVmSafetyCheck {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
 
     $inventoryLocation = "n/a"
@@ -1430,7 +1609,7 @@ Function Add-HostToCluster {
 
     # Check if the host is already in the cluster.
     try {
-        $existingHost = $clusterObject | Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $existingHost = Get-VMHost -Name $EsxHostName -Location $clusterObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
     } catch {
         # If Get-VMHost fails, continue to add the host.
         $existingHost = $null
@@ -1443,7 +1622,26 @@ Function Add-HostToCluster {
 
     $hostForRunningVmCheck = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
     if ($hostForRunningVmCheck) {
-        Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+        $runningVms = Get-RunningVmsOnHost -VMHost $hostForRunningVmCheck -Server $Script:vCenterName
+        if ($runningVms.Count -gt 0) {
+            Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+        } else {
+            # No running VMs. Check if the host is in a different cluster on the same vCenter; if so, offer to migrate it.
+            $sourceCluster = $null
+            try {
+                if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) {
+                    $sourceCluster = Get-Cluster -Name $hostForRunningVmCheck.Parent.Name -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                }
+            } catch {
+                $sourceCluster = $null
+            }
+            if ($null -ne $sourceCluster -and $sourceCluster.Name -ne $ClusterName) {
+                Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+            } else {
+                $parentDisplayName = if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) { $hostForRunningVmCheck.Parent.Name } else { "(no cluster parent)" }
+                Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" is in vCenter inventory with no powered-on VMs and no cluster move required (parent: `"$parentDisplayName`"). Proceeding to add."
+            }
+        }
     } else {
         Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" not in vCenter inventory before add; skipping powered-on VM check (VMs are not enumerable until the host is managed by this vCenter)."
     }
@@ -4338,7 +4536,7 @@ Function Get-VsanClusterHealthSummaryViaView {
         [Parameter(Mandatory = $false)] [bool]$FetchFromCache = $false
     )
 
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     # Validate cluster exists before proceeding.
     if (-not $clusterObject) {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" not found."
@@ -4933,7 +5131,7 @@ Function Get-VsanClusterTriggeredAlarms {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
 
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type DEBUG -Message "Get-VsanClusterTriggeredAlarms: cluster `"$ClusterName`" not found."
         return @()
@@ -5557,7 +5755,7 @@ Function Invoke-VsanClusterObjectRepairAndWait {
         [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [int]$TimeoutSeconds = 600
     )
 
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" not found for repair."
         return $false
@@ -5647,7 +5845,7 @@ Function Enable-VsanHealthAlarms {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found. Cannot enable vSAN health alarms."
         return $false
@@ -5708,7 +5906,7 @@ Function Invoke-AbandonHciWorkflowIfInProgress {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" not found. Skipping AbandonHciWorkflow."
         return
@@ -5772,7 +5970,7 @@ Function Add-VsanClusterSilentHealthChecks {
         Write-LogMessage -Type DEBUG -Message "No vSAN silent check IDs to apply for cluster `"$ClusterName`" ($LogContext). Skipping."
         return
     }
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
         Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" not found. Skipping vSAN silent checks ($LogContext)."
         return
@@ -7166,7 +7364,7 @@ Function Invoke-VsanDeploymentRollback {
     }
 
     try {
-        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
         $clusterHosts = $null
         $hasHosts = $false
         if ($clusterObject) {

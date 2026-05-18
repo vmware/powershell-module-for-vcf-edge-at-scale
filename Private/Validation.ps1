@@ -170,7 +170,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                 $storagePolicyTagCatalog = $storagePolicyType + "-Storage-TagCatalog"
             }
         }
-        $clusterObjectForCleanup = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $clusterObjectForCleanup = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
         $wcpList = @()
         if ($clusterObjectForCleanup) {
             $clusterMoNameForWcp = $clusterObjectForCleanup.Name
@@ -483,11 +483,11 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                         catch {
                             Write-LogMessage -Type DEBUG -Message "Remove-Cluster threw for `"$clusterName`"; waiting $ClusterExistenceCheckDelaySeconds s then re-checking if cluster still exists (vCenter may have removed it despite the error)."
                             Start-Sleep -Seconds $ClusterExistenceCheckDelaySeconds
-                            $clusterStillExists = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                            $clusterStillExists = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
                             if ($clusterStillExists -and $ClusterExistenceCheckRetryDelaySeconds -gt 0) {
                                 Write-LogMessage -Type DEBUG -Message "Cluster still reported after first check; waiting $ClusterExistenceCheckRetryDelaySeconds s then re-checking (vCenter may be removing asynchronously)."
                                 Start-Sleep -Seconds $ClusterExistenceCheckRetryDelaySeconds
-                                $clusterStillExists = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                                $clusterStillExists = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
                             }
                             if (-not $clusterStillExists) {
                                 Write-LogMessage -Type INFO -Message "Cluster `"$clusterName`" was removed (vCenter reported an error but the cluster is no longer present)."
@@ -517,11 +517,11 @@ Function Invoke-VcfEdgeAtScaleCleanup {
                         catch {
                             Write-LogMessage -Type DEBUG -Message "Remove-Cluster threw for `"$clusterName`"; waiting $ClusterExistenceCheckDelaySeconds s then re-checking if cluster still exists (vCenter may have removed it despite the error)."
                             Start-Sleep -Seconds $ClusterExistenceCheckDelaySeconds
-                            $clusterStillExists = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                            $clusterStillExists = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
                             if ($clusterStillExists -and $ClusterExistenceCheckRetryDelaySeconds -gt 0) {
                                 Write-LogMessage -Type DEBUG -Message "Cluster still reported after first check; waiting $ClusterExistenceCheckRetryDelaySeconds s then re-checking (vCenter may be removing asynchronously)."
                                 Start-Sleep -Seconds $ClusterExistenceCheckRetryDelaySeconds
-                                $clusterStillExists = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                                $clusterStillExists = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
                             }
                             if (-not $clusterStillExists) {
                                 Write-LogMessage -Type INFO -Message "Cluster `"$clusterName`" was removed (vCenter reported an error but the cluster is no longer present)."
@@ -554,7 +554,7 @@ Function Get-VsanWitnessNameForCluster {
         Resolves the vSAN witness host name for a cluster from cluster root or common.
 
         .DESCRIPTION
-        Returns the first non-empty value from cluster.vSanWitnessVmName or InputData.common.vSanWitnessVmName. Used by Initialize-VcfEdgeAtScale to verify witness is in vCenter before creating the cluster.
+        Returns the first non-empty value from cluster.vSanWitnessVmName or InputData.common.vSanWitnessVmName. Used by Initialize-VcfEdgeAtScale for vSAN clusters only; callers must check whether the cluster storage type requires a witness before acting on the return value (e.g. non-vSAN clusters should ignore a non-null result).
         .PARAMETER Cluster
         Cluster object from infrastructure JSON (may have vSanWitnessVmName at the cluster root).
         .PARAMETER InputData
@@ -1632,15 +1632,24 @@ Function Initialize-VcfEdgeAtScale {
 
         # Verify all vSAN witness hosts are present in vCenter inventory before prompting for ESX credentials.
         # This ensures the site is fully ready to provision before asking the user for more input.
+        # For non-vSAN (e.g. VMFS) clusters, a configured witness is not required; if the witness
+        # FQDN is missing from inventory it is logged at DEBUG only and does not block deployment.
         foreach ($clusterForWitnessCheck in $clustersToProcess) {
             $witnessNameForCheck = Get-VsanWitnessNameForCluster -Cluster $clusterForWitnessCheck -InputData $inputData
             if (-not [String]::IsNullOrWhiteSpace($witnessNameForCheck)) {
+                $storageTypeForWitnessCheck = $clusterForWitnessCheck.storagePolicy.storageType
+                $isVsanClusterForWitnessCheck = ($storageTypeForWitnessCheck -eq "vSAN-ESA" -or $storageTypeForWitnessCheck -eq "vSAN-OSA")
                 $witnessHostForCheck = Get-VMHost -Name $witnessNameForCheck -Server $Script:vCenterName -ErrorAction SilentlyContinue
                 if (-not $witnessHostForCheck) {
-                    Write-LogMessage -Type ERROR -Message "vSAN witness host `"$witnessNameForCheck`" is not present in vCenter inventory. Add the witness host to vCenter before creating the cluster to avoid cleanup."
-                    throw [VcfDeploymentException]::new()
+                    if ($isVsanClusterForWitnessCheck) {
+                        Write-LogMessage -Type ERROR -Message "vSAN witness host `"$witnessNameForCheck`" is not present in vCenter inventory. Add the witness host to vCenter before creating the cluster to avoid cleanup."
+                        throw [VcfDeploymentException]::new()
+                    } else {
+                        Write-LogMessage -Type DEBUG -Message "vSAN witness `"$witnessNameForCheck`" is configured for edgeSite `"$($clusterForWitnessCheck.edgeSite)`" but is not in vCenter inventory; ignoring — witness is not required for `"$storageTypeForWitnessCheck`" deployments."
+                    }
+                } else {
+                    Write-LogMessage -Type DEBUG -Message "vSAN witness host `"$witnessNameForCheck`" is present in vCenter inventory for edgeSite `"$($clusterForWitnessCheck.edgeSite)`"; proceeding."
                 }
-                Write-LogMessage -Type DEBUG -Message "vSAN witness host `"$witnessNameForCheck`" is present in vCenter inventory; proceeding."
             }
         }
 
@@ -2094,11 +2103,17 @@ Function Initialize-VcfEdgeAtScale {
             }
 
             # Extract vSAN witness host (vSanWitnessVmName; cluster root overrides common).
+            # For non-vSAN clusters (e.g. VMFS), any configured witness is discarded here so
+            # downstream vSAN branches never receive an irrelevant witness name.
             $vSanWitnessVmName = $null
             if (-not [String]::IsNullOrWhiteSpace($cluster.vSanWitnessVmName)) {
                 $vSanWitnessVmName = $cluster.vSanWitnessVmName
             } elseif (-not [String]::IsNullOrWhiteSpace($InputData.common.vSanWitnessVmName)) {
                 $vSanWitnessVmName = $InputData.common.vSanWitnessVmName
+            }
+            if ($vSanWitnessVmName -and ($storagePolicyType -ne "vSAN-ESA" -and $storagePolicyType -ne "vSAN-OSA")) {
+                Write-LogMessage -Type DEBUG -Message "vSAN witness `"$vSanWitnessVmName`" is configured for edgeSite `"$currentEdgeSite`" but is not required for `"$storagePolicyType`"; ignoring."
+                $vSanWitnessVmName = $null
             }
 
             # Handle storage configuration based on storage policy type.
@@ -2487,7 +2502,7 @@ Function Initialize-VcfEdgeAtScale {
                                     $existenceCheckDelaySec = 2
                                     Write-LogMessage -Type DEBUG -Message "Remove-Cluster threw for `"$clusterName`"; waiting $existenceCheckDelaySec s then re-checking if cluster still exists (vCenter may have removed it despite the error)."
                                     Start-Sleep -Seconds $existenceCheckDelaySec
-                                    $clusterStillExists = Get-Cluster -Name $clusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                                    $clusterStillExists = Get-ClusterByName -Name $clusterName -Server $Script:vCenterName
                                     if (-not $clusterStillExists) {
                                         Write-LogMessage -Type INFO -Message "Cluster `"$clusterName`" was removed (vCenter reported an error but the cluster is no longer present)."
                                     } else {

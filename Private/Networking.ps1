@@ -70,7 +70,7 @@ Function Remove-NonVmk0VmkernelInterfacesFromVds {
     $savedWarningPreference = $WarningPreference
     $WarningPreference = "SilentlyContinue"
     try {
-        $clusterInVcenter = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction SilentlyContinue
+        $clusterInVcenter = Get-ClusterByName -Name $ClusterName -Server $Server
 
         foreach ($currentVdsName in $VdsNames) {
             if ([String]::IsNullOrWhiteSpace($currentVdsName)) { continue }
@@ -277,6 +277,31 @@ Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
 
     return $lastResult
 }
+
+Function Get-VdsByName {
+
+    <#
+        .SYNOPSIS
+        Returns a VDS by name. Thin wrapper over Get-VDSwitch enabling unit tests to mock this call without fighting PowerCLI type constraints on the -Server parameter.
+
+        .PARAMETER Name
+        Name of the VDS to retrieve.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-VdsByName -Name "VDS-site1" -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Name,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VDSwitch -Name $Name -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
 Function Restore-ManagementToVssBeforeVdsRemoval {
 
     <#
@@ -284,16 +309,19 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
         Restores host management (vmk0) from the VDS to a new standard switch so the host remains reachable when the VDS is removed.
 
         .DESCRIPTION
-        Before removing a VDS that carries management traffic, this function removes one pNIC from the specified VDS on each host, attaches it to a new VSS, and moves vmk0 back to the VSS with the same IP. When removing from the VDS, it tries the pNIC that is last alphabetically first (e.g. vmnic1 before vmnic0), so the lowest-numbered NIC remains on the VDS until the VDS is deleted and is then unassigned. On re-deploy, Get-FirstUnusedNicFromNicList (NicList order) adds that lowest-numbered NIC first, giving deterministic deploy/restore/deploy and VDS uplinks that match the approved NicList. The pNIC chosen for restore is from this VDS (not from NicList).
+        Before removing a VDS that carries management traffic, this function removes one pNIC from the specified VDS on each host, attaches it to a new VSS, and moves vmk0 back to the VSS with the same IP. When removing from the VDS, it tries the pNIC that is last alphabetically first (e.g. vmnic1 before vmnic0), so the lowest-numbered NIC remains on the VDS until the VDS is deleted and is then unassigned. On re-deploy, Get-FirstUnusedNicFromNicList (NicList order) adds that lowest-numbered NIC first, giving deterministic deploy/restore/deploy and VDS uplinks that match the approved NicList. The pNIC chosen for restore is from this VDS (not from NicList). When -VMHost is supplied, only that host is processed regardless of -ClusterName.
 
         .PARAMETER ClusterName
-        Name of the cluster whose hosts to process.
+        Name of the cluster whose hosts to process. Optional when -VMHost is supplied; ignored when -VMHost is provided.
 
         .PARAMETER Server
         vCenter server name. Defaults to $Script:vCenterName.
 
         .PARAMETER VdsNameWithMgmt
         Name of the VDS that currently has the management port group (e.g. VdsName for 2-NIC, VdsName-sw1 for 4-NIC).
+
+        .PARAMETER VMHost
+        When supplied, restores management on this single host only. Bypasses cluster/VDS host discovery. Use for single-host reclaim scenarios (e.g. moving a host from one cluster to another).
 
         .OUTPUTS
         PSCustomObject with RestoreAttempted (bool), Success (bool), HostsRestoredCount (int), Message (string).
@@ -307,9 +335,10 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsNameWithMgmt
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsNameWithMgmt,
+        [Parameter(Mandatory = $false)] [PSObject]$VMHost = $null
     )
 
     $result = [PSCustomObject]@{ RestoreAttempted = $false; Success = $true; HostsRestoredCount = 0; Message = "" }
@@ -326,29 +355,37 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
     $prevWarningPreference = $WarningPreference
     $WarningPreference = "SilentlyContinue"
     try {
-    $vdsObject = Get-VDSwitch -Name $VdsNameWithMgmt -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    $vdsObject = Get-VdsByName -Name $VdsNameWithMgmt -Server $Server
     if (-not $vdsObject) {
         Write-LogMessage -Type DEBUG -Message "VDS `"$VdsNameWithMgmt`" not found; nothing to restore for management."
         return $result
     }
 
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction SilentlyContinue
-    $hosts = @()
-    if ($clusterObject) {
-        $hosts = @(Get-VMHost -Location $clusterObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+    if (-not $VMHost -and [String]::IsNullOrWhiteSpace($ClusterName)) {
+        Write-LogMessage -Type WARNING -Message "Restore-ManagementToVssBeforeVdsRemoval: neither -VMHost nor -ClusterName was supplied; attempting host discovery from VDS `"$VdsNameWithMgmt`" only."
     }
-    if (-not $hosts -or $hosts.Count -eq 0) {
-        # Cluster not found or empty; try hosts attached to the VDS so we can restore before VDS removal (e.g. cluster already removed).
-        try {
-            $hosts = @(Get-VMHost -DistributedSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
-        } catch {
-            Write-LogMessage -Type DEBUG -Message "Could not get hosts from VDS `"$VdsNameWithMgmt`": $($_.Exception.Message)."
+
+    $hosts = @()
+    if ($VMHost) {
+        $hosts = @($VMHost)
+    } else {
+        $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Server
+        if ($clusterObject) {
+            $hosts = @(Get-VMHost -Location $clusterObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
         }
         if (-not $hosts -or $hosts.Count -eq 0) {
-            Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" not found and no hosts on VDS `"$VdsNameWithMgmt`"; nothing to restore."
-            return $result
+            # Cluster not found or empty; try hosts attached to the VDS so we can restore before VDS removal (e.g. cluster already removed).
+            try {
+                $hosts = @(Get-VMHost -DistributedSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+            } catch {
+                Write-LogMessage -Type DEBUG -Message "Could not get hosts from VDS `"$VdsNameWithMgmt`": $($_.Exception.Message)."
+            }
+            if (-not $hosts -or $hosts.Count -eq 0) {
+                Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" not found and no hosts on VDS `"$VdsNameWithMgmt`"; nothing to restore."
+                return $result
+            }
+            Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" not found; restoring management on $($hosts.Count) host(s) attached to VDS `"$VdsNameWithMgmt`"."
         }
-        Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" not found; restoring management on $($hosts.Count) host(s) attached to VDS `"$VdsNameWithMgmt`"."
     }
 
     $result.RestoreAttempted = $true
@@ -356,7 +393,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
     $restoreSkippedDueToRollback = $false
     # Pre-check: if the VDS has a management-named port group (e.g. mgmt-VMFS), we will assume vmk0 may be on it when per-host detection fails (avoids "No hosts required restore" when vmk0 is on the VDS but detection quirks miss it).
     $expectedMgmtPgNamePattern = "mgmt-" + ($VdsNameWithMgmt -replace '^VDS-', '')
-    $vdsUserPgs = @(Get-VDPortgroup -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Where-Object { $_.Name -notlike "*DVUplinks*" })
+    $vdsUserPgs = @(Get-DpgsOnVds -VDSwitch $vdsObject -Server $Server)
     if ($vdsUserPgs.Count -eq 0) {
         $vdsUserPgs = @(Get-VDPortgroup -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Where-Object { ($_.Name -notlike "*DVUplinks*") -and ($_.VDSwitch -and $_.VDSwitch.Name -eq $VdsNameWithMgmt) })
     }
@@ -369,7 +406,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
     foreach ($vmhost in $hosts) {
         $hostName = $vmhost.Name
-        $vmk0 = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -Server $Server -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "vmk0" }
+        $vmk0 = Get-VmkernelAdaptersOnHost -VMHost $vmhost -Server $Server | Where-Object { $_.Name -eq "vmk0" }
         if (-not $vmk0) {
             Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" has no vmk0; skipping."
             continue
@@ -531,10 +568,10 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
         # Only restore (move vmk0) to the designated restore vSwitch (vSwitch0-restore). If it already exists with a pNIC and Management port group, move vmk0 there. Otherwise we create it first (unused pNIC or remove pNIC) then move—never move to any other VSS.
         $vssNameRestore = "vSwitch0-restore"
-        $existingRestoreVss = Get-VirtualSwitch -VMHost $vmhost -Standard -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $vssNameRestore }
+        $existingRestoreVss = Get-VirtualSwitchesOnHost -VMHost $vmhost -Server $Server | Where-Object { $_.Name -eq $vssNameRestore }
         if ($existingRestoreVss) {
             $pnicsOnRestoreVss = @(Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $existingRestoreVss -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
-            $stdPgManagement = Get-VirtualPortGroup -VirtualSwitch $existingRestoreVss -Name "Management" -Server $Server -ErrorAction SilentlyContinue
+            $stdPgManagement = Get-VirtualPortGroupsOnSwitch -VirtualSwitch $existingRestoreVss -Server $Server | Where-Object { $_.Name -eq "Management" } | Select-Object -First 1
             if ($pnicsOnRestoreVss -and $pnicsOnRestoreVss.Count -gt 0 -and $stdPgManagement) {
                 try {
                     $hostView = Get-View -Id $vmhost.Id -Server $Server -Property ConfigManager -ErrorAction Stop
@@ -553,12 +590,12 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
         # Fallback: if vSwitch0-restore does not exist and we will need to remove a pNIC (no unused pNIC), try moving vmk0 to any other existing standard switch that has a pNIC and a Management-like port group (e.g. vSwitch0 from ESX install). Allows cleanup when vSphere blocks pNIC removal.
         $movedToFallbackVss = $false
-        $existingVssList = @(Get-VirtualSwitch -VMHost $vmhost -Standard -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Where-Object { $_.Name -ne $vssNameRestore })
+        $existingVssList = @(Get-VirtualSwitchesOnHost -VMHost $vmhost -Server $Server | Where-Object { $_.Name -ne $vssNameRestore })
         foreach ($vss in $existingVssList) {
             if ($movedToFallbackVss) { break }
             $pnicsOnVss = @(Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $vss -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
             if (-not $pnicsOnVss -or $pnicsOnVss.Count -eq 0) { continue }
-            $stdPgs = @(Get-VirtualPortGroup -VirtualSwitch $vss -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+            $stdPgs = @(Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vss -Server $Server)
             foreach ($stdPg in $stdPgs) {
                 $targetPgName = $stdPg.Name
                 if ($targetPgName -notmatch "Management|VM Network|mgmt") { continue }
@@ -591,7 +628,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
                 Write-LogMessage -Type INFO -Message "Host `"$hostName`": using pNIC `"$unusedPnicName`" (not on VDS) for vSwitch0-restore; no VDS change required (also recovers retry after partial failure)."
                 try {
                     $vssName = "vSwitch0-restore"
-                    $existingVss = Get-VirtualSwitch -VMHost $vmhost -Standard -Server $Server -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $vssName }
+                    $existingVss = Get-VirtualSwitchesOnHost -VMHost $vmhost -Server $Server | Where-Object { $_.Name -eq $vssName }
                     if (-not $existingVss) {
                         New-VirtualSwitch -VMHost $vmhost -Name $vssName -Nic $unusedPnicName -Server $Server -ErrorAction Stop | Out-Null
                         Write-LogMessage -Type DEBUG -Message "Created standard switch `"$vssName`" with unused pNIC `"$unusedPnicName`" on host `"$hostName`"."
@@ -604,7 +641,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
                     }
                     $vss = Get-VirtualSwitch -VMHost $vmhost -Standard -Name $vssName -Server $Server -ErrorAction Stop
                     $mgmtPgName = "Management"
-                    $stdPg = Get-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -Server $Server -ErrorAction SilentlyContinue
+                    $stdPg = Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vss -Server $Server | Where-Object { $_.Name -eq $mgmtPgName } | Select-Object -First 1
                     if (-not $stdPg) {
                         New-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -VLanId $mgmtVlanId -Server $Server -ErrorAction Stop | Out-Null
                         $stdPg = Get-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -Server $Server -ErrorAction Stop
@@ -658,10 +695,10 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
             # Create standard switch with one pNIC (or reuse existing and add pNIC if needed).
             $vssName = "vSwitch0-restore"
-            $existingVss = Get-VirtualSwitch -VMHost $vmhost -Standard -Server $Server -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq $vssName }
-            if ($existingVss) {
-                Write-LogMessage -Type DEBUG -Message "Standard switch `"$vssName`" already exists on host `"$hostName`"; ensuring pNIC is attached."
-                $pnicsOnVss = Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $existingVss -Server $Server -ErrorAction SilentlyContinue
+                    $existingVss = Get-VirtualSwitchesOnHost -VMHost $vmhost -Server $Server | Where-Object { $_.Name -eq $vssName }
+                    if ($existingVss) {
+                        Write-LogMessage -Type DEBUG -Message "Standard switch `"$vssName`" already exists on host `"$hostName`"; ensuring pNIC is attached."
+                        $pnicsOnVss = Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $existingVss -Server $Server -ErrorAction SilentlyContinue
                 if (-not ($pnicsOnVss | Where-Object { $_.Name -eq $pnicNameForRestore })) {
                     Add-VirtualSwitchPhysicalNetworkAdapter -VirtualSwitch $existingVss -VMHostPhysicalNic $pnic -Server $Server -Confirm:$false -ErrorAction Stop
                     Write-LogMessage -Type DEBUG -Message "Attached pNIC `"$pnicNameForRestore`" to existing VSS `"$vssName`" on host `"$hostName`"."
@@ -673,7 +710,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
             $vss = Get-VirtualSwitch -VMHost $vmhost -Standard -Name $vssName -Server $Server -ErrorAction Stop
             $mgmtPgName = "Management"
-            $stdPg = Get-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -Server $Server -ErrorAction SilentlyContinue
+            $stdPg = Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vss -Server $Server | Where-Object { $_.Name -eq $mgmtPgName } | Select-Object -First 1
             if (-not $stdPg) {
                 New-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -VLanId $mgmtVlanId -Server $Server -ErrorAction Stop | Out-Null
                 $stdPg = Get-VirtualPortGroup -VirtualSwitch $vss -Name $mgmtPgName -Server $Server -ErrorAction Stop
@@ -710,7 +747,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
                     Write-LogMessage -Type DEBUG -Message "HostNetworkSystem.UpdateVirtualNic failed: $updateVnicError."
                 }
                 # Try 2b: If port group already has a VMkernel (UpdateVirtualNic AlreadyExists, or create-new would fail), remove existing VMkernel(s) on the VSS then retry UpdateVirtualNic.
-                $existingOnStdPg = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -PortGroup $stdPg -Server $Server -ErrorAction SilentlyContinue
+                $existingOnStdPg = Get-VmkernelOnPortGroup -VMHost $vmhost -PortGroup $stdPg -Server $Server
                 if (-not $moved -and $existingOnStdPg) {
                     try {
                         $existingOnStdPg | ForEach-Object { Remove-VMHostNetworkAdapter -Nic $_ -Confirm:$false -ErrorAction Stop }
@@ -766,6 +803,371 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
     finally {
         $WarningPreference = $prevWarningPreference
     }
+}
+Function Get-VDPortgroupById {
+
+    <#
+        .SYNOPSIS
+        Returns a distributed port group by its MoRef ID. Thin wrapper over Get-VDPortgroup enabling unit tests to mock this call without fighting PowerCLI type constraints on the -Server parameter.
+
+        .PARAMETER Id
+        MoRef ID of the distributed port group (e.g. "dvportgroup-42").
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-VDPortgroupById -Id "dvportgroup-42" -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Id,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VDPortgroup -Id $Id -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Get-DpgsOnVds {
+
+    <#
+        .SYNOPSIS
+        Returns all non-DVUplinks distributed port groups on a VDS. Thin wrapper over Get-VDPortgroup enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VDSwitch
+        The VDS object whose port groups are returned.
+
+        .EXAMPLE
+        Get-DpgsOnVds -VDSwitch $vdsObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VDSwitch
+    )
+
+    Get-VDPortgroup -VDSwitch $VDSwitch -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -notlike "*DVUplinks*" }
+}
+
+Function Get-PhysicalNicsOnVdsForHost {
+
+    <#
+        .SYNOPSIS
+        Returns the physical NICs (pNICs) a host contributes as uplinks to a VDS. Thin wrapper over Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VDSwitch
+        The VDS object to check pNIC membership for.
+
+        .PARAMETER VMHost
+        The VMHost object whose pNICs are inspected.
+
+        .EXAMPLE
+        Get-PhysicalNicsOnVdsForHost -VMHost $vmhostObj -VDSwitch $vdsObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VDSwitch,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $VDSwitch -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Get-VmkernelAdaptersOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns all VMkernel adapters for a host. Thin wrapper over Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object whose VMkernel adapters are returned.
+
+        .EXAMPLE
+        Get-VmkernelAdaptersOnHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Get-VdsListOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns all VDSes a host participates in. Thin wrapper over Get-VDSwitch enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object whose VDS memberships are returned.
+
+        .EXAMPLE
+        Get-VdsListOnHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VDSwitch -VMHost $VMHost -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Get-ClusterByName {
+
+    <#
+        .SYNOPSIS
+        Returns a cluster by name. Thin wrapper over Get-Cluster enabling unit tests to mock this call without fighting PowerCLI type constraints on the -Server parameter.
+
+        .PARAMETER Name
+        Name of the cluster to retrieve.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-ClusterByName -Name "Cluster01" -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Name,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-Cluster -Name $Name -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Get-VmHostsInCluster {
+
+    <#
+        .SYNOPSIS
+        Returns all VMHosts in a cluster. Thin wrapper over Get-VMHost enabling unit tests to mock this call without fighting PowerCLI type constraints on the -Location parameter.
+
+        .PARAMETER ClusterObject
+        The cluster object whose hosts are returned.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-VmHostsInCluster -ClusterObject $clusterObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VMHost -Location $ClusterObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Get-VirtualSwitchesOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns all standard virtual switches on a host. Thin wrapper over Get-VirtualSwitch enabling unit tests to mock this call without fighting PowerCLI type constraints on the -VMHost parameter.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object whose standard switches are returned.
+
+        .EXAMPLE
+        Get-VirtualSwitchesOnHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VirtualSwitch -VMHost $VMHost -Standard -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Get-VirtualPortGroupsOnSwitch {
+
+    <#
+        .SYNOPSIS
+        Returns all port groups on a standard virtual switch. Thin wrapper over Get-VirtualPortGroup enabling unit tests to mock this call without fighting PowerCLI type constraints on the -VirtualSwitch parameter.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VirtualSwitch
+        The standard virtual switch object whose port groups are returned.
+
+        .EXAMPLE
+        Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vssObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VirtualSwitch
+    )
+
+    Get-VirtualPortGroup -VirtualSwitch $VirtualSwitch -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Get-VmkernelOnPortGroup {
+
+    <#
+        .SYNOPSIS
+        Returns VMkernel adapters on a specific port group for a host. Thin wrapper over Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type constraints on the -PortGroup and -VMHost parameters.
+
+        .PARAMETER PortGroup
+        The port group object to filter VMkernel adapters by.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object whose VMkernel adapters are inspected.
+
+        .EXAMPLE
+        Get-VmkernelOnPortGroup -VMHost $vmhostObj -PortGroup $pgObj -Server "vc.lab"
+    #>
+
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$PortGroup,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -PortGroup $PortGroup -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Test-HostManagementVdsDualUplink {
+
+    <#
+        .SYNOPSIS
+        Checks whether the VDS carrying management (vmk0) on a host has at least two physical NIC uplinks from that host.
+
+        .DESCRIPTION
+        Locates the Distributed Virtual Switch that vmk0 is connected to by inspecting the port group reference on the VMkernel adapter, then counts the physical NICs this host contributes to that VDS as uplinks. Returns a result object indicating whether the dual-uplink prerequisite is met and the name of the management VDS.
+
+        .PARAMETER Server
+        vCenter server name. Defaults to $Script:vCenterName.
+
+        .PARAMETER VMHost
+        The VMHost object to inspect.
+
+        .OUTPUTS
+        PSCustomObject with HasDualUplink (bool) and MgmtVdsName (string). MgmtVdsName is empty when vmk0 is not on a VDS.
+
+        .EXAMPLE
+        $result = Test-HostManagementVdsDualUplink -VMHost $vmhost
+        if (-not $result.HasDualUplink) { Write-Host "Prerequisite not met." }
+
+        .NOTES
+        When vmk0 is already on a standard switch, HasDualUplink is $false and MgmtVdsName is empty. Callers should treat the empty-MgmtVdsName case as "no VDS cleanup needed" rather than a failure.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    $result = [PSCustomObject]@{ HasDualUplink = $false; MgmtVdsName = "" }
+    $hostName = $VMHost.Name
+
+    $vmk0 = Get-VmkernelAdaptersOnHost -VMHost $VMHost -Server $Server |
+        Where-Object { $_.Name -eq "vmk0" }
+    if (-not $vmk0) {
+        Write-LogMessage -Type DEBUG -Message "Test-HostManagementVdsDualUplink: vmk0 not found on host `"$hostName`"."
+        return $result
+    }
+
+    # Enumerate all VDSes this host has uplinks on; for each, check if vmk0 is on one of its port groups.
+    # Using Get-VDSwitch -VMHost is more reliable than resolving the port group reference via Get-VDPortgroup -Id,
+    # which fails silently on certain PowerCLI/vCenter combinations when the MoRef format is not accepted.
+    $mgmtVds = $null
+    $allVdsOnHost = @(Get-VdsListOnHost -VMHost $VMHost -Server $Server)
+    foreach ($vds in $allVdsOnHost) {
+        $vmk0OnThisVds = $false
+
+        # Primary: resolve vmk0's port group reference and match against this VDS.
+        try {
+            $pgRef = $vmk0.ExtensionData.Spec.PortGroup
+            if ($pgRef) {
+                $pgRefValue = if ($pgRef.Value) { $pgRef.Value.ToString().Trim() } else { $pgRef.ToString().Trim() }
+                $dpg = Get-VDPortgroupById -Id $pgRefValue -Server $Server
+                if ($dpg -and $dpg.VDSwitch -and $dpg.VDSwitch.Name -eq $vds.Name) {
+                    $vmk0OnThisVds = $true
+                }
+                if (-not $vmk0OnThisVds -and $dpg) {
+                    $vdsPgs = @(Get-DpgsOnVds -VDSwitch $vds -Server $Server)
+                    foreach ($vdsPg in $vdsPgs) {
+                        if (($vdsPg.Id -and $dpg.Id -and $vdsPg.Id -eq $dpg.Id) -or ($vdsPg.Name -and $dpg.Name -and $vdsPg.Name -eq $dpg.Name)) {
+                            $vmk0OnThisVds = $true
+                            break
+                        }
+                        $dpgMoRef = if ($vdsPg.ExtensionData.MoRef.Value) { $vdsPg.ExtensionData.MoRef.Value.ToString().Trim() } else { "" }
+                        # Normalize both MoRef values to just the dvportgroup-NNN portion before comparing to
+                        # avoid wildcard substring false positives (e.g. "dvportgroup-12" matching "dvportgroup-123").
+                        if ($dpgMoRef) {
+                            $normRef   = if ($pgRefValue -match '([A-Za-z]+-\d+)') { $Matches[1] } else { $pgRefValue }
+                            $normMoRef = if ($dpgMoRef  -match '([A-Za-z]+-\d+)') { $Matches[1] } else { $dpgMoRef }
+                            if ($normRef -eq $normMoRef) {
+                                $vmk0OnThisVds = $true
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Test-HostManagementVdsDualUplink: port group reference check failed for host `"$hostName`" on VDS `"$($vds.Name)`": $($_.Exception.Message)."
+        }
+
+        # Fallback: iterate each DPG on the VDS and check if Get-VMHostNetworkAdapter -PortGroup returns vmk0.
+        if (-not $vmk0OnThisVds) {
+            $vdsPgsIter = @(Get-DpgsOnVds -VDSwitch $vds -Server $Server)
+            foreach ($pg in $vdsPgsIter) {
+                $vmksOnPg = Get-VmkernelOnPortGroup -VMHost $VMHost -PortGroup $pg -Server $Server
+                if ($vmksOnPg | Where-Object { $_.Name -eq "vmk0" }) {
+                    $vmk0OnThisVds = $true
+                    Write-LogMessage -Type DEBUG -Message "Test-HostManagementVdsDualUplink: vmk0 on host `"$hostName`" confirmed on VDS `"$($vds.Name)`" via DPG iteration."
+                    break
+                }
+            }
+        }
+
+        if ($vmk0OnThisVds) {
+            $mgmtVds = $vds
+            break
+        }
+    }
+
+    if (-not $mgmtVds) {
+        Write-LogMessage -Type DEBUG -Message "Test-HostManagementVdsDualUplink: vmk0 on host `"$hostName`" is not on any VDS (may already be on a standard switch)."
+        return $result
+    }
+
+    $result.MgmtVdsName = $mgmtVds.Name
+    $pnicsOnVds = @(Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $mgmtVds -Server $Server)
+    $pnicCount = if ($pnicsOnVds) { $pnicsOnVds.Count } else { 0 }
+    Write-LogMessage -Type DEBUG -Message "Test-HostManagementVdsDualUplink: host `"$hostName`" has $pnicCount pNIC(s) on management VDS `"$($mgmtVds.Name)`"."
+    $result.HasDualUplink = ($pnicCount -ge 2)
+    return $result
 }
 Function Remove-EdgeClusterDistributedSwitch {
     <#
@@ -1074,7 +1476,10 @@ Function Add-VsanOsaDiskGroupToCluster {
     }
 
     try {
-        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
+        if (-not $clusterObject) {
+            throw [VcfDeploymentException]::new("Cluster `"$ClusterName`" not found in vCenter `"$Script:vCenterName`".")
+        }
         $clusterHosts = Get-VMHost -Location $clusterObject -Server $Script:vCenterName -ErrorAction Stop
 
         if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
@@ -1477,7 +1882,10 @@ Function Add-VsanEsaStoragePoolDisk {
     }
 
     try {
-        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
+        if (-not $clusterObject) {
+            throw [VcfDeploymentException]::new("Cluster `"$ClusterName`" not found in vCenter `"$Script:vCenterName`".")
+        }
         $clusterHosts = Get-VMHost -Location $clusterObject -Server $Script:vCenterName -ErrorAction Stop
 
         if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
