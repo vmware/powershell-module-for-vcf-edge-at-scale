@@ -5,10 +5,11 @@ on:
     - cron: '0 */4 * * *' # Runs every four hours
   workflow_dispatch:      # Allows you to run it manually
 
+permissions:
+  contents: read
+  pull-requests: write
+
 jobs:
-  permissions:
-    contents: read
-    pull-requests: write
   count-downloads:
     runs-on: ubuntu-latest
     steps:
