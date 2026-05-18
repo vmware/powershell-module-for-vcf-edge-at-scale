@@ -3974,17 +3974,17 @@ Function Get-ManagementVSwitchInfo {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSObject]$VMHost
     )
 
-    $vmk0 = Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "vmk0" }
+    $vmk0 = Get-VmkernelAdaptersOnHost -VMHost $VMHost -Server $Script:vCenterName | Where-Object { $_.Name -eq "vmk0" }
     if (-not $vmk0) {
         return $null
     }
-    $stdSwitches = Get-VirtualSwitch -VMHost $VMHost -Standard -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $stdSwitches = Get-VirtualSwitchesOnHost -VMHost $VMHost -Server $Script:vCenterName
     foreach ($vSwitch in $stdSwitches) {
-        $portGroups = Get-VirtualPortGroup -VirtualSwitch $vSwitch -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $portGroups = Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vSwitch -Server $Script:vCenterName
         foreach ($pg in $portGroups) {
-            $vmkernelsOnPg = Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -PortGroup $pg -Server $Script:vCenterName -ErrorAction SilentlyContinue
+            $vmkernelsOnPg = Get-VmkernelOnPortGroup -VMHost $VMHost -PortGroup $pg -Server $Script:vCenterName
             if ($vmkernelsOnPg | Where-Object { $_.Name -eq "vmk0" }) {
-                $pnics = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vSwitch -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                $pnics = Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $vSwitch -Server $Script:vCenterName
                 $pnicNames = @($pnics | ForEach-Object { $_.Name })
                 $mgmtVlanId = 0
                 if ($pg.PSObject.Properties["VLanID"]) {
@@ -4030,16 +4030,16 @@ Function Get-FirstUnusedNicFromNicList {
     )
 
     $assigned = @()
-    $stdSwitches = Get-VirtualSwitch -VMHost $VMHost -Standard -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    $stdSwitches = Get-VirtualSwitchesOnHost -VMHost $VMHost -Server $Script:vCenterName
     foreach ($sw in $stdSwitches) {
-        $pnics = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $sw -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $pnics = Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $sw -Server $Script:vCenterName
         if ($pnics) {
             $assigned += @($pnics | ForEach-Object { $_.Name })
         }
     }
     $allVds = Get-VDSwitch -Server $Script:vCenterName -ErrorAction SilentlyContinue
     foreach ($vds in $allVds) {
-        $pnics = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vds -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $pnics = Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $vds -Server $Script:vCenterName
         if ($pnics) {
             $assigned += @($pnics | ForEach-Object { $_.Name })
         }
@@ -7715,7 +7715,7 @@ Function Show-HarborInstanceDetails {
     if ([String]::IsNullOrWhiteSpace($adminPassword)) {
         $rawPassword = $HarborConfig.harborAdminPassword
         if (-not [String]::IsNullOrWhiteSpace($rawPassword)) {
-            if ($rawPassword -match '^\$env:(.+)$') {
+            if ($rawPassword -match '^\$env:([A-Za-z_][A-Za-z0-9_]*)$') {
                 $adminPassword = [System.Environment]::GetEnvironmentVariable($Matches[1])
             } else {
                 $adminPassword = $rawPassword
@@ -8080,7 +8080,7 @@ Function Add-HarborContainerImageRegistry {
     if ([String]::IsNullOrWhiteSpace($adminPassword)) {
         $rawPassword = $HarborConfig.harborAdminPassword
         if (-not [String]::IsNullOrWhiteSpace($rawPassword)) {
-            if ($rawPassword -match '^\$env:(.+)$') {
+            if ($rawPassword -match '^\$env:([A-Za-z_][A-Za-z0-9_]*)$') {
                 $adminPassword = [System.Environment]::GetEnvironmentVariable($Matches[1])
             } else {
                 $adminPassword = $rawPassword
@@ -11058,7 +11058,14 @@ Function Resolve-HarborSecretValue {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Value
     )
 
-    if (-not ($Value -match '^\$env:(.+)$')) {
+    # A value that looks like a broken env var reference must fail explicitly rather than silently
+    # being used as a literal password (which would be passed to Harbor undetected).
+    if ($Value -match '^\$env:') {
+        if (-not ($Value -match '^\$env:([A-Za-z_][A-Za-z0-9_]*)$')) {
+            Write-LogMessage -Type ERROR -Message "Resolve-HarborSecretValue: harborConfiguration.$FieldName value `"$Value`" starts with `$env:` but the variable name is not valid. Use `$env:VARNAME format where VARNAME starts with a letter or underscore and contains only letters, digits, and underscores."
+            throw [VcfDeploymentException]::new("harborConfiguration.$FieldName has a malformed environment variable reference: `"$Value`".")
+        }
+    } else {
         return $Value
     }
 
@@ -16536,6 +16543,7 @@ Function Test-JsonHarborConfiguration {
 
     $validationFailures = 0
     $volumeSizePattern = '^[1-9]\d*Gi$'
+    $envVarPattern = '^\$env:[A-Za-z_][A-Za-z0-9_]*$'
     $volumeSizeKeys = @("registryVolumeSize", "jobserviceVolumeSize", "databaseVolumeSize", "redisVolumeSize", "trivyVolumeSize")
     $labEnvironment = Get-CommonLabEnvironmentEnabled -InputData $InputData
 
@@ -16611,14 +16619,28 @@ Function Test-JsonHarborConfiguration {
             }
         }
 
-        # (Deep) Validate secretKey length when it is a plain-text literal (not an $env: reference).
-        # Harbor requires secretKey to be exactly 16 characters (AES-128). $env: references are
-        # validated at pre-flight by Invoke-HarborEnvVarPreflight via Resolve-HarborSecretValue
-        # (with Y/N re-prompting); plain-text values must be caught here before any deployment begins.
+        # (Deep) Validate secretKey — env var references must be well-formed; plain-text literals
+        # must be exactly 16 characters (AES-128 key). $env: references are further validated at
+        # pre-flight by Invoke-HarborEnvVarPreflight via Resolve-HarborSecretValue.
         $secretKeyValue = $cluster.harborConfiguration.secretKey
-        if (-not [String]::IsNullOrWhiteSpace($secretKeyValue) -and $secretKeyValue -notmatch '^\$env:') {
-            if ($secretKeyValue.Length -ne 16) {
+        if (-not [String]::IsNullOrWhiteSpace($secretKeyValue)) {
+            if ($secretKeyValue -match '^\$env:') {
+                if ($secretKeyValue -notmatch $envVarPattern) {
+                    Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.secretKey for edgeSite `"$currentEdgeSite`" has a malformed environment variable reference `"$secretKeyValue`". Use the format `$env:VARNAME where VARNAME starts with a letter or underscore and contains only letters, digits, and underscores."
+                    $validationFailures++
+                }
+            } elseif ($secretKeyValue.Length -ne 16) {
                 Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.secretKey for edgeSite `"$currentEdgeSite`" must be exactly 16 characters but is $($secretKeyValue.Length) character(s). Harbor uses it as an AES-128 encryption key."
+                $validationFailures++
+            }
+        }
+
+        # (Deep) Validate all other Harbor secret/password fields: any value beginning with '$'
+        # must be a well-formed $env:VARNAME reference; plain-text secrets are accepted as-is.
+        foreach ($secretField in @("harborAdminPassword", "databasePassword", "coreSecret", "jobserviceSecret", "registrySecret")) {
+            $fieldValue = $cluster.harborConfiguration.$secretField
+            if (-not [String]::IsNullOrWhiteSpace($fieldValue) -and $fieldValue -match '^\$env:' -and $fieldValue -notmatch $envVarPattern) {
+                Write-LogMessage -Type ERROR -Message "clusters[].harborConfiguration.$secretField for edgeSite `"$currentEdgeSite`" has a malformed environment variable reference `"$fieldValue`". Use the format `$env:VARNAME where VARNAME starts with a letter or underscore and contains only letters, digits, and underscores."
                 $validationFailures++
             }
         }

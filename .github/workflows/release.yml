@@ -162,20 +162,23 @@ jobs:
           Write-Output "INFO: Setting the PowerShell Gallery as a trusted repository."
           Set-PSRepository psgallery -InstallationPolicy trusted
           Write-Output "INFO: Locating module manifest in '$env:GITHUB_WORKSPACE'."
-          $moduleManifest = (Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter *.psd1).Name
-          if ($moduleManifest) {
-              Write-Output "SUCCESS: Manifest '$moduleManifest' found in '$env:GITHUB_WORKSPACE'."
+          $manifestName = (Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter *.psd1 -Depth 0).Name
+          if ($manifestName) {
+              Write-Output "SUCCESS: Manifest '$manifestName' found in '$env:GITHUB_WORKSPACE'."
           } else {
-              Write-Output "FAILURE: Manifest not found in '$env:GITHUB_WORKSPACE'."
+              Write-Error "FAILED: Manifest not found in '$env:GITHUB_WORKSPACE'."
+              exit 1
           }
-          if ($moduleManifest -match '^(.*)\.psd1$') {
+          if ($manifestName -match '^(.*)\.psd1$') {
               $moduleName = $Matches[1]
-              Write-Output "SUCCESS: Determining module name from manifest '$moduleManifest'."
+              Write-Output "SUCCESS: Determining module name from manifest '$manifestName'."
           } else {
-              Write-Error "FAILED: Determining module name from manifest '$moduleManifest'."
+              Write-Error "FAILED: Determining module name from manifest '$manifestName'."
+              exit 1
           }
-          Write-Output "INFO: Reading module manifest '$moduleManifest'."
-          $moduleManifestData = Import-PowerShellDataFile -Path $moduleManifest
+          Write-Output "INFO: Reading module manifest '$manifestName'."
+          $moduleManifestData = Import-PowerShellDataFile -Path (Join-Path $env:GITHUB_WORKSPACE $manifestName)
+          $moduleVersion = $moduleManifestData.ModuleVersion
           Write-Output "INFO: Determining module dependencies."
           $requiredModules = $moduleManifestData.RequiredModules
           if ($requiredModules) {
@@ -186,13 +189,13 @@ jobs:
               foreach ($module in $requiredModules) {
                   $requiredModuleName = $module.ModuleName
                   if ($requiredModuleName -eq 'VCF.PowerCLI') {
-                    Write-Output "INFO: Installing version defined in the manifest from the PowerShell Gallery."
-                    Install-Module -Name VCF.PowerCLI -RequiredVersion $module.RequiredVersion -Force
+                      Write-Output "INFO: Installing version defined in the manifest from the PowerShell Gallery."
+                      Install-Module -Name VCF.PowerCLI -RequiredVersion $module.RequiredVersion -Force
                   } else {
-                    New-Item $requiredModuleName -ItemType Directory
-                    Write-Output "INFO: Performing workaround for github.com/PowerShell/PowerShell/issues/7722."
-                    Write-Output "INFO: Creating placeholder manifest for $requiredModuleName at $((Get-Location).Path)/$requiredModuleName/$requiredModuleName.psd1"
-                    New-Item "./$requiredModuleName/$requiredModuleName.psd1" -ItemType File
+                      New-Item $requiredModuleName -ItemType Directory
+                      Write-Output "INFO: Performing workaround for github.com/PowerShell/PowerShell/issues/7722."
+                      Write-Output "INFO: Creating placeholder manifest for $requiredModuleName at $((Get-Location).Path)/$requiredModuleName/$requiredModuleName.psd1"
+                      New-Item "./$requiredModuleName/$requiredModuleName.psd1" -ItemType File
                   }
               }
           } else {
@@ -200,37 +203,56 @@ jobs:
           }
           Write-Output "INFO: Setting location to the GitHub workspace at '$env:GITHUB_WORKSPACE'."
           Set-Location $env:GITHUB_WORKSPACE
-          Write-Output "INFO: Publishing module to the PowerShell Gallery."
-          $remove = @('.ci', '.dependencies', '.git', '.github', '.gitignore', '.vscode', 'docs', 'CODEOWNERS', 'CODE_OF_CONDUCT.md', 'CONTRIBUTING.md', 'Makefile', 'mkdocs.yml')
-          $random = Get-Random -Count 1
-          $destinationPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath $random
-          $manifestName = (Get-ChildItem -Path $env:GITHUB_WORKSPACE -Filter *.psd1).Name
-          $moduleVersion = [regex]::Match((Get-Content -Path ./$manifestName -Raw), '(?<=ModuleVersion\s*=\s*'')[^'']+(?='')').Value
-          if ($manifestName -match '^(.*)\.psd1$') {
-              $moduleName = $Matches[1]
-              Write-Output "SUCCESS: Determining module name from manifest file name '$moduleName'."
-          } else {
-              Write-Error "FAILED: Determining module name from manifest file name '$moduleName'."
+          Write-Output "INFO: Building allowlist-based staging directory (mirrors Publish-VcfEdgeAtScale.ps1 PSGallery constants)."
+          $modulePath = Join-Path $env:GITHUB_WORKSPACE "_psgallery_staging" $moduleName
+          New-Item -Path $modulePath -ItemType Directory -Force | Out-Null
+          Write-Output "SUCCESS: Created staging path '$modulePath'."
+          foreach ($file in @("PSScriptAnalyzerSettings.psd1", "$moduleName.psd1", "$moduleName.psm1")) {
+              $src = Join-Path $env:GITHUB_WORKSPACE $file
+              if (Test-Path $src) {
+                  Copy-Item -Path $src -Destination (Join-Path $modulePath $file) -Force
+              } else {
+                  Write-Warning "Source file not found, skipping: $file"
+              }
           }
-          $modulePath = Join-Path -Path $destinationPath -ChildPath $moduleName
-          $createModulePath = New-Item -Path $modulePath -ItemType Directory -Force
-          if ($createModulePath) {
-              Write-Output "SUCCESS: Creating staging path '$modulePath'."
+          $changelogSrc = Join-Path $env:GITHUB_WORKSPACE "CHANGELOG.md"
+          if (Test-Path $changelogSrc) {
+              Copy-Item -Path $changelogSrc -Destination (Join-Path $modulePath "CHANGELOG.txt") -Force
+              Write-Output "INFO: Copied CHANGELOG.md as CHANGELOG.txt."
           } else {
-              Write-Error "FAILED: Creating staging path '$modulePath'."
+              Write-Warning "CHANGELOG.md not found; CHANGELOG.txt not included."
           }
-          Get-ChildItem -Force | Where-Object { $_.Name -notin $remove -and $_.Name -ne $random } | Copy-Item -Destination $modulePath -Recurse
+          foreach ($dir in @("Private", "Templates")) {
+              $srcDir = Join-Path $env:GITHUB_WORKSPACE $dir
+              if (Test-Path $srcDir) {
+                  Copy-Item -Path $srcDir -Destination (Join-Path $modulePath $dir) -Recurse -Force
+                  Write-Output "INFO: Copied $dir/ recursively."
+              } else {
+                  Write-Warning "Source directory not found, skipping: $dir"
+              }
+          }
+          $toolsDest = Join-Path $modulePath "Tools"
+          New-Item -Path $toolsDest -ItemType Directory -Force | Out-Null
+          foreach ($file in @("veas-json-generator.py", "veas-ui.html")) {
+              $src = Join-Path $env:GITHUB_WORKSPACE "Tools" $file
+              if (Test-Path $src) {
+                  Copy-Item -Path $src -Destination (Join-Path $toolsDest $file) -Force
+                  Write-Output "INFO: Copied Tools/$file."
+              } else {
+                  Write-Warning "Tools file not found, skipping: $file"
+              }
+          }
           Get-ChildItem -Depth 5 -Path $modulePath | Format-Table -AutoSize
-          $moduleManifest = Join-Path -Path $modulePath -ChildPath "$moduleName.psd1"
-          if (Test-Path -Path $moduleManifest) {
+          $moduleManifestPath = Join-Path $modulePath "$moduleName.psd1"
+          if (Test-Path -Path $moduleManifestPath) {
               Publish-Module -Path $modulePath -NuGetApiKey $env:PSGALLERY_API_KEY
               Start-Sleep -Seconds 30
-              $module = Find-Module -Name $moduleName -RequiredVersion "$moduleVersion"
+              $module = Find-Module -Name $moduleName -RequiredVersion $moduleVersion
               if ($module) {
                   Write-Output "SUCCESS: Publishing module '$moduleName' version '$moduleVersion' to PowerShell Gallery."
               } else {
                   Write-Error "FAILED: Publishing module '$moduleName' version '$moduleVersion' to PowerShell Gallery."
               }
           } else {
-              Write-Error "FAILED: Module manifest file not found at path '$moduleManifest'."
+              Write-Error "FAILED: Module manifest file not found at path '$moduleManifestPath'."
           }

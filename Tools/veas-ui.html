@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1009 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1010 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
@@ -95,6 +95,8 @@
   .collapsible-content.collapsed { display: none; }
   .section-toggle { color: var(--accent); font-size: 11px; cursor: pointer; font-weight: 600; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 4px; padding: 3px 11px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
   .section-toggle:hover { background: var(--success); border-color: var(--success); color: #fff; }
+  .chip-add-btn { color: var(--accent); font-size: 14px; cursor: pointer; font-weight: 700; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 4px; padding: 1px 8px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
+  .chip-add-btn:hover { background: var(--success); border-color: var(--success); color: #fff; }
   .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
   .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
   .tag-remove { cursor: pointer; color: var(--text-muted); }
@@ -222,9 +224,31 @@
   .th-label { padding: 5px 10px; text-align: left; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
   /* Muted 13px placeholder text inside chip containers */
   .text-muted-sm { color: var(--text-muted); font-size: 13px; }
+  /* ---- Light mode ---- */
+  body.light {
+    --bg: #f0f2f5;
+    --surface: #ffffff;
+    --surface2: #edf1f7;
+    --border: #c8d0dc;
+    --accent: #0091be;
+    --accent-dark: #007699;
+    --success: #1a9e5c;
+    --error: #c0392b;
+    --warning: #c07800;
+    --text: #1c2135;
+    --text-muted: #5a6680;
+    --shadow: 0 4px 16px rgba(0,0,0,0.08);
+  }
+  body.light .errors-box { background: #fef2f2; }
+  body.light .errors-box li { color: #c0392b; }
+  body.light .success-box { background: #f0fdf4; }
+  /* ---- Theme toggle button ---- */
+  #themeToggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: border-color 0.15s, color 0.15s; white-space: nowrap; }
+  #themeToggle:hover { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
 <body>
+<script>try{if(localStorage.getItem('veas-theme')==='light')document.body.classList.add('light');}catch(e){}</script>
 <header>
   <div>
     <h1>VCF Edge at Scale JSON Generator</h1>
@@ -235,6 +259,9 @@
        title="Open the VCF Edge at Scale README for deployment guidance and field reference">
       📖 <span>Help &amp; Documentation</span>
     </a>
+    <button id="themeToggle" onclick="toggleTheme()" title="Toggle light/dark mode">
+      <span id="themeIcon">☀</span><span id="themeLabel">Light</span>
+    </button>
     <span id="versionBadge" style="font-size:11px;color:var(--text-muted);font-family:monospace;">v…</span>
   </div>
 </header>
@@ -990,7 +1017,7 @@ function _validateChipEntry(el, hintId, type) {
     hint.textContent = msg;
     hint.className   = 'field-hint nic-count-bad';
   } else {
-    hint.textContent = 'Press Enter or click \u2795 Add to confirm.';
+    hint.textContent = 'Press Enter or click + to confirm.';
     hint.className   = 'field-hint';
   }
 }
@@ -1000,15 +1027,17 @@ function _validateChipEntry(el, hintId, type) {
 // Inline validation handler called onblur from any input field across the wizard.
 //
 // Supported types:
-//   'name'      RFC1123 segment name (lowercase, a-z/0-9/-, 1–80 chars)
-//   'vlanId'    Integer 0–4095
-//   'gateway'   IPv4 CIDR (e.g. 10.0.0.1/24)
-//   'ipv4'      Valid IPv4 address
-//   'fqdn'      FQDN or IPv4 address (hostnames, ESX hosts, witnesses)
-//   'netmask'   Valid contiguous subnet mask (e.g. 255.255.255.0)
-//   'ipCount'   Integer ≥ min (pass min as 3rd argument, default 1)
-//   'powerOf2'  Positive integer that is a power of 2
-//   'required'  Non-empty string
+//   'name'           RFC1123 segment name (lowercase, a-z/0-9/-, 1–80 chars)
+//   'vlanId'         Integer 0–4095
+//   'gateway'        IPv4 CIDR (e.g. 10.0.0.1/24)
+//   'ipv4'           Valid IPv4 address
+//   'fqdn'           FQDN or IPv4 address (hostnames, ESX hosts, witnesses)
+//   'netmask'        Valid contiguous subnet mask (e.g. 255.255.255.0)
+//   'ipCount'        Integer ≥ min (pass min as 3rd argument, default 1)
+//   'powerOf2'       Positive integer that is a power of 2
+//   'secretKey16'    Exactly 16 characters or a $env:VARNAME reference
+//   'harborEnvOrText' Plain-text value OR a well-formed $env:VARNAME reference
+//   'required'       Non-empty string
 //
 // Optional 3rd argument `min` is used by 'ipCount'.
 // Optional flag `allowEmpty` (4th arg, default false) — when true, an empty field
@@ -1081,6 +1110,12 @@ function validateSegField(el, type, min, allowEmpty) {
       case "secretKey16":
         if (!/^\$env:[A-Za-z_][A-Za-z0-9_]*$/.test(val) && val.length !== 16)
           msg = "Must be exactly 16 characters, or use $env:VARNAME to reference an environment variable.";
+        break;
+      // Secret / password fields that accept a plain-text value OR a $env:VARNAME reference.
+      // A value starting with '$' must be a well-formed env var reference; anything else is accepted as-is.
+      case "harborEnvOrText":
+        if (val.startsWith('$') && !/^\$env:[A-Za-z_][A-Za-z0-9_]*$/.test(val))
+          msg = "Environment variable references must use the format $env:VARNAME (e.g. $env:MY_SECRET). VARNAME must start with a letter or underscore and contain only letters, digits, and underscores.";
         break;
       case "required":
         break;
@@ -1405,6 +1440,22 @@ function removeSearch(i)       { searchDomainList.splice(i, 1); renderSearchChip
 function setSearchFromValue(v) { searchDomainList = _fromValue(v); renderSearchChips(); }
 
 // ---------------------------------------------------------------------------
+// Theme toggle (light / dark)
+// ---------------------------------------------------------------------------
+function toggleTheme() {
+  const light = document.body.classList.toggle('light');
+  _applyThemeButton(light);
+  try { localStorage.setItem('veas-theme', light ? 'light' : 'dark'); } catch(e) {}
+}
+
+function _applyThemeButton(light) {
+  const icon  = document.getElementById('themeIcon');
+  const label = document.getElementById('themeLabel');
+  if (icon)  icon.textContent  = light ? '🌙' : '☀';
+  if (label) label.textContent = light ? 'Dark' : 'Light';
+}
+
+// ---------------------------------------------------------------------------
 // Step navigation
 // ---------------------------------------------------------------------------
 function goToStep(n) {
@@ -1520,16 +1571,25 @@ function _restoreCheckpointFromConsole(btn) {
 // ---------------------------------------------------------------------------
 // Collapsible sections
 // ---------------------------------------------------------------------------
-function toggleSection(id) {
+function toggleSection(id, callerBtn) {
   const el = document.getElementById(id);
   if (!el) return;
   el.classList.toggle('collapsed');
   const collapsed = el.classList.contains('collapsed');
-  // Walk up to the card-header and find the toggle span within it, rather than
-  // relying on previousElementSibling which breaks when extra elements (e.g. reset
-  // buttons) are injected between the header and the collapsible content.
+
+  // Persist harbor expanded state in the site object so it survives band re-renders.
+  if (id.startsWith('harbor-')) {
+    const siteId = parseInt(id.slice(7), 10);
+    const site = sites.find(s => s.id === siteId);
+    if (site) site.harborExpanded = !collapsed;
+  }
+
+  // Lookup order: explicit toggle-<id> element (most reliable, e.g. toggle-harbor-1),
+  // then caller passed as argument, then .card-header fallback for card-based sections.
   const header = el.closest('.card') && el.closest('.card').querySelector('.card-header');
-  const btn = header && header.querySelector('.section-toggle');
+  const btn = document.getElementById('toggle-' + id)
+           || (callerBtn && callerBtn.classList ? callerBtn : null)
+           || (header && header.querySelector('.section-toggle'));
   if (btn) {
     const hasConfig = btn.textContent.trim().endsWith('config');
     btn.textContent = (collapsed ? 'expand' : 'collapse') + (hasConfig ? ' config' : '');
@@ -1811,9 +1871,10 @@ function _sanitizeCloneNetworks(clone, newName) {
 }
 
 // Clears all host-specific data from a cloned site (ESX hostnames, segment gateways,
-// VMkernel IPs and gateways). Returns a `removed` summary object for the warning banner.
+// VMkernel IPs and gateways, supervisor FLB gateway CIDRs). Returns a `removed`
+// summary object for the warning banner.
 function _clearHostSpecificData(clone) {
-  const removed = { hostsCount: 0, gatewaySegs: [], vmkIpSegs: [] };
+  const removed = { hostsCount: 0, gatewaySegs: [], vmkIpSegs: [], supFlbGateways: false };
 
   const hostsBefore = Array.isArray(clone.esxHosts) ? clone.esxHosts.length : 0;
   clone.esxHosts = [];
@@ -1836,6 +1897,18 @@ function _clearHostSpecificData(clone) {
     vmk.gateway = '';
     if (hadIps || hadGw) removed.vmkIpSegs.push(vmk.service || 'vmk');
   });
+
+  // Clear supervisor FLB gateway CIDRs — they are derived from the infrastructure
+  // segment definitions, which are site-specific and were just cleared above.
+  // Selecting a segment in the Supervisor Configuration section will re-populate them.
+  const sv = clone._supervisor || {};
+  for (const key of ['flbMgmt', 'flbVirtualServerNet']) {
+    const net = sv[key];
+    if (net && net.flbNetworkGateway) {
+      net.flbNetworkGateway = '';
+      removed.supFlbGateways = true;
+    }
+  }
 
   return removed;
 }
@@ -1988,16 +2061,22 @@ function _renderEsxChips(siteId) {
   if (!container) return;
   container.classList.toggle('req-empty', hosts.length === 0);
   const maxHosts = (site.storageType === 'VMFS') ? 1 : _MAX_VSAN_HOST_COUNT;
-  if (hosts.length === 0) {
-    container.innerHTML = `<span class="text-muted-sm">No hosts added yet.</span>`;
-  } else {
-    container.innerHTML = hosts.map((h, i) =>
-      `<span class="chip-item">` +
-      `<span class="chip-item-label">${esc(h)}</span>` +
-      `<span onclick="removeEsxHost(${siteId},${i})" title="Remove" style="padding:3px 7px;border-left:1px solid var(--border);cursor:pointer;color:var(--text-muted);">×</span>` +
-      `</span>`
-    ).join('');
-  }
+  const atMax = hosts.length >= maxHosts;
+  const chips = hosts.map((h, i) =>
+    `<span class="chip-item">` +
+    `<span class="chip-item-label">${esc(h)}</span>` +
+    `<span onclick="removeEsxHost(${siteId},${i})" title="Remove" style="padding:3px 7px;border-left:1px solid var(--border);cursor:pointer;color:var(--text-muted);">×</span>` +
+    `</span>`
+  ).join('');
+  const entryRow = atMax ? '' :
+    `<input type="text" id="esxInput_${siteId}"` +
+    ` placeholder="${hosts.length === 0 ? 'esx01.example.com' : 'Add another\u2026'}"` +
+    ` style="flex:1;min-width:120px;background:transparent;border:none;outline:none;font-size:13px;padding:2px 4px;color:var(--text);font-family:inherit;"` +
+    ` oninput="_restrictFqdnInput(this)"` +
+    ` onblur="_validateChipEntry(this,'esxCountHint_${siteId}','fqdn')"` +
+    ` onkeydown="if(event.key==='Enter'){event.preventDefault();addEsxHost(${siteId});}">` +
+    `<button onclick="addEsxHost(${siteId})" title="Add host" class="chip-add-btn">+</button>`;
+  container.innerHTML = chips + entryRow;
   if (hint) {
     const ok = hosts.length === maxHosts;
     hint.textContent = _esxCountMsg(site.storageType, hosts.length);
@@ -2009,8 +2088,8 @@ function addEsxHost(siteId) {
   const site = sites.find(s => s.id === siteId);
   if (!site) return;
   const input = document.getElementById(`esxInput_${siteId}`);
-  const val = (input.value || '').trim();
-  if (!val) { input.focus(); return; }
+  const val = (input ? input.value || '' : '').trim();
+  if (!val) { if (input) input.focus(); return; }
   if (!_isValidFqdnOrIp(val)) {
     _flashNicHint(`esxCountHint_${siteId}`, `"${val}" is not a valid FQDN or IPv4 address.`);
     return;
@@ -2026,16 +2105,22 @@ function addEsxHost(siteId) {
     return;
   }
   site.esxHosts.push(val);
-  input.value = '';
-  input.focus();
   _renderEsxChips(siteId);
+  // Re-get the input since _renderEsxChips recreated the innerHTML.
+  const newInput = document.getElementById(`esxInput_${siteId}`);
+  if (newInput) newInput.focus();
 }
 
 function removeEsxHost(siteId, idx) {
   const site = sites.find(s => s.id === siteId);
   if (!site || !Array.isArray(site.esxHosts)) return;
+  const prevInput = document.getElementById(`esxInput_${siteId}`);
+  const prevVal = prevInput ? prevInput.value : '';
   site.esxHosts.splice(idx, 1);
   _renderEsxChips(siteId);
+  // Re-get the recreated input, restore any in-progress text, and focus it.
+  const newInput = document.getElementById(`esxInput_${siteId}`);
+  if (newInput) { if (prevVal) newInput.value = prevVal; newInput.focus(); }
 }
 
 // ---------------------------------------------------------------------------
@@ -2208,7 +2293,8 @@ function renderSiteServiceBand(site) {
 
   const harborState = _svcState(svcs.disableHarbor, commonHarborDisabled);
   const argoState   = _svcState(svcs.disableArgoCD,  commonArgoDisabled);
-  const harborToggle = harborState !== 'disabled-site' ? `<span class="section-toggle" onclick="toggleSection('harbor-${site.id}')" style="margin-left:8px;">expand config</span>` : '';
+  const harborToggleText = site.harborExpanded ? 'collapse config' : 'expand config';
+  const harborToggle = harborState !== 'disabled-site' ? `<span id="toggle-harbor-${site.id}" class="section-toggle" onclick="toggleSection('harbor-${site.id}')" style="margin-left:8px;">${harborToggleText}</span>` : '';
 
   return `<div id="svc-band-${site.id}" style="margin-top:12px;padding:12px 14px;background:var(--surface2);border:1px solid var(--border);border-radius:var(--radius);">
     <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px;">Supervisor Services — per-site overrides</div>
@@ -2243,14 +2329,7 @@ function _renderSiteHeaderFields(site) {
       </div>
       <div class="field">
         <label>ESX Hosts <span class="req">*</span>${tt('FQDN or IPv4 address of each ESX host in this cluster. VMFS: exactly 1 host. vSAN-OSA or vSAN-ESA: exactly 2 hosts.')}</label>
-        <div id="esxChips_${site.id}" class="chip-container${(!site.esxHosts || site.esxHosts.length === 0) ? ' req-empty' : ''}"></div>
-        <div style="display:flex;gap:6px;margin-top:6px;">
-          <input type="text" id="esxInput_${site.id}" placeholder="esx01.example.com" style="flex:1;font-size:13px;"
-            oninput="_restrictFqdnInput(this)"
-            onblur="_validateChipEntry(this,'esxCountHint_${site.id}','fqdn')"
-            onkeydown="if(event.key==='Enter'){event.preventDefault();addEsxHost(${site.id});}">
-          <button class="btn btn-secondary" style="padding:6px 12px;font-size:13px;white-space:nowrap;" onclick="addEsxHost(${site.id})">+ Add</button>
-        </div>
+        <div id="esxChips_${site.id}" class="chip-container${(!site.esxHosts || site.esxHosts.length === 0) ? ' req-empty' : ''}" style="cursor:text;" onclick="if(event.target===this){var i=document.getElementById('esxInput_${site.id}');if(i)i.focus();}"></div>
         <span class="field-hint" id="esxCountHint_${site.id}"></span>
       </div>
       <div class="field">
@@ -2453,7 +2532,10 @@ function _renderSiteHarborFields(site) {
             oninput="updateHarbor(${site.id},'caCrt',this.value)"></div>
         <div class="field"><label>Admin Password${tt('Harbor admin account password. Use $env:VARNAME to read from an environment variable at deployment time (recommended — avoids storing secrets in JSON).')}</label>
           <input type="text" value="${esc(h.harborAdminPassword)}" placeholder="$env:HARBOR_ADMIN_PASSWORD"
-            oninput="updateHarbor(${site.id},'harborAdminPassword',this.value)"></div>
+            data-err-id="harborErr_${site.id}_adminPw"
+            oninput="updateHarbor(${site.id},'harborAdminPassword',this.value)"
+            onblur="validateSegField(this,'harborEnvOrText',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_adminPw"></span></div>
         <div class="field"><label>Secret Key <span class="tip">exactly 16 chars</span>${tt('AES-128 encryption key for Harbor internal data. Must be exactly 16 characters. Use $env:SECRET_KEY to read from an environment variable.')}</label>
           <input type="text" value="${esc(h.secretKey)}" placeholder="$env:SECRET_KEY"
             data-err-id="harborErr_${site.id}_secretKey"
@@ -2462,7 +2544,10 @@ function _renderSiteHarborFields(site) {
           <span class="field-inline-err" id="harborErr_${site.id}_secretKey"></span></div>
         <div class="field"><label>Database Password${tt('Password for the Harbor PostgreSQL database. Use $env:DATABASE_PASSWORD to read from an environment variable.')}</label>
           <input type="text" value="${esc(h.databasePassword)}" placeholder="$env:DATABASE_PASSWORD"
-            oninput="updateHarbor(${site.id},'databasePassword',this.value)"></div>
+            data-err-id="harborErr_${site.id}_dbPw"
+            oninput="updateHarbor(${site.id},'databasePassword',this.value)"
+            onblur="validateSegField(this,'harborEnvOrText',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_dbPw"></span></div>
         <div class="field"><label>Registry Volume Size${tt('Persistent volume size for the Harbor registry component. Must be a positive integer followed by Gi (e.g. 10Gi). Minimum recommended: 10Gi.')}</label>
           <input type="text" value="${esc(h.registryVolumeSize)}" placeholder="10Gi"
             data-err-id="harborErr_${site.id}_regVol"
@@ -2495,13 +2580,22 @@ function _renderSiteHarborFields(site) {
           <span class="field-inline-err" id="harborErr_${site.id}_trivyVol"></span></div>
         <div class="field"><label>Core Secret${tt('Internal CSRF protection secret for the Harbor core component. Use $env:CORE_SECRET_KEY to read from an environment variable at deployment time.')}</label>
           <input type="text" value="${esc(h.coreSecret)}" placeholder="$env:CORE_SECRET_KEY"
-            oninput="updateHarbor(${site.id},'coreSecret',this.value)"></div>
+            data-err-id="harborErr_${site.id}_coreSecret"
+            oninput="updateHarbor(${site.id},'coreSecret',this.value)"
+            onblur="validateSegField(this,'harborEnvOrText',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_coreSecret"></span></div>
         <div class="field"><label>Jobservice Secret${tt('Internal authentication secret for the Harbor job service component. Use $env:JOBSERVICE_SECRET_KEY to read from an environment variable at deployment time.')}</label>
           <input type="text" value="${esc(h.jobserviceSecret)}" placeholder="$env:JOBSERVICE_SECRET_KEY"
-            oninput="updateHarbor(${site.id},'jobserviceSecret',this.value)"></div>
+            data-err-id="harborErr_${site.id}_jobSecret"
+            oninput="updateHarbor(${site.id},'jobserviceSecret',this.value)"
+            onblur="validateSegField(this,'harborEnvOrText',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_jobSecret"></span></div>
         <div class="field"><label>Registry Secret${tt('Internal authentication secret for the Harbor registry component. Use $env:REGISTRY_SECRET_KEY to read from an environment variable at deployment time.')}</label>
           <input type="text" value="${esc(h.registrySecret)}" placeholder="$env:REGISTRY_SECRET_KEY"
-            oninput="updateHarbor(${site.id},'registrySecret',this.value)"></div>
+            data-err-id="harborErr_${site.id}_regSecret"
+            oninput="updateHarbor(${site.id},'registrySecret',this.value)"
+            onblur="validateSegField(this,'harborEnvOrText',null,true)">
+          <span class="field-inline-err" id="harborErr_${site.id}_regSecret"></span></div>
       </div>
     </div>`;
 }
@@ -2547,6 +2641,8 @@ function _renderCloneBanner(site) {
   }
   if (removed.vmkIpSegs.length > 0)
     items.push(`<li><strong>VMkernel IPs and gateways</strong> for: ${removed.vmkIpSegs.map(esc).join(', ')} — enter the host-specific IPs for this site.</li>`);
+  if (removed.supFlbGateways)
+    items.push(`<li><strong>Supervisor FLB gateway CIDRs</strong> — select a network segment for FLB Management and FLB Virtual Server Network in the Supervisor Configuration section to auto-populate the gateway from the infrastructure segment definition.</li>`);
 
   // Auto-generated values that should be reviewed.
   if (workloadServiceStartIp) {
@@ -2718,6 +2814,8 @@ function updateSiteSvcTriState(siteId, field, value) {
     site.supervisorServices[field] = (value === 'true');
   }
   // Re-render the badge band in-place so the status pill reflects the new state immediately.
+  // site.harborExpanded is authoritative state — renderSiteServiceBand reads it to produce
+  // the correct toggle button text without any post-render restoration needed.
   const band = document.getElementById(`svc-band-${siteId}`);
   if (band) band.outerHTML = renderSiteServiceBand(site);
 }
@@ -2785,8 +2883,9 @@ function rebuildSupervisorSites() {
 }
 
 // Renders the three fields (Network Name, Start IP, IP Count) for one FLB network
-// section (flbMgmt or flbVirtualServerNet). The gateway is always derived from the
-// matching infrastructure segment — there is no override concept.
+// section (flbMgmt or flbVirtualServerNet). Selecting a segment auto-populates the
+// flbNetworkGateway CIDR from the infrastructure segment definition and auto-suggests
+// the first usable Start IP when that field is empty.
 // Options object: { sectionKey, idSuffix, titleText, net, segOpts, segMeta, noSegHint,
 //   nameTooltip, startTooltip, countTooltip }
 function _renderFlbNetworkSection(site, opts) {
@@ -2799,7 +2898,7 @@ function _renderFlbNetworkSection(site, opts) {
       <div class="field"><label>Network Name <span class="req">*</span>${nameTooltip}</label>
         <select id="sup-${site.id}-${idSuffix}-name"
           class="${!selectedName ? 'req-empty' : ''}"
-          oninput="updateSupField(${site.id},'${sectionKey}','flbNetworkName',this.value);_onSupSegmentChange(${site.id},'${sectionKey}','flbNetworkIpAddressStartingIp',this.value,'sup-${site.id}-${idSuffix}-startip','sup-${site.id}-${idSuffix}-ctx','sup-${site.id}-${idSuffix}-range');this.classList.remove('req-empty')">
+          oninput="updateSupField(${site.id},'${sectionKey}','flbNetworkName',this.value);_onSupSegmentChange(${site.id},'${sectionKey}','flbNetworkIpAddressStartingIp',this.value,'sup-${site.id}-${idSuffix}-startip','sup-${site.id}-${idSuffix}-ctx','sup-${site.id}-${idSuffix}-range','flbNetworkGateway');this.classList.remove('req-empty')">
           <option value="">-- select segment --</option>${segOpts(selectedName)}
         </select>
         ${noSegHint ? '<span class="field-hint" style="color:var(--warning);">No segments defined for this site yet.</span>' : ''}
@@ -2970,7 +3069,10 @@ function updateSupField(siteId, section, field, value) {
 // Called when a supervisor network-name <select> changes. Updates the context badge
 // and range hint in place (no full re-render). For Day 0, auto-suggests the first
 // usable host IP into the start-IP field when that field is currently empty.
-function _onSupSegmentChange(siteId, section, startIpField, newSegName, startIpElId, ctxElId, rangeElId) {
+// When gwField is provided (FLB sections only), always syncs flbNetworkGateway from
+// the selected segment's CIDR — clearing it when no segment is selected. This ensures
+// the supervisor gateway tracks the infrastructure segment definition automatically.
+function _onSupSegmentChange(siteId, section, startIpField, newSegName, startIpElId, ctxElId, rangeElId, gwField) {
   const site = sites.find(s => s.id === siteId);
   if (!site) return;
   const segMeta = _segMetaMap(site);
@@ -2980,10 +3082,18 @@ function _onSupSegmentChange(siteId, section, startIpField, newSegName, startIpE
   if (ctxEl)   ctxEl.innerHTML   = _segCtxHtml(newSegName, segMeta);
   if (rangeEl) rangeEl.innerHTML = _rangeHintHtml(newSegName, segMeta);
 
+  const meta = newSegName ? (segMeta[newSegName] || null) : null;
+
+  // Sync the gateway CIDR from the infrastructure segment into the supervisor state.
+  if (gwField) {
+    if (!site._supervisor) site._supervisor = {};
+    if (!site._supervisor[section]) site._supervisor[section] = {};
+    site._supervisor[section][gwField] = (meta && meta.gw) ? meta.gw : '';
+  }
+
   // Auto-suggest only when the start-IP field is currently empty (Day 0).
   const startEl = document.getElementById(startIpElId);
   if (startEl && !startEl.value.trim() && newSegName) {
-    const meta = segMeta[newSegName];
     if (meta && meta.gw) {
       const suggested = _suggestStartIp(meta.gw);
       if (suggested) {
@@ -3041,17 +3151,9 @@ function _supIpFields(site) {
   ];
 }
 
-// Silently corrects any supervisor start IPs that are outside their segment's gateway
-// CIDR, and strips any stored flbNetworkGateway overrides. The gateway is always
-// derived from the infrastructure segment definition — there is no override concept.
-// Returns true when at least one start IP was corrected.
+// Silently corrects any supervisor start IPs that fall outside their segment's
+// gateway CIDR. Returns true when at least one start IP was corrected.
 function _autoFixGatewayDrift(site) {
-  // Strip stored gateway overrides — the gateway is always derived from the segment.
-  const sv = site._supervisor || {};
-  for (const key of ['flbMgmt', 'flbVirtualServerNet']) {
-    const net = sv[key];
-    if (net && 'flbNetworkGateway' in net) delete net.flbNetworkGateway;
-  }
   // Fix any start IPs that are outside their segment's CIDR.
   const segMeta = _segMetaMap(site);
   let corrected = false;
@@ -3128,12 +3230,12 @@ function _snapshotSupervisorCommonSpec() {
   };
 }
 
-// Strips the legacy flbNetworkGateway override field — the PowerShell module derives
-// the gateway from the infrastructure segment automatically; an explicit override is
-// never required and causes confusion when it diverges from the segment definition.
+// Returns the FLB network object for inclusion in the save payload.
+// flbNetworkGateway is preserved — it is auto-populated from the infrastructure
+// segment when a segment is selected and is used by the PowerShell module for
+// IP range validation.
 function _cleanFlbNet(net) {
-  const { flbNetworkGateway, ...rest } = (net || {});
-  return rest;
+  return net ? { ...net } : {};
 }
 
 function buildPayload() {
@@ -5396,10 +5498,11 @@ function _selfTest() {
   return { pass, fail };
 }
 
-// Set OS-appropriate placeholders on the static path fields.
+// Set OS-appropriate placeholders on the static path fields; sync theme button label.
 document.addEventListener('DOMContentLoaded', () => {
   const svcDir = document.getElementById('svc_parentDirectory');
   if (svcDir) svcDir.placeholder = _osDirPlaceholder('ServicesYaml');
+  _applyThemeButton(document.body.classList.contains('light'));
 });
 
 // Run automatically when the page is loaded with ?selftest in the URL.
