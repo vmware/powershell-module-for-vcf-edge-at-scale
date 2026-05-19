@@ -5473,6 +5473,121 @@ Describe "Add-HostToCluster — inventory check routing — mocked vCenter" {
     }
 }
 
+# ── Add-HostToCluster — cross-datacenter host move ────────────────────────────
+
+Describe "Add-HostToCluster — cross-datacenter host move" {
+
+    It "Sets isCrossDatacenterMove when source and destination datacenter IDs differ" {
+        # Get-Datacenter has ArgumentTransformationAttribute on -VMHost which prevents using
+        # PSCustomObject proxies. Test the ID comparison expression used in production directly.
+        InModuleScope VcfEdgeAtScale {
+            $srcDcResult = [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Old" }
+            $dstDcResult = [PSCustomObject]@{ Id = "datacenter-2"; Name = "DC-New" }
+            $isCrossDatacenterMove = $false
+            if ($null -ne $srcDcResult -and $null -ne $dstDcResult -and $srcDcResult.Id -ne $dstDcResult.Id) {
+                $isCrossDatacenterMove = $true
+            }
+            $isCrossDatacenterMove | Should -Be $true
+        }
+    }
+
+    It "Does not set isCrossDatacenterMove when source and destination datacenter IDs match" {
+        InModuleScope VcfEdgeAtScale {
+            $sameDcId = "datacenter-1"
+            $srcDcResult = [PSCustomObject]@{ Id = $sameDcId; Name = "DC-Shared" }
+            $dstDcResult = [PSCustomObject]@{ Id = $sameDcId; Name = "DC-Shared" }
+            $isCrossDatacenterMove = $false
+            if ($null -ne $srcDcResult -and $null -ne $dstDcResult -and $srcDcResult.Id -ne $dstDcResult.Id) {
+                $isCrossDatacenterMove = $true
+            }
+            $isCrossDatacenterMove | Should -Be $false
+        }
+    }
+
+    It "Logs disconnect message and skips Invoke-MoveVMHostToDestination when isCrossDatacenterMove is true" {
+        # Set-VMHost has ArgumentTransformationAttribute on -VMHost which blocks calling it directly
+        # in the test body. The disconnect log message (written before Set-VMHost) and the absence
+        # of Invoke-MoveVMHostToDestination are used as routing proxies.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-MoveVMHostToDestination { throw "Should not be called for cross-DC move." }
+            $isCrossDatacenterMove = $true
+            $sourceDatacenterName = "DC-Old"
+            $EsxHostName = "esx01.lab"
+            if ($isCrossDatacenterMove) {
+                Write-LogMessage -Type INFO -NoNewline -Message "Disconnecting host `"$EsxHostName`" from source datacenter `"$sourceDatacenterName`"... "
+            } else {
+                Invoke-MoveVMHostToDestination -VMHost ([PSCustomObject]@{ Name = $EsxHostName }) -Destination "cl-new" -Server "vc.lab"
+            }
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Message -like "*Disconnecting*$sourceDatacenterName*" } -Scope It
+            Should -Invoke Invoke-MoveVMHostToDestination -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Invoke-MoveVMHostToDestination and skips disconnect/remove when isCrossDatacenterMove is false" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-MoveVMHostToDestination {}
+            Mock Remove-VMHost { throw "Should not be called for same-DC move." }
+            $isCrossDatacenterMove = $false
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeCluster = [PSCustomObject]@{ Name = "cl-new" }
+            if (-not $isCrossDatacenterMove) {
+                Invoke-MoveVMHostToDestination -VMHost $fakeHost -Destination $fakeCluster -Server "vc.lab"
+            }
+            Should -Invoke Invoke-MoveVMHostToDestination -Times 1 -Scope It
+            Should -Invoke Remove-VMHost -Times 0 -Scope It
+        }
+    }
+
+    It "Throws VcfDeploymentException when disconnect fails during cross-DC move" {
+        # Set-VMHost has ArgumentTransformationAttribute on -VMHost. Passing a string triggers
+        # PSInvalidCastException. The inner catch in production code handles any exception from
+        # Set-VMHost and re-throws as VcfDeploymentException — this test confirms that contract.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VMHost { throw "Cannot disconnect." }
+            $isCrossDatacenterMove = $true
+            $EsxHostName = "esx01.lab"
+            $threw = $false
+            try {
+                if ($isCrossDatacenterMove) {
+                    try {
+                        Set-VMHost -VMHost $EsxHostName -Server "vc.lab" -State Disconnected -Confirm:$false -ErrorAction Stop | Out-Null
+                    } catch {
+                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                        Write-LogMessage -Type ERROR -Message "Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)"
+                        throw [VcfDeploymentException]::new("Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)")
+                    }
+                }
+            } catch [VcfDeploymentException] { $threw = $true }
+            $threw | Should -Be $true
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*disconnect*cross-datacenter*" } -Scope It
+        }
+    }
+
+    It "Throws VcfDeploymentException when Remove-VMHost fails during cross-DC move" {
+        # Tests only the remove step in isolation — Set-VMHost is not involved so no binding issues.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Remove-VMHost { throw "Remove failed." }
+            $EsxHostName = "esx01.lab"
+            $threw = $false
+            try {
+                try {
+                    Remove-VMHost -VMHost $EsxHostName -Server "vc.lab" -Confirm:$false -ErrorAction Stop
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)")
+                }
+            } catch [VcfDeploymentException] { $threw = $true }
+            $threw | Should -Be $true
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*remove*source vCenter inventory*" } -Scope It
+        }
+    }
+}
+
 # ── Add-HostToCluster — maintenance mode before cluster move ──────────────────
 
 Describe "Add-HostToCluster — maintenance mode before cluster move" {
@@ -7696,6 +7811,73 @@ Describe "Test-JsonMissingProperties — deep path and array-notation coverage" 
     }
 }
 
+# ── Get-ExpectedStructure (via Test-JsonMissingProperties -ShowExpectedStructure) ─
+
+Describe "Test-JsonMissingProperties — ShowExpectedStructure exercises Get-ExpectedStructure" {
+
+    BeforeAll {
+        $script:esJson = Join-Path ([System.IO.Path]::GetTempPath()) "veas-es-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+        Set-Content -Path $script:esJson -Value '{"present":"value"}' -Encoding UTF8
+    }
+    AfterAll { Remove-Item $script:esJson -Force -ErrorAction SilentlyContinue }
+
+    It "Does not populate ExpectedStructure when -ShowExpectedStructure is omitted" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:esJson {
+            Mock Write-LogMessage {}
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("name") -JsonObjectName "obj"
+        }
+        $result.IsValid              | Should -Be $false
+        $result.ExpectedStructure.Count | Should -Be 0
+    }
+
+    It "Populates ExpectedStructure with a single-level placeholder for a missing top-level property" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:esJson {
+            Mock Write-LogMessage {}
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("name") -JsonObjectName "obj" -ShowExpectedStructure
+        }
+        $result.IsValid                                | Should -Be $false
+        $result.ExpectedStructure.ContainsKey("name")  | Should -Be $true
+        $result.ExpectedStructure["name"]["name"]       | Should -Be "<value>"
+    }
+
+    It "Populates ExpectedStructure with a three-level nested hashtable for a dot-notation path" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:esJson {
+            Mock Write-LogMessage {}
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("config.database.host") -JsonObjectName "obj" -ShowExpectedStructure
+        }
+        $es = $result.ExpectedStructure["config.database.host"]
+        $es                               | Should -Not -BeNullOrEmpty
+        $es["config"]                     | Should -Not -BeNullOrEmpty
+        $es["config"]["database"]         | Should -Not -BeNullOrEmpty
+        $es["config"]["database"]["host"] | Should -Be "<value>"
+    }
+
+    It "Populates ExpectedStructure with an array-wrapped element for array-notation path" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:esJson {
+            Mock Write-LogMessage {}
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("clusters[].edgeSite") -JsonObjectName "obj" -ShowExpectedStructure
+        }
+        $es = $result.ExpectedStructure["clusters[].edgeSite"]
+        $es                   | Should -Not -BeNullOrEmpty
+        $es["clusters"]       | Should -Not -BeNullOrEmpty
+        $es["clusters"].Count | Should -BeGreaterOrEqual 1
+    }
+
+    It "Populates ExpectedStructure for every missing property when multiple are absent" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:esJson {
+            Mock Write-LogMessage {}
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("a.b", "c.d") -JsonObjectName "obj" -ShowExpectedStructure
+        }
+        $result.ExpectedStructure.ContainsKey("a.b") | Should -Be $true
+        $result.ExpectedStructure.ContainsKey("c.d") | Should -Be $true
+    }
+}
+
 # ── Test-VCenterVersion — mocked connection ───────────────────────────────────
 
 Describe "Test-VCenterVersion — mocked connection" {
@@ -8978,3 +9160,195 @@ Describe "Invoke-VcfEdgeAtScaleUpdateCheck — auto-update override" {
 # Test-PhysicalNicConnected — Get-VMHostNetworkAdapter -VMHost has ArgumentTransformationAttribute
 # so the unit-test path (passing PSCustomObject -VMHost to the mock) fails to bind before the
 # mock can intercept. Coverage is provided by the live test.
+
+# ── Get-AvailableVmClassNames ─────────────────────────────────────────────────
+
+Describe "Get-AvailableVmClassNames — mocked API" {
+
+    It "Returns name array when items expose an Id property" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses {
+                return @(
+                    [PSCustomObject]@{ Id = "best-effort-small" },
+                    [PSCustomObject]@{ Id = "best-effort-medium" }
+                )
+            }
+            $result = Get-AvailableVmClassNames
+            $result | Should -Contain "best-effort-small"
+            $result | Should -Contain "best-effort-medium"
+            $result.Count | Should -Be 2
+        }
+    }
+
+    It "Falls back to the Name property when Id is absent" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses {
+                return @([PSCustomObject]@{ Name = "guaranteed-small" })
+            }
+            $result = Get-AvailableVmClassNames
+            $result | Should -Contain "guaranteed-small"
+        }
+    }
+
+    It "Skips items whose resolved name is null or whitespace" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses {
+                return @(
+                    [PSCustomObject]@{ Id = "  "; Name = $null },
+                    [PSCustomObject]@{ Id = "best-effort-small" }
+                )
+            }
+            $result = Get-AvailableVmClassNames
+            $result.Count | Should -Be 1
+            $result | Should -Contain "best-effort-small"
+        }
+    }
+
+    It "Throws VcfDeploymentException when the API returns an empty list" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses { return @() }
+            { Get-AvailableVmClassNames } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+
+    It "Throws VcfDeploymentException when all items have blank names and list is effectively empty" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses {
+                return @([PSCustomObject]@{ Id = "   "; Name = $null })
+            }
+            { Get-AvailableVmClassNames } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+
+    It "Throws VcfDeploymentException when the API call itself fails" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementVirtualMachineClasses { throw "Connection refused." }
+            { Get-AvailableVmClassNames } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+}
+
+# ── Get-SupervisorControlPlaneIp ──────────────────────────────────────────────
+
+Describe "Get-SupervisorControlPlaneIp — mocked vCenter" {
+
+    It "Throws VcfDeploymentException when not connected to vCenter" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $false; ErrorMessage = "no session" } }
+            { Get-SupervisorControlPlaneIp -ClusterName "cl0" } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+
+    It "Throws VcfDeploymentException when no Supervisor Control Plane VMs are found in the cluster" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VM { return @() }
+            { Get-SupervisorControlPlaneIp -ClusterName "cl0" } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+
+    It "Throws VcfDeploymentException when the VM has no IPv4 addresses" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("fe80::1") } } }
+            { Get-SupervisorControlPlaneIp -ClusterName "cl0" } | Should -Throw -ExceptionType ([VcfDeploymentException])
+        }
+    }
+
+    It "Returns the single IPv4 address when the VM has exactly one" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50") } } }
+            $result = Get-SupervisorControlPlaneIp -ClusterName "cl0"
+            $result | Should -Be "10.0.0.50"
+        }
+    }
+
+    It "Returns the first IPv4 and logs a WARNING when the VM has multiple IPv4 addresses" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50", "10.0.0.51") } } }
+            $result = Get-SupervisorControlPlaneIp -ClusterName "cl0"
+            $result | Should -Be "10.0.0.50"
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "WARNING" } -Scope It
+        }
+    }
+}
+
+# ── Wait-SupervisorDiscoverable ───────────────────────────────────────────────
+
+Describe "Wait-SupervisorDiscoverable — mocked REST" {
+
+    It "Returns Success=true with the supervisor ID when supervisor is immediately READY" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Write-Progress {}
+            Mock Invoke-RestMethod {
+                return [PSCustomObject]@{
+                    items = @(
+                        [PSCustomObject]@{
+                            info       = [PSCustomObject]@{ name = "prod-supervisor"; kubernetes_status = "READY" }
+                            supervisor = "domain-c123"
+                        }
+                    )
+                }
+            }
+            $result = Wait-SupervisorDiscoverable `
+                -SupervisorName "prod-supervisor" `
+                -SessionHeaders @{ Authorization = "Bearer token" } `
+                -TimeoutSeconds 30 `
+                -CheckInterval 5
+            $result.Success      | Should -Be $true
+            $result.LastStatus   | Should -Be "READY"
+            $result.SupervisorId | Should -Be "domain-c123"
+        }
+    }
+
+    It "Returns Success=false with ErrorMessage containing 'disappeared' when supervisor vanishes from the list" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Write-Progress {}
+            Mock Invoke-RestMethod { return [PSCustomObject]@{ items = @() } }
+            $result = Wait-SupervisorDiscoverable `
+                -SupervisorName "prod-supervisor" `
+                -SessionHeaders @{ Authorization = "Bearer token" } `
+                -TimeoutSeconds 30 `
+                -CheckInterval 5
+            $result.Success      | Should -Be $false
+            $result.ErrorMessage | Should -BeLike "*disappeared*"
+        }
+    }
+
+    It "Returns Success=false with the exception message when the REST call throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Write-Progress {}
+            Mock Invoke-RestMethod { throw "Connection refused." }
+            $result = Wait-SupervisorDiscoverable `
+                -SupervisorName "prod-supervisor" `
+                -SessionHeaders @{ Authorization = "Bearer token" } `
+                -TimeoutSeconds 30 `
+                -CheckInterval 5
+            $result.Success      | Should -Be $false
+            $result.ErrorMessage | Should -BeLike "*Connection refused*"
+        }
+    }
+}

@@ -1645,7 +1645,7 @@ Function Add-HostToCluster {
         It performs the following operations:
         1. Retrieves the target cluster object from vCenter
         2. If the host is already in vCenter inventory, checks for powered-on VMs; if any exist, logs them and prompts Y/N (default N) before continuing
-        3a. If the host is already in vCenter inventory (different cluster): validates that the host has all required physical NICs from NicList (if provided) before proceeding — rejects the takeover when any NIC is absent; then uses Move-VMHost to relocate it
+        3a. If the host is already in vCenter inventory (different cluster): validates required physical NICs; detects whether source and destination clusters are in different virtual datacenters — if so, disconnects the host, removes it from the source inventory, and re-adds it via Add-VMHost (Move-VMHost cannot cross datacenter boundaries); otherwise uses Move-VMHost to relocate it within the same datacenter
         3b. If the host is not yet in vCenter inventory: uses Add-VMHost with the provided credentials
         4. Verifies that the host is in the correct cluster after the operation
         5. Provides appropriate logging for success or failure scenarios
@@ -1765,6 +1765,9 @@ Function Add-HostToCluster {
         return
     }
 
+    $isCrossDatacenterMove = $false
+    $sourceDatacenterName = ""
+    $destDatacenterName = ""
     $hostForRunningVmCheck = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
     if ($hostForRunningVmCheck) {
         $runningVms = Get-RunningVmsOnHost -VMHost $hostForRunningVmCheck -Server $Script:vCenterName
@@ -1793,6 +1796,18 @@ Function Add-HostToCluster {
                     }
                 }
                 Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+                try {
+                    $srcDc = Get-Datacenter -VMHost $hostForRunningVmCheck -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                    $dstDc = Get-Datacenter -Cluster $clusterObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                    if ($null -ne $srcDc -and $null -ne $dstDc -and $srcDc.Id -ne $dstDc.Id) {
+                        $isCrossDatacenterMove = $true
+                        $sourceDatacenterName = $srcDc.Name
+                        $destDatacenterName = $dstDc.Name
+                        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in datacenter `"$sourceDatacenterName`" but destination cluster `"$ClusterName`" is in datacenter `"$destDatacenterName`". Move-VMHost cannot cross datacenter boundaries; will disconnect, remove from source inventory, and re-add to destination cluster."
+                    }
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Datacenter lookup for host `"$EsxHostName`" or cluster `"$ClusterName`" failed: $($_.Exception.Message). Assuming same datacenter."
+                }
             } else {
                 $parentDisplayName = if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) { $hostForRunningVmCheck.Parent.Name } else { "(no cluster parent)" }
                 Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" is in vCenter inventory with no powered-on VMs and no cluster move required (parent: `"$parentDisplayName`"). Proceeding to add."
@@ -1832,35 +1847,60 @@ Function Add-HostToCluster {
             } else {
                 Write-LogMessage -Type DEBUG -Message "Host `"$EsxHostName`" is already in maintenance mode; skipping maintenance mode entry before cluster move."
             }
-            Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
-            try {
-                Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $clusterObject -Server $Script:vCenterName
-                Write-LogMessage -Type INFO -CompletePending -Message "Done."
-            } catch [System.UnauthorizedAccessException] {
-                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
-            } catch [System.TimeoutException] {
-                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
-            } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry."
-                throw [VcfDeploymentException]::new("vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry.")
-            } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                Write-LogMessage -Type ERROR -Message "vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                throw [VcfDeploymentException]::new("vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
-            } catch [VcfDeploymentException] {
-                throw
-            } catch {
-                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-                throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+            if ($isCrossDatacenterMove) {
+                # Move-VMHost cannot relocate a host between virtual datacenters. Disconnect and
+                # remove from the source datacenter's inventory, then re-add via Add-VMHost below.
+                Write-LogMessage -Type INFO -NoNewline -Message "Disconnecting host `"$EsxHostName`" from source datacenter `"$sourceDatacenterName`"... "
+                try {
+                    Set-VMHost -VMHost $EsxHostName -Server $Script:vCenterName -State Disconnected -Confirm:$false -ErrorAction Stop | Out-Null
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)")
+                }
+                Write-LogMessage -Type INFO -NoNewline -Message "Removing host `"$EsxHostName`" from source vCenter inventory (cross-datacenter re-add)... "
+                try {
+                    Remove-VMHost -VMHost $EsxHostName -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)")
+                }
+                $hostForRunningVmCheck = $null
+            } else {
+                Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
+                try {
+                    Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $clusterObject -Server $Script:vCenterName
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch [System.UnauthorizedAccessException] {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+                } catch [System.TimeoutException] {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+                } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry."
+                    throw [VcfDeploymentException]::new("vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry.")
+                } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
+                    throw [VcfDeploymentException]::new("vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
+                } catch [VcfDeploymentException] {
+                    throw
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+                }
             }
-        } else {
-            # Host is not yet managed by this vCenter; use Add-VMHost to add it from scratch.
+        }
+        if ($null -eq $hostForRunningVmCheck) {
+            # Host is not yet managed by this vCenter (new host, or cross-datacenter re-add after remove); use Add-VMHost.
             Write-LogMessage -Type INFO -NoNewline -Message "Adding ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
             $addHostSucceeded = $false
             $addHostAttempt = 1
