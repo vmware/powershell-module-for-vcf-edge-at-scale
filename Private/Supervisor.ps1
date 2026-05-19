@@ -5964,9 +5964,9 @@ Function Get-SupervisorControlPlaneIp {
 
     try {
         # Get all Supervisor Control Plane VMs in the given cluster.
-        $controlPlaneVMs = Get-Cluster -Name $ClusterName -Server $Script:vCenterName |
-        Get-VM |
-        Where-Object { $_.Name -like "*SupervisorControlPlane*" }  # Adjust pattern if needed
+        $clusterObj = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        $controlPlaneVMs = Get-VmsFromCluster -ClusterObject $clusterObj |
+            Where-Object { $_.Name -like "*SupervisorControlPlane*" }
 
         # Ensure we have exactly one VM.
         $controlPlaneVMsArray = @($controlPlaneVMs)
@@ -5979,7 +5979,7 @@ Function Get-SupervisorControlPlaneIp {
         }
         $controlPlaneVM = $controlPlaneVMsArray[0]
 
-        $vmView = Get-View $controlPlaneVM.Id
+        $vmView = Get-VmViewForVm -VmObject $controlPlaneVM
 
         # Get IPv4 address - ensure we only return a single IP address.
         # Force $ipAddresses to be an array to handle single-item results correctly.
