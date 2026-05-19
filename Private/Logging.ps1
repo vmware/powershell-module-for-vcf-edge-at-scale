@@ -1353,12 +1353,16 @@ function Connect-Vcenter {
                             # Re-prompt for password.
                             Write-Host ""
                             $username = $currentCredential.UserName
+                            $isEsx = ($ServerType -eq "ESX")
                             # Remove colon from prompt message as Read-Host adds it automatically.
                             $promptMessage = "Enter the password for the user `"$username`" on $ServerType `"$ServerName`""
+                            if ($isEsx) {
+                                $promptMessage += " (or press Enter for no password)"
+                            }
                             $promptMessage = $promptMessage.Trim()
                             # Ensure no colon or colon-space at the end as Read-Host adds ": " automatically.
                             $promptMessage = $promptMessage.TrimEnd(": ")
-                            $newPassword = Get-InteractiveInput -PromptMessage $promptMessage -AsSecureString
+                            $newPassword = Get-InteractiveInput -PromptMessage $promptMessage -AsSecureString -AllowEmpty:$isEsx
                             Write-Host ""
                             $currentCredential = New-Object System.Management.Automation.PSCredential($username, $newPassword)
                             Write-LogMessage -Type INFO -Message "Retrying connection with new credentials..."

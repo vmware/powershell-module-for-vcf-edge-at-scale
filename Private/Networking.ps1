@@ -2316,9 +2316,9 @@ function Get-EsxUnformattedDisk {
 
         $usedDisks = [System.Collections.ArrayList]::new()
         foreach ($ds in $mountedDatastores) {
-            $dsView = Get-View -Id $ds.ExtensionData.MoRef -Server $Script:vCenterName
-            if ($dsView.Info.Vmfs) {
-                foreach ($extent in $dsView.Info.Vmfs.Extent) {
+            $dsExt = $ds.ExtensionData
+            if ($dsExt -and $dsExt.Info -and $dsExt.Info.Vmfs) {
+                foreach ($extent in $dsExt.Info.Vmfs.Extent) {
                     [void]$usedDisks.Add($extent.DiskName)
                 }
             }
@@ -2425,7 +2425,7 @@ function Get-EsxDatastoreHealth {
     try {
         $targetDatastore = Get-Datastore -Name $DatastoreName -VMHost $VmHost -ErrorAction Stop
 
-        $dsView = Get-View -Id $targetDatastore.ExtensionData.MoRef
+        $dsView = $targetDatastore.ExtensionData
         $isVmfs = $targetDatastore.Type -eq "VMFS"
         $vmfsVersion = if ($isVmfs -and $dsView.Info.Vmfs) { $dsView.Info.Vmfs.Version } else { $null }
         $datastoreUuid = if ($isVmfs -and $dsView.Info.Vmfs) { $dsView.Info.Vmfs.Uuid } else { $null }
@@ -2584,10 +2584,10 @@ function Get-EsxDatastoreInfo {
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-EsxDatastoreInfo function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
+    $esxConn = $Global:DefaultViServers | Where-Object { $_.Name -eq $EsxHostName -and $_.IsConnected } | Select-Object -First 1
+    if (-not $esxConn) {
+        Write-LogMessage -Type ERROR -Message "No active connection to ESX host `"$EsxHostName`". Connect first with Connect-Vcenter."
+        throw [VcfDeploymentException]::new("No active connection to ESX host `"$EsxHostName`".")
     }
 
     try {
@@ -2600,7 +2600,10 @@ function Get-EsxDatastoreInfo {
         }
 
         try {
-            $vmHost = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction Stop
+            $vmHost = Get-VMHost -Server $esxConn -ErrorAction Stop | Select-Object -First 1
+            if (-not $vmHost) {
+                throw "Get-VMHost returned no host objects from direct connection to `"$EsxHostName`"."
+            }
         }
         catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to authorization issues: $($_.Exception.Message)"
