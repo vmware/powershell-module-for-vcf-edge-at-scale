@@ -27,7 +27,7 @@
 # =============================================================================
 #
 #region Private — VDS, VMkernel cleanup, management restore
-Function Remove-NonVmk0VmkernelInterfacesFromVds {
+function Remove-NonVmk0VmkernelInterfacesFromVds {
 
     <#
         .SYNOPSIS
@@ -161,7 +161,7 @@ Function Remove-NonVmk0VmkernelInterfacesFromVds {
         $WarningPreference = $savedWarningPreference
     }
 }
-Function Invoke-ManagementRestoreForCleanup {
+function Invoke-ManagementRestoreForCleanup {
 
     <#
         .SYNOPSIS
@@ -187,7 +187,7 @@ Function Invoke-ManagementRestoreForCleanup {
     )
     return Restore-ManagementToVssBeforeVdsRemoval -ClusterName $ClusterName -VdsNameWithMgmt $VdsNameWithMgmt
 }
-Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
+function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
 
     <#
         .SYNOPSIS
@@ -277,8 +277,7 @@ Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
 
     return $lastResult
 }
-
-Function Get-VdsByName {
+function Get-VdsByName {
 
     <#
         .SYNOPSIS
@@ -302,8 +301,7 @@ Function Get-VdsByName {
 
     Get-VDSwitch -Name $Name -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
-
-Function Restore-ManagementToVssBeforeVdsRemoval {
+function Restore-ManagementToVssBeforeVdsRemoval {
 
     <#
         .SYNOPSIS
@@ -329,10 +327,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
         Caller should skip VDS removal when RestoreAttempted is true and Success is false.
 
         .NOTES
-        Skips hosts that do not have vmk0 on the specified VDS. Restore is only ever to vSwitch0-restore/Management; the restore vSwitch is created before any move. Order: (1) if vSwitch0-restore already exists with a pNIC and Management port group, move vmk0 there; (2) else if the host has an unused pNIC (not on the VDS), create or complete vSwitch0-restore and Management port group then move vmk0—this path also recovers retry after partial failure; (3) else remove one pNIC from the VDS, create vSwitch0-restore and Management port group, then move vmk0. When creating the Management port group, the VLAN ID from the current management DPG is applied. When removing a pNIC from the VDS, tries lowest-numbered first (e.g. vmnic0 then vmnic1). Moves vmk0 via HostNetworkSystem.UpdateVirtualNic. When move fails, throws with instructions to use vCenter Migrate VMkernel Adapter and retry.
-        When removing a pNIC from the VDS, tries highest-numbered first (e.g. vmnic1 before vmnic0) so the lowest-numbered NIC (typically vmnic0, the original management-bearing NIC) remains on the VDS until it is deleted and is then unassigned. On re-deploy, Get-FirstUnusedNicFromNicList (NicList order) adds that lowest-numbered NIC first, giving deterministic deploy/restore/deploy cycles.
-        Returns a result object: RestoreAttempted (bool), Success (bool), HostsRestoredCount (int), Message (string).
-        Caller should skip VDS removal when RestoreAttempted is true and Success is false.
+        Skips hosts that do not have vmk0 on the specified VDS. Restore is only ever to vSwitch0-restore/Management; the restore vSwitch is created before any move. Order: (1) if vSwitch0-restore already exists with a pNIC and Management port group, move vmk0 there; (2) else if the host has an unused pNIC (not on the VDS), create or complete vSwitch0-restore and Management port group then move vmk0—this path also recovers retry after partial failure; (3) else remove one pNIC from the VDS, create vSwitch0-restore and Management port group, then move vmk0. When creating the Management port group, the VLAN ID from the current management DPG is applied. When removing a pNIC from the VDS, tries highest-numbered first (e.g. vmnic1 before vmnic0) so the lowest-numbered NIC (typically vmnic0, the original management-bearing NIC) remains on the VDS until it is deleted and is then unassigned. On re-deploy, Get-FirstUnusedNicFromNicList (NicList order) adds that lowest-numbered NIC first, giving deterministic deploy/restore/deploy cycles. Moves vmk0 via HostNetworkSystem.UpdateVirtualNic. When move fails, throws with instructions to use vCenter Migrate VMkernel Adapter and retry.
     #>
 
     [CmdletBinding()]
@@ -462,7 +457,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
             }
         }
         if (-not $vmk0OnThisVds) {
-            # -WarningAction SilentlyContinue suppresses PowerCLI deprecation for VmwareVDPortgroup.VirtualSwitch (cmdlet uses .VirtualSwitch internally).
+            # Get-VMHostNetworkAdapter -PortGroup $dpg can silently return nothing on some PowerCLI/vCenter versions when the port group binding uses an alternate MoRef format. Iterating all DPGs and asking for vmk0 per-DPG is the reliable fallback. -WarningAction SilentlyContinue suppresses PowerCLI deprecation for VmwareVDPortgroup.VirtualSwitch.
             $vdPgs = Get-VDPortgroup -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
             foreach ($vdPg in $vdPgs) {
                 $vmkernelsOnDpg = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -PortGroup $vdPg -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
@@ -806,7 +801,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
         $WarningPreference = $prevWarningPreference
     }
 }
-Function Get-VDPortgroupById {
+function Get-VDPortgroupById {
 
     <#
         .SYNOPSIS
@@ -830,8 +825,7 @@ Function Get-VDPortgroupById {
 
     Get-VDPortgroup -Id $Id -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
-
-Function Get-DpgsOnVds {
+function Get-DpgsOnVds {
 
     <#
         .SYNOPSIS
@@ -856,8 +850,7 @@ Function Get-DpgsOnVds {
     Get-VDPortgroup -VDSwitch $VDSwitch -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -notlike "*DVUplinks*" }
 }
-
-Function Get-PhysicalNicsOnVdsForHost {
+function Get-PhysicalNicsOnVdsForHost {
 
     <#
         .SYNOPSIS
@@ -885,8 +878,37 @@ Function Get-PhysicalNicsOnVdsForHost {
 
     Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $VDSwitch -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
+function Get-PhysicalNicsOnVssForHost {
 
-Function Get-VmkernelAdaptersOnHost {
+    <#
+        .SYNOPSIS
+        Returns the physical NICs (pNICs) on a standard virtual switch for a host. Thin wrapper over
+        Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type
+        constraints on the -VMHost parameter.
+
+        .PARAMETER VMHost
+        The VMHost object whose pNICs are inspected.
+
+        .PARAMETER VirtualSwitch
+        The standard virtual switch (VSS) object to query pNIC membership for.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-PhysicalNicsOnVssForHost -VMHost $vmhostObj -VirtualSwitch $vssObj -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VirtualSwitch
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $VirtualSwitch -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+function Get-VmkernelAdaptersOnHost {
 
     <#
         .SYNOPSIS
@@ -910,8 +932,7 @@ Function Get-VmkernelAdaptersOnHost {
 
     Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -Server $Server -ErrorAction SilentlyContinue
 }
-
-Function Get-VdsListOnHost {
+function Get-VdsListOnHost {
 
     <#
         .SYNOPSIS
@@ -935,8 +956,7 @@ Function Get-VdsListOnHost {
 
     Get-VDSwitch -VMHost $VMHost -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
-
-Function Get-ClusterByName {
+function Get-ClusterByName {
 
     <#
         .SYNOPSIS
@@ -960,8 +980,7 @@ Function Get-ClusterByName {
 
     Get-Cluster -Name $Name -Server $Server -ErrorAction SilentlyContinue
 }
-
-Function Get-VmHostsInCluster {
+function Get-VmHostsInCluster {
 
     <#
         .SYNOPSIS
@@ -970,23 +989,18 @@ Function Get-VmHostsInCluster {
         .PARAMETER ClusterObject
         The cluster object whose hosts are returned.
 
-        .PARAMETER Server
-        vCenter server name or connection object.
-
         .EXAMPLE
-        Get-VmHostsInCluster -ClusterObject $clusterObj -Server "vc.lab"
+        Get-VmHostsInCluster -ClusterObject $clusterObj
     #>
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
-        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject
     )
 
     Get-VMHost -Location $ClusterObject -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
-
-Function Get-VmsFromCluster {
+function Get-VmsFromCluster {
 
     <#
         .SYNOPSIS
@@ -1010,8 +1024,7 @@ Function Get-VmsFromCluster {
 
     Get-VM -Location $ClusterObject -Server $Server -ErrorAction SilentlyContinue
 }
-
-Function Get-VmViewForVm {
+function Get-VmViewForVm {
 
     <#
         .SYNOPSIS
@@ -1032,8 +1045,61 @@ Function Get-VmViewForVm {
 
     Get-View -VIObject $VmObject -ErrorAction SilentlyContinue
 }
+function Get-DatacenterForVMHost {
 
-Function Get-VirtualSwitchesOnHost {
+    <#
+        .SYNOPSIS
+        Returns the datacenter that contains a VMHost. Thin wrapper over Get-Datacenter enabling unit
+        tests to mock this call without fighting PowerCLI ArgumentTransformationAttribute constraints
+        on the -VMHost parameter.
+
+        .PARAMETER VMHost
+        The VMHost object whose parent datacenter is returned.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-DatacenterForVMHost -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-Datacenter -VMHost $VMHost -Server $Server -ErrorAction SilentlyContinue
+}
+function Get-DatacenterForCluster {
+
+    <#
+        .SYNOPSIS
+        Returns the datacenter that contains a cluster. Thin wrapper over Get-Datacenter enabling unit
+        tests to mock this call without fighting PowerCLI ArgumentTransformationAttribute constraints
+        on the -Cluster parameter.
+
+        .PARAMETER Cluster
+        The cluster object whose parent datacenter is returned.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-DatacenterForCluster -Cluster $clusterObj -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-Datacenter -Cluster $Cluster -Server $Server -ErrorAction SilentlyContinue
+}
+function Get-VirtualSwitchesOnHost {
 
     <#
         .SYNOPSIS
@@ -1057,8 +1123,7 @@ Function Get-VirtualSwitchesOnHost {
 
     Get-VirtualSwitch -VMHost $VMHost -Standard -Server $Server -ErrorAction SilentlyContinue
 }
-
-Function Get-VirtualPortGroupsOnSwitch {
+function Get-VirtualPortGroupsOnSwitch {
 
     <#
         .SYNOPSIS
@@ -1082,8 +1147,7 @@ Function Get-VirtualPortGroupsOnSwitch {
 
     Get-VirtualPortGroup -VirtualSwitch $VirtualSwitch -Server $Server -ErrorAction SilentlyContinue
 }
-
-Function Get-VmkernelOnPortGroup {
+function Get-VmkernelOnPortGroup {
 
     <#
         .SYNOPSIS
@@ -1111,8 +1175,7 @@ Function Get-VmkernelOnPortGroup {
 
     Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -PortGroup $PortGroup -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
 }
-
-Function Test-HostManagementVdsDualUplink {
+function Test-HostManagementVdsDualUplink {
 
     <#
         .SYNOPSIS
@@ -1228,7 +1291,7 @@ Function Test-HostManagementVdsDualUplink {
     $result.HasDualUplink = ($pnicCount -ge 2)
     return $result
 }
-Function Remove-EdgeClusterDistributedSwitch {
+function Remove-EdgeClusterDistributedSwitch {
     <#
         .SYNOPSIS
         Removes a Virtual Distributed Switch (VDS) and its distributed port groups belonging to an edge cluster. Used for rollback.
@@ -1419,7 +1482,7 @@ Function Remove-EdgeClusterDistributedSwitch {
         }
     } while ($removeVdsAttempt -le 2)
 }
-Function Set-VMHostConnectedState {
+function Set-VMHostConnectedState {
     <#
         .SYNOPSIS
         Sets a VMHost to connected state; exits maintenance mode if the host is in maintenance.
@@ -1466,7 +1529,7 @@ Function Set-VMHostConnectedState {
         Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" connection state is `"$connectionState`" (not Maintenance). No action taken."
     }
 }
-Function Add-VsanOsaDiskGroupToCluster {
+function Add-VsanOsaDiskGroupToCluster {
     <#
         .SYNOPSIS
         Automatically assigns cache and capacity disks and creates vSAN OSA disk groups for each host in a cluster.
@@ -1857,7 +1920,7 @@ Function Add-VsanOsaDiskGroupToCluster {
         throw [VcfDeploymentException]::new("Deployment failed. $cleanMessage")
     }
 }
-Function Add-VsanEsaStoragePoolDisk {
+function Add-VsanEsaStoragePoolDisk {
 
     <#
         .SYNOPSIS
@@ -2205,7 +2268,7 @@ Function Add-VsanEsaStoragePoolDisk {
         throw [VcfDeploymentException]::new("Deployment failed. $cleanMessage")
     }
 }
-Function Get-EsxUnformattedDisk {
+function Get-EsxUnformattedDisk {
 
     <#
         .SYNOPSIS
@@ -2303,7 +2366,7 @@ Function Get-EsxUnformattedDisk {
         throw [VcfDeploymentException]::new("Failed to scan for unformatted disks on ESX host `"$EsxHostName`": $($_.Exception.Message)")
     }
 }
-Function Get-EsxDatastoreHealth {
+function Get-EsxDatastoreHealth {
 
     <#
         .SYNOPSIS
@@ -2439,7 +2502,7 @@ Function Get-EsxDatastoreHealth {
         }
     }
 }
-Function Get-EsxDatastoreInfo {
+function Get-EsxDatastoreInfo {
 
     <#
         .SYNOPSIS

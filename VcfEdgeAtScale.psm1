@@ -28,7 +28,7 @@
 #
 # PowerShell Module: VcfEdgeAtScale
 # Module Version: see VcfEdgeAtScale.psd1
-# Last modified: 2026-05-14
+# Last modified: 2026-05-19
 #
 # Private implementation files (dot-sourced below):
 #   Private/Logging.ps1     — logging, vCenter connectivity, content library, witness prep
@@ -57,7 +57,6 @@ function Read-VcfEdgeAtScaleManifestVersion {
         return "unknown"
     }
 }
-
 function Get-VcfEdgeAtScaleVcfCmd {
 
     <#

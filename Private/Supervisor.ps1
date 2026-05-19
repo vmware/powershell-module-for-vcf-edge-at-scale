@@ -27,7 +27,7 @@
 # =============================================================================
 #
 #region Private — supervisor, Harbor, Argo CD, workload networking
-Function Write-ClusterEsxiNodeHealthReport {
+function Write-ClusterEsxiNodeHealthReport {
 
     <#
         .SYNOPSIS
@@ -63,7 +63,7 @@ Function Write-ClusterEsxiNodeHealthReport {
         Write-LogMessage -Type WARNING -Message "Could not list ESX host health for cluster `"$ClusterName`": $($_.Exception.Message)"
     }
 }
-Function Write-SupervisorHealthReport {
+function Write-SupervisorHealthReport {
 
     <#
         .SYNOPSIS
@@ -130,7 +130,7 @@ Function Write-SupervisorHealthReport {
     # Delegate to the full diagnostic report so operators can see summary messages and condition details.
     Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "post-deployment health (ConfigStatus=$configStatus, KubernetesStatus=$kubernetesStatus)" -SupervisorId $SupervisorId
 }
-Function Write-VsanClusterHealthReport {
+function Write-VsanClusterHealthReport {
 
     <#
         .SYNOPSIS
@@ -191,7 +191,7 @@ Function Write-VsanClusterHealthReport {
         }
     }
 }
-Function Write-SupervisorKubernetesDiagnosticReport {
+function Write-SupervisorKubernetesDiagnosticReport {
 
     <#
         .SYNOPSIS
@@ -361,7 +361,7 @@ Function Write-SupervisorKubernetesDiagnosticReport {
 
     Write-LogMessage -Type INFO -Message "======== End supervisor Kubernetes diagnostics ========"
 }
-Function Invoke-SupervisorOnlyRollback {
+function Invoke-SupervisorOnlyRollback {
 
     <#
         .SYNOPSIS
@@ -422,7 +422,7 @@ Function Invoke-SupervisorOnlyRollback {
         Write-LogMessage -Type WARNING -Message "Supervisor deactivation did not complete: $($disableResult.ErrorMessage). Disable the supervisor manually in vCenter if needed."
     }
 }
-Function Invoke-ArgoCDOnlyRollback {
+function Invoke-ArgoCDOnlyRollback {
     <#
         .SYNOPSIS
         Rolls back only the ArgoCD deployment by removing the ArgoCD namespace; supervisor and compute remain intact.
@@ -546,7 +546,7 @@ Function Invoke-ArgoCDOnlyRollback {
         }
     }
 }
-Function Wait-HarborServiceNamespaceTermination {
+function Wait-HarborServiceNamespaceTermination {
 
     <#
         .SYNOPSIS
@@ -719,7 +719,7 @@ Function Wait-HarborServiceNamespaceTermination {
     Write-LogMessage -Type WARNING -Message "     kubectl patch namespace <ns> -p '{`"metadata`":{`"finalizers`":null}}' --type=merge"
     Write-LogMessage -Type WARNING -Message "Once all stuck namespaces are gone, re-run: Start-VcfEdgeAtScale -CleanUp Harbor -EdgeSite <site>"
 }
-Function Remove-HarborContainerImageRegistry {
+function Remove-HarborContainerImageRegistry {
 
     <#
         .SYNOPSIS
@@ -785,7 +785,7 @@ Function Remove-HarborContainerImageRegistry {
         Write-LogMessage -Type WARNING -Message "Could not remove Harbor container image registry `"$RegistryName`" from supervisor `"$SupervisorId`": $($_.Exception.Message). Remove manually in vCenter (Supervisor → Configure → Container Registries)."
     }
 }
-Function Remove-HarborSupervisorService {
+function Remove-HarborSupervisorService {
 
     <#
         .SYNOPSIS
@@ -917,7 +917,7 @@ Function Remove-HarborSupervisorService {
         }
     }
 }
-Function Invoke-HarborOnlyRollback {
+function Invoke-HarborOnlyRollback {
 
     <#
         .SYNOPSIS
@@ -972,7 +972,7 @@ Function Invoke-HarborOnlyRollback {
     Write-LogMessage -Type INFO -Message "Starting Harbor-only rollback for cluster `"$ClusterName`" (removing service `"$Service`" from supervisor; supervisor and Argo CD left intact)."
     Remove-HarborSupervisorService -ClusterName $ClusterName -DeletePollIntervalSeconds $DeletePollIntervalSeconds -DeleteTimeoutSeconds $DeleteTimeoutSeconds -Service $Service -SupervisorId $SupervisorId
 }
-Function Test-SupervisorDeployedOnCluster {
+function Test-SupervisorDeployedOnCluster {
 
     <#
         .SYNOPSIS
@@ -1025,7 +1025,7 @@ Function Test-SupervisorDeployedOnCluster {
         return $false
     }
 }
-Function Disable-SupervisorOnCluster {
+function Disable-SupervisorOnCluster {
 
     <#
         .SYNOPSIS
@@ -1154,7 +1154,7 @@ Function Disable-SupervisorOnCluster {
         }
     }
 }
-Function Wait-SupervisorReady {
+function Wait-SupervisorReady {
 
     <#
         .SYNOPSIS
@@ -1422,7 +1422,7 @@ Function Wait-SupervisorReady {
         }
     }
 }
-Function Get-SupervisorUpgradeInfo {
+function Get-SupervisorUpgradeInfo {
 
     <#
         .SYNOPSIS
@@ -1541,7 +1541,7 @@ Function Get-SupervisorUpgradeInfo {
         }
     }
 }
-Function Invoke-SupervisorUpgrade {
+function Invoke-SupervisorUpgrade {
 
     <#
         .SYNOPSIS
@@ -1645,7 +1645,7 @@ Function Invoke-SupervisorUpgrade {
         }
     }
 }
-Function Get-SupervisorUpgradeStatus {
+function Get-SupervisorUpgradeStatus {
 
     <#
         .SYNOPSIS
@@ -1828,7 +1828,7 @@ Function Get-SupervisorUpgradeStatus {
         }
     }
 }
-Function Wait-SupervisorUpgradeComplete {
+function Wait-SupervisorUpgradeComplete {
 
     <#
         .SYNOPSIS
@@ -1994,7 +1994,7 @@ Function Wait-SupervisorUpgradeComplete {
         }
     }
 }
-Function Get-SupervisorNetworkVanityDisplayName {
+function Get-SupervisorNetworkVanityDisplayName {
 
     <#
         .SYNOPSIS
@@ -2033,7 +2033,7 @@ Function Get-SupervisorNetworkVanityDisplayName {
 
     return $combined
 }
-Function Get-ManagementNetworkConfig {
+function Get-ManagementNetworkConfig {
 
     <#
         .SYNOPSIS
@@ -2114,7 +2114,7 @@ Function Get-ManagementNetworkConfig {
         throw [VcfDeploymentException]::new("Failed to extract management network configuration: $($_.Exception.Message)")
     }
 }
-Function Get-WorkloadNetworkConfig {
+function Get-WorkloadNetworkConfig {
 
     <#
         .SYNOPSIS
@@ -2197,7 +2197,7 @@ Function Get-WorkloadNetworkConfig {
         throw [VcfDeploymentException]::new("Failed to extract workload network configuration: $($_.Exception.Message)")
     }
 }
-Function Get-FLBNetworkConfig {
+function Get-FLBNetworkConfig {
 
     <#
         .SYNOPSIS
@@ -2275,7 +2275,7 @@ Function Get-FLBNetworkConfig {
         throw [VcfDeploymentException]::new("Failed to extract FLB network configuration: $($_.Exception.Message)")
     }
 }
-Function Get-LoadBalancerConfig {
+function Get-LoadBalancerConfig {
 
     <#
         .SYNOPSIS
@@ -2351,7 +2351,7 @@ Function Get-LoadBalancerConfig {
         throw [VcfDeploymentException]::new("Failed to extract Foundation Load Balancer configuration: $($_.Exception.Message)")
     }
 }
-Function Get-SupervisorConfigurationFromJson {
+function Get-SupervisorConfigurationFromJson {
 
     <#
         .SYNOPSIS
@@ -2561,7 +2561,7 @@ Function Get-SupervisorConfigurationFromJson {
         throw [VcfDeploymentException]::new("Failed to parse supervisor configuration from JSON: $($_.Exception.Message)")
     }
 }
-Function Test-SupervisorConfiguration {
+function Test-SupervisorConfiguration {
 
     <#
         .SYNOPSIS
@@ -2689,7 +2689,7 @@ Function Test-SupervisorConfiguration {
         return $false
     }
 }
-Function New-SupervisorControlPlaneSpec {
+function New-SupervisorControlPlaneSpec {
 
     <#
         .SYNOPSIS
@@ -2775,7 +2775,7 @@ Function New-SupervisorControlPlaneSpec {
         throw [VcfDeploymentException]::new("Failed to build control plane specification: $($_.Exception.Message)")
     }
 }
-Function New-SupervisorWorkloadSpec {
+function New-SupervisorWorkloadSpec {
 
     <#
         .SYNOPSIS
@@ -2851,7 +2851,7 @@ Function New-SupervisorWorkloadSpec {
         throw [VcfDeploymentException]::new("Failed to build workload network specification: $($_.Exception.Message)")
     }
 }
-Function New-SupervisorLoadBalancerSpec {
+function New-SupervisorLoadBalancerSpec {
 
     <#
         .SYNOPSIS
@@ -2999,7 +2999,7 @@ Function New-SupervisorLoadBalancerSpec {
         throw [VcfDeploymentException]::new("Failed to build Foundation Load Balancer specification: $($_.Exception.Message)")
     }
 }
-Function Invoke-SupervisorCreation {
+function Invoke-SupervisorCreation {
 
     <#
         .SYNOPSIS
@@ -3214,7 +3214,7 @@ Function Invoke-SupervisorCreation {
         }
     }
 }
-Function Get-VlcmDesiredBaseImageVersionFromSpec {
+function Get-VlcmDesiredBaseImageVersionFromSpec {
 
     <#
         .SYNOPSIS
@@ -3285,7 +3285,7 @@ Function Get-VlcmDesiredBaseImageVersionFromSpec {
 
     return $null
 }
-Function Invoke-VlcmClusterComplianceAndRemediate {
+function Invoke-VlcmClusterComplianceAndRemediate {
 
     <#
         .SYNOPSIS
@@ -3532,7 +3532,7 @@ Function Invoke-VlcmClusterComplianceAndRemediate {
         } while ($true)
     }
 }
-Function Add-Supervisor {
+function Add-Supervisor {
 
     <#
         .SYNOPSIS
@@ -3950,26 +3950,30 @@ Function Add-Supervisor {
         throw [VcfDeploymentException]::new("Failed to create a Supervisor on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
-Function Get-ManagementVSwitchInfo {
+function Get-ManagementVSwitchInfo {
 
     <#
         .SYNOPSIS
         Returns the standard vSwitch that has the management VMkernel (vmk0) and its physical NIC(s).
 
         .DESCRIPTION
-        Used to verify a host uses a single-NIC standard switch for management before vSS-to-vDS migration.
-        Returns $null if vmk0 is not found or is not on a standard switch, or if the switch has more than one pNIC.
+        Finds the standard switch that hosts vmk0 and returns its associated pNIC uplinks, sorted
+        alphabetically for determinism. Returns $null if vmk0 is not found or is not on a standard
+        switch. PnicNames may contain zero entries (vSS has no uplinks), one entry (typical fresh
+        install), or two or more entries (dual-uplink management switch).
 
         .PARAMETER VMHost
         The VMHost object (from Get-VMHost).
 
         .OUTPUTS
-        PSCustomObject with StandardSwitch, ManagementVmkernel, PnicNames (array of one pNIC name), ManagementPortGroupVlanId (VLAN ID of the port group vmk0 is on, or 0 if not determinable), or $null.
-
-        .NOTES
-        Caller should require exactly one pNIC for migration (host using just one NIC).
+        PSCustomObject with StandardSwitch, ManagementVmkernel, PnicNames (alphabetically sorted
+        array of pNIC names on the management vSS — may be empty, one, or many), and
+        ManagementPortGroupVlanId (VLAN ID of the port group vmk0 is on, or 0 if not determinable),
+        or $null.
     #>
 
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSObject]$VMHost
     )
@@ -3984,8 +3988,8 @@ Function Get-ManagementVSwitchInfo {
         foreach ($pg in $portGroups) {
             $vmkernelsOnPg = Get-VmkernelOnPortGroup -VMHost $VMHost -PortGroup $pg -Server $Script:vCenterName
             if ($vmkernelsOnPg | Where-Object { $_.Name -eq "vmk0" }) {
-                $pnics = Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $vSwitch -Server $Script:vCenterName
-                $pnicNames = @($pnics | ForEach-Object { $_.Name })
+                $pnics = Get-PhysicalNicsOnVssForHost -VMHost $VMHost -VirtualSwitch $vSwitch -Server $Script:vCenterName
+                $pnicNames = @($pnics | ForEach-Object { $_.Name } | Sort-Object)
                 $mgmtVlanId = 0
                 if ($pg.PSObject.Properties["VLanID"]) {
                     $mgmtVlanId = [int]$pg.VLanID
@@ -4005,7 +4009,7 @@ Function Get-ManagementVSwitchInfo {
     }
     return $null
 }
-Function Get-FirstUnusedNicFromNicList {
+function Get-FirstUnusedNicFromNicList {
 
     <#
         .SYNOPSIS
@@ -4052,16 +4056,44 @@ Function Get-FirstUnusedNicFromNicList {
     }
     return $null
 }
-Function Invoke-MigrateHostManagementToVds {
+function Get-VdsObjectByName {
 
     <#
         .SYNOPSIS
-        Migrates the host management VMkernel (vmk0) from a single-NIC standard switch to the VDS with same IP, then reclaims the pNIC.
+        Thin wrapper over Get-VDSwitch enabling unit tests to mock this call without fighting
+        PowerCLI ArgumentTransformationAttribute constraints on the -Server parameter.
+
+        .PARAMETER Name
+        VDS name.
+
+        .PARAMETER Server
+        vCenter server name. Defaults to $Script:vCenterName.
+
+        .EXAMPLE
+        Get-VdsObjectByName -Name "Production-VDS" -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Name,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VDSwitch -Name $Name -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+function Invoke-MigrateHostManagementToVds {
+
+    <#
+        .SYNOPSIS
+        Migrates the host management VMkernel (vmk0) from a standard switch to the VDS with the same IP, then reclaims the pNIC(s).
 
         .DESCRIPTION
-        Ensures the host uses exactly one pNIC for management on a standard switch. Adds the first unused NIC from NicList to the VDS,
-        creates a management distributed port group, migrates vmk0 to it (same IP), removes the standard switch after confirming no
-        VMs (or only VM Network with no VMs), adds the reclaimed pNIC to the VDS, and sets active/passive teaming.
+        Handles management vSwitches with one or more physical uplinks. Adds the first unused NIC from
+        NicList (or, when all NicList pNICs are already on the management vSS, atomically migrates the
+        first NicList pNIC off the vSS) to the VDS, creates a management distributed port group,
+        migrates vmk0 to it (same IP), removes the standard switch after confirming no VMs (or only
+        VM Network with no VMs), adds all reclaimed pNICs to the VDS, and sets active/passive teaming.
 
         .PARAMETER VMHost
         The VMHost object.
@@ -4070,7 +4102,9 @@ Function Invoke-MigrateHostManagementToVds {
         Name of the VDS (must already exist; host must already be added to the VDS).
 
         .PARAMETER NicList
-        Array of NIC config objects (e.g. from common.nicList with Name property). Only the first unused is used for initial attach; the reclaimed pNIC is then added.
+        Array of NIC config objects (e.g. from common.nicList with Name property). The first unused NIC
+        (or first NicList pNIC on the management vSS) is used for the initial VDS attach; any remaining
+        pNICs freed when the vSS is removed are added afterward.
 
         .PARAMETER ManagementPortGroupName
         Name for the management distributed port group. Default "mgmt".
@@ -4079,7 +4113,7 @@ Function Invoke-MigrateHostManagementToVds {
         Fallback VLAN ID for the management port group when the host's current vmk0 port group VLAN cannot be read. Default 0. The VLAN used when creating the DPG is normally sourced from the host's existing management port group (Get-ManagementVSwitchInfo) so the host is not disconnected by a VLAN change.
 
         .NOTES
-        Throws if host does not have exactly one pNIC on the management vSwitch or migration fails.
+        Throws if vmk0 is not on a standard switch, if the management vSwitch has no pNIC uplinks, or if migration fails.
         PowerCLI deprecation warning for VmwareVDPortgroup.VirtualSwitch (replacement is .VDSwitch) is suppressed at DPG-related cmdlet calls (-WarningAction SilentlyContinue) because the warning originates inside PowerCLI cmdlets when they receive or return DPG objects.
     #>
 
@@ -4106,9 +4140,9 @@ Function Invoke-MigrateHostManagementToVds {
     $WarningPreference = 'SilentlyContinue'
     try {
     # If vmk0 is already on the target VDS, skip migration (idempotent). Required for re-runs (e.g. -Force) when cluster and VDS already exist.
-    $vdsObject = Get-VDSwitch -Name $VdsName -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    $vdsObject = Get-VdsObjectByName -Name $VdsName -Server $Script:vCenterName
     if ($vdsObject) {
-        $vmk0 = Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "vmk0" }
+        $vmk0 = Get-VmkernelAdaptersOnHost -VMHost $VMHost -Server $Script:vCenterName | Where-Object { $_.Name -eq "vmk0" }
         if ($vmk0) {
             $vmk0OnTargetVds = $false
             $vmk0Network = $vmk0.ExtensionData.Spec.PortGroup
@@ -4148,28 +4182,50 @@ Function Invoke-MigrateHostManagementToVds {
     }
 
     $mgmtInfo = Get-ManagementVSwitchInfo -VMHost $VMHost
-    if (-not $mgmtInfo -or $mgmtInfo.PnicNames.Count -ne 1) {
-        $pnicCount = if ($mgmtInfo) { $mgmtInfo.PnicNames.Count } else { 0 }
-        Write-LogMessage -Type ERROR -Message "Host `"$hostDisplay`" must use exactly one NIC for management (vmk0 on a standard switch). Found: $pnicCount pNIC(s)."
-        throw [VcfDeploymentException]::new("Deployment failed. Host `"$hostDisplay`" must have management on a single-NIC standard switch. Check logs for details.")
+    if (-not $mgmtInfo) {
+        Write-LogMessage -Type ERROR -Message "Host `"$hostDisplay`": vmk0 not found on a standard switch; cannot migrate management to VDS `"$VdsName`"."
+        throw [VcfDeploymentException]::new("Deployment failed. Host `"$hostDisplay`" vmk0 is not on a standard switch. Check logs for details.")
+    }
+    if ($mgmtInfo.PnicNames.Count -eq 0) {
+        Write-LogMessage -Type ERROR -Message "Host `"$hostDisplay`": management standard switch `"$($mgmtInfo.StandardSwitch.Name)`" has no pNIC uplinks; cannot migrate."
+        throw [VcfDeploymentException]::new("Deployment failed. Host `"$hostDisplay`" management vSwitch has no pNICs. Check logs for details.")
     }
 
     # Use the VLAN from the host's current management port group so the DPG matches and we do not disconnect the host.
     $effectiveMgmtVlanId = if ($null -ne $mgmtInfo.PSObject.Properties["ManagementPortGroupVlanId"]) { $mgmtInfo.ManagementPortGroupVlanId } else { $ManagementVlanId }
-    $reclaimedPnicName = $mgmtInfo.PnicNames[0]
+    $vssPnicNames = $mgmtInfo.PnicNames  # All pNICs on the management vSS (sorted alphabetically); may be 1 or more.
     $firstUnused = Get-FirstUnusedNicFromNicList -VMHost $VMHost -NicNames $nicNames
-    $vdsObject = Get-VDSwitch -Name $VdsName -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction Stop
+    # Second Get-VdsObjectByName call: the idempotency check above returned null (VDS not found or vmk0 not already on it),
+    # so fetch the VDS object now for the actual migration path.
+    $vdsObject = Get-VdsObjectByName -Name $VdsName -Server $Script:vCenterName
+    if (-not $vdsObject) {
+        Write-LogMessage -Type ERROR -Message "VDS `"$VdsName`" not found on vCenter `"$Script:vCenterName`"; cannot complete management migration for host `"$hostDisplay`"."
+        throw [VcfDeploymentException]::new("Deployment failed. VDS `"$VdsName`" not found. Check logs for details.")
+    }
     $hostAlreadyHasPnicOnVds = $false
     if (-not $firstUnused) {
-        $pnicsOnTargetVds = @(Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vdsObject -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+        $pnicsOnTargetVds = @(Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $vdsObject -Server $Script:vCenterName)
         if ($pnicsOnTargetVds -and $pnicsOnTargetVds.Count -gt 0) {
             $hostAlreadyHasPnicOnVds = $true
             Write-LogMessage -Type INFO -Message "Host `"$hostDisplay`" has no unused NIC from NicList (all assigned); at least one pNIC is already on VDS `"$VdsName`". Proceeding to migrate vmk0 only."
         } else {
-            Write-LogMessage -Type ERROR -Message "No unused NIC from NicList found on host `"$hostDisplay`". All of [$($nicNames -join ', ')] are already assigned."
-            throw [VcfDeploymentException]::new("Deployment failed. No unused NIC for VDS on host `"$hostDisplay`". Check logs for details.")
+            # All NicList pNICs are "assigned" because they are on the management vSS. Pick the first
+            # NicList pNIC that is on the vSS to add to VDS first; Add-VDSwitchPhysicalNetworkAdapter
+            # atomically moves it off the vSS so the remaining uplink(s) keep management alive.
+            # The other vSS pNICs are freed when the vSS is removed and are added to VDS afterward.
+            $firstUnused = @($nicNames | Where-Object { $vssPnicNames -contains $_ })[0]
+            if ([String]::IsNullOrWhiteSpace($firstUnused)) {
+                Write-LogMessage -Type ERROR -Message "No unused NIC from NicList found on host `"$hostDisplay`". All of [$($nicNames -join ', ')] are already assigned and none are on the management vSS."
+                throw [VcfDeploymentException]::new("Deployment failed. No unused NIC for VDS on host `"$hostDisplay`". Check logs for details.")
+            }
+            Write-LogMessage -Type INFO -Message "Host `"$hostDisplay`": all NicList pNICs are on the management vSS `"$($mgmtInfo.StandardSwitch.Name)`"; adding `"$firstUnused`" to VDS first (atomically migrates it off the vSS), then migrating vmk0."
         }
     }
+    # pNICs on the management vSS that are not the initial VDS uplink. These are freed when the vSS is
+    # removed and must be added to VDS afterward. When $firstUnused is a pNIC on the vSS, it is excluded
+    # here; when $firstUnused is a truly free NIC (not on any switch), all vSS pNICs remain to be reclaimed.
+    $vssPnicsToReclaimAfterVssRemoval = @($vssPnicNames | Where-Object { $_ -ne $firstUnused })
+    $reclaimedPnicName = if ($vssPnicsToReclaimAfterVssRemoval.Count -gt 0) { $vssPnicsToReclaimAfterVssRemoval[0] } else { $null }
 
     $mgmtPortGroup = Get-VDPortgroup -Name $ManagementPortGroupName -VDSwitch $vdsObject -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
     if (-not $mgmtPortGroup) {
@@ -4312,7 +4368,11 @@ Function Invoke-MigrateHostManagementToVds {
     Remove-VirtualSwitch -VirtualSwitch $stdSwitch -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
     Write-LogMessage -Type DEBUG -Message "Removed standard switch `"$($stdSwitch.Name)`" from host `"$hostDisplay`"."
 
-    # Add second uplink: prefer the other NIC from NicList (so VDS uses user-specified NICs, e.g. vmnic0 and vmnic1). After a deploy-then-cleanup cycle, management is on vSwitch0-restore with the pNIC that was removed from the VDS during restore (often alphabetically last, e.g. vmnic2); that pNIC would otherwise be "reclaimed" and added here. Preferring the second from NicList ensures correct uplinks on re-deploy. Fall back to reclaimed pNIC if NicList has only one or the second is unavailable.
+    # Add remaining uplinks. Prefer the second NicList pNIC so VDS uplinks match the approved list on
+    # re-deploy. After a deploy-then-cleanup cycle management may be on vSwitch0-restore with a
+    # non-NicList pNIC; NicList order guarantees correct uplinks. Fall back to the first reclaimed vSS
+    # pNIC if the second NicList pNIC is unavailable. Then add any additional pNICs freed when the vSS
+    # was removed (hosts where the original vSS had three or more uplinks).
     $secondFromNicList = @($nicNames | Where-Object { $_ -ne $firstUnused })[0]
     $pnicToAddAsSecond = $null
     if (-not [String]::IsNullOrWhiteSpace($secondFromNicList)) {
@@ -4328,9 +4388,11 @@ Function Invoke-MigrateHostManagementToVds {
         }
     }
     if ($null -eq $pnicToAddAsSecond) {
-        $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
-        $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-        Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+        if (-not [String]::IsNullOrWhiteSpace($reclaimedPnicName)) {
+            $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
+            $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+        }
     } else {
         try {
             $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
@@ -4340,9 +4402,28 @@ Function Invoke-MigrateHostManagementToVds {
             }
         } catch {
             Write-LogMessage -Type WARNING -Message "Could not add pNIC `"$secondFromNicList`" to VDS (e.g. already on another switch): $($_.Exception.Message). Adding reclaimed pNIC `"$reclaimedPnicName`"."
-            $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
-            $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
-            Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+            if (-not [String]::IsNullOrWhiteSpace($reclaimedPnicName)) {
+                $pnicToAddAsSecond = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $reclaimedPnicName -Server $Script:vCenterName -ErrorAction Stop
+                $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAddAsSecond -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+                Write-LogMessage -Type DEBUG -Message "Added reclaimed pNIC `"$reclaimedPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+            }
+        }
+    }
+    # Add any additional pNICs freed when the vSS was removed (hosts where the original vSS had 3+ uplinks).
+    # Select-Object -Skip 1: index [0] is $reclaimedPnicName, already handled in "Add remaining uplinks" above.
+    foreach ($extraPnicName in @($vssPnicsToReclaimAfterVssRemoval | Select-Object -Skip 1)) {
+        if ([String]::IsNullOrWhiteSpace($extraPnicName)) { continue }
+        try {
+            $pnicsCurrentlyOnVds = @(Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vdsObject -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+            if ($pnicsCurrentlyOnVds | Where-Object { $_.Name -eq $extraPnicName }) {
+                Write-LogMessage -Type DEBUG -Message "pNIC `"$extraPnicName`" is already on VDS `"$VdsName`" on host `"$hostDisplay`"; skipping."
+                continue
+            }
+            $extraPnic = Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $extraPnicName -Server $Script:vCenterName -ErrorAction Stop
+            $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $extraPnic -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type DEBUG -Message "Added additional reclaimed pNIC `"$extraPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
+        } catch {
+            Write-LogMessage -Type WARNING -Message "Could not add additional reclaimed pNIC `"$extraPnicName`" to VDS `"$VdsName`" on host `"$hostDisplay`": $($_.Exception.Message)."
         }
     }
 
@@ -4364,7 +4445,7 @@ Function Invoke-MigrateHostManagementToVds {
         $WarningPreference = $prevWarningPreference
     }
 }
-Function Invoke-VDSCreation {
+function Invoke-VDSCreation {
 
     <#
         .SYNOPSIS
@@ -4495,7 +4576,7 @@ Function Invoke-VDSCreation {
         throw [VcfDeploymentException]::new("Failed to create VDS `"$VdsName`": $($_.Exception.Message)")
     }
 }
-Function Add-HostToVDS {
+function Add-HostToVDS {
 
     <#
         .SYNOPSIS
@@ -4546,7 +4627,7 @@ Function Add-HostToVDS {
         $WarningPreference = $prevWarningPreference
     }
 }
-Function New-VDSPortGroups {
+function New-VDSPortGroups {
 
     <#
         .SYNOPSIS
@@ -4645,7 +4726,7 @@ Function New-VDSPortGroups {
         }
     }
 }
-Function Set-VDSUplinkTeamingActiveStandby {
+function Set-VDSUplinkTeamingActiveStandby {
 
     <#
         .SYNOPSIS
@@ -4718,7 +4799,7 @@ Function Set-VDSUplinkTeamingActiveStandby {
         Write-LogMessage -Type WARNING -Message "Set-VDSUplinkTeamingActiveStandby: Could not set active/standby on VDS `"$VdsName`": $($_.Exception.Message)."
     }
 }
-Function Add-PhysicalAdaptersToVDS {
+function Add-PhysicalAdaptersToVDS {
 
     <#
         .SYNOPSIS
@@ -4858,7 +4939,7 @@ Function Add-PhysicalAdaptersToVDS {
         return Write-ErrorAndReturn -ErrorMessage "Network adapter configuration failed" -ErrorCode "ERR_NIC_CONFIG"
     }
 }
-Function Get-VmkernelTrafficVdsNameForLayout {
+function Get-VmkernelTrafficVdsNameForLayout {
     <#
         .SYNOPSIS
         Resolves the distributed switch name used for a VMkernel traffic role given uplink count.
@@ -4898,7 +4979,7 @@ Function Get-VmkernelTrafficVdsNameForLayout {
         default { return $BaseVdsName }
     }
 }
-Function Add-VmkernelInterfacesFromNetworkingConfig {
+function Add-VmkernelInterfacesFromNetworkingConfig {
     <#
         .SYNOPSIS
         Creates vMotion, vSAN, and optionally vSAN Witness distributed port groups on the VDS and adds VMkernel adapters on each host using networkingVmKernelInterfaces configuration.
@@ -5132,7 +5213,7 @@ Function Add-VmkernelInterfacesFromNetworkingConfig {
         }
     }
 }
-Function Test-PhysicalNicConnected {
+function Test-PhysicalNicConnected {
     <#
         .SYNOPSIS
         Returns whether a physical NIC on a host has link connected (link up).
@@ -5154,7 +5235,7 @@ Function Test-PhysicalNicConnected {
     #>
 
     [CmdletBinding()]
-    [OutputType([Bool])]
+    [OutputType([Boolean])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$NicName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
@@ -5177,7 +5258,7 @@ Function Test-PhysicalNicConnected {
         return $false
     }
 }
-Function Set-VirtualDistributedSwitch {
+function Set-VirtualDistributedSwitch {
 
        <#
         .SYNOPSIS
@@ -5488,7 +5569,7 @@ Function Set-VirtualDistributedSwitch {
         throw [VcfDeploymentException]::new("Failed to configure distributed switch `"$VdsName`": $($_.Exception.Message)")
     }
 }
-Function Set-StoragePolicy {
+function Set-StoragePolicy {
 
     <#
         .SYNOPSIS
@@ -5921,7 +6002,7 @@ Function Set-StoragePolicy {
         throw [VcfDeploymentException]::new("Failed to create storage policy `"$PolicyName`": $($_.Exception.Message)")
     }
 }
-Function Get-SupervisorControlPlaneIp {
+function Get-SupervisorControlPlaneIp {
 
     <#
         .SYNOPSIS
@@ -6009,7 +6090,7 @@ Function Get-SupervisorControlPlaneIp {
         throw [VcfDeploymentException]::new("Supervisor Control Plane VM details on cluster `"$ClusterName`" attached to vCenter `"$Script:vCenterName`" could not be fetched: $($_.Exception.Message)")
     }
 }
-Function Set-VCFContextCreate {
+function Set-VCFContextCreate {
 
     <#
         .SYNOPSIS
@@ -6257,7 +6338,7 @@ Function Set-VCFContextCreate {
         throw [VcfDeploymentException]::new("Failed to create or configure VCF context `"$ContextName`": $($_.Exception.Message)")
     }
 }
-Function Test-WebhookServiceReady {
+function Test-WebhookServiceReady {
 
     <#
         .SYNOPSIS
@@ -6378,7 +6459,7 @@ Function Test-WebhookServiceReady {
         return $false
     }
 }
-Function Wait-WebhookServiceReady {
+function Wait-WebhookServiceReady {
 
     <#
         .SYNOPSIS
@@ -6585,7 +6666,7 @@ Function Wait-WebhookServiceReady {
         ErrorCode = $null
     }
 }
-Function Get-PodReadinessStatus {
+function Get-PodReadinessStatus {
 
     <#
         .SYNOPSIS
@@ -6654,7 +6735,7 @@ Function Get-PodReadinessStatus {
         ReadyPodObjects = $readyPods
     }
 }
-Function Wait-ArgoCDPodsReady {
+function Wait-ArgoCDPodsReady {
 
     <#
         .SYNOPSIS
@@ -6784,7 +6865,7 @@ Function Wait-ArgoCDPodsReady {
     [Console]::Out.Flush()
     Write-LogMessage -Type INFO -Message "All $totalPods ArgoCD pods are ready."
 }
-Function Update-YamlNamespace {
+function Update-YamlNamespace {
 
     [OutputType([String])]
     <#
@@ -6900,7 +6981,7 @@ Function Update-YamlNamespace {
         throw [VcfDeploymentException]::new("Failed to update namespace in YAML file `"$YamlFilePath`": $($_.Exception.Message)")
     }
 }
-Function Get-KubectlNamespaceNamesMatchingPattern {
+function Get-KubectlNamespaceNamesMatchingPattern {
 
     <#
         .SYNOPSIS
@@ -6952,7 +7033,7 @@ Function Get-KubectlNamespaceNamesMatchingPattern {
         return [PSCustomObject]@{ KubectlSucceeded = $false; Names = [string[]]@() }
     }
 }
-Function Get-ArgoCDOperatorServiceNamespace {
+function Get-ArgoCDOperatorServiceNamespace {
 
     <#
         .SYNOPSIS
@@ -7013,7 +7094,7 @@ Function Get-ArgoCDOperatorServiceNamespace {
 
     return $null
 }
-Function Add-ArgoCDInstance {
+function Add-ArgoCDInstance {
 
     <#
         .SYNOPSIS
@@ -7460,7 +7541,7 @@ Function Add-ArgoCDInstance {
         throw [VcfDeploymentException]::new("Failed to add ArgoCD instance: $($_.Exception.Message)")
     }
 }
-Function Show-ArgoCDInstanceDetails {
+function Show-ArgoCDInstanceDetails {
 
     <#
         .SYNOPSIS
@@ -7642,7 +7723,7 @@ Function Show-ArgoCDInstanceDetails {
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
 }
-Function Show-HarborInstanceDetails {
+function Show-HarborInstanceDetails {
 
     <#
         .SYNOPSIS
@@ -7833,7 +7914,7 @@ Function Show-HarborInstanceDetails {
     [System.GC]::Collect()
     [System.GC]::WaitForPendingFinalizers()
 }
-Function Get-Base64FromYml {
+function Get-Base64FromYml {
 
     <#
         .SYNOPSIS
@@ -7897,7 +7978,7 @@ Function Get-Base64FromYml {
         throw [VcfDeploymentException]::new("Get-Base64FromYml: Failed to read or encode YAML file `"$Path`": $($_.Exception.Message).")
     }
 }
-Function Set-ArgoCDService {
+function Set-ArgoCDService {
 
     <#
         .SYNOPSIS
@@ -7950,7 +8031,7 @@ Function Set-ArgoCDService {
         }
     }
 }
-Function Set-HarborService {
+function Set-HarborService {
 
     <#
         .SYNOPSIS
@@ -8005,7 +8086,7 @@ Function Set-HarborService {
         }
     }
 }
-Function Add-HarborContainerImageRegistry {
+function Add-HarborContainerImageRegistry {
 
     <#
         .SYNOPSIS
@@ -8219,7 +8300,7 @@ Function Add-HarborContainerImageRegistry {
         [System.GC]::WaitForPendingFinalizers()
     }
 }
-Function Install-HarborSupervisorService {
+function Install-HarborSupervisorService {
 
     <#
         .SYNOPSIS
@@ -8549,7 +8630,7 @@ Function Install-HarborSupervisorService {
         throw [VcfDeploymentException]::new("Install-HarborSupervisorService unexpected error: $($_.Exception.Message)")
     }
 }
-Function Test-YamlPropertyConsistency {
+function Test-YamlPropertyConsistency {
 
     <#
         .SYNOPSIS
@@ -8842,7 +8923,7 @@ Function Test-YamlPropertyConsistency {
         return $false
     }
 }
-Function Get-ArgoCDServiceDetail {
+function Get-ArgoCDServiceDetail {
 
     <#
         .SYNOPSIS
@@ -8974,7 +9055,7 @@ Function Get-ArgoCDServiceDetail {
         throw [VcfDeploymentException]::new("ArgoCD service context key validation failed. Check logs for details.")
     }
 }
-Function Get-ContentLibraryId {
+function Get-ContentLibraryId {
 
     <#
         .SYNOPSIS
@@ -9060,7 +9141,7 @@ Function Get-ContentLibraryId {
         throw [VcfDeploymentException]::new("Failed to retrieve content library `"$LibraryName`" from `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
-Function New-VCenterRestApiSession {
+function New-VCenterRestApiSession {
 
     <#
         .SYNOPSIS
@@ -9298,7 +9379,7 @@ Function New-VCenterRestApiSession {
         }
     }
 }
-Function Find-SupervisorByName {
+function Find-SupervisorByName {
 
     <#
         .SYNOPSIS
@@ -9419,7 +9500,7 @@ Function Find-SupervisorByName {
         }
     }
 }
-Function Wait-SupervisorDiscoverable {
+function Wait-SupervisorDiscoverable {
 
     <#
         .SYNOPSIS
@@ -9661,7 +9742,7 @@ Function Wait-SupervisorDiscoverable {
         ErrorMessage = "Timeout waiting for supervisor to become ready (last status: $lastStatus)"
     }
 }
-Function Get-SupervisorId {
+function Get-SupervisorId {
 
     <#
         .SYNOPSIS
@@ -9999,7 +10080,7 @@ Function Get-SupervisorId {
         }
     }
 }
-Function Get-StoragePolicyId {
+function Get-StoragePolicyId {
 
     <#
         .SYNOPSIS
@@ -10067,15 +10148,17 @@ Function Get-StoragePolicyId {
 
     # Get storage policy id from the storage policy name.
     try {
-        $policy = Get-SpbmStoragePolicy -Name $StoragePolicyName -Server $Script:vCenterName
-        $storagePolicyId = $($policy.Id)
-        return $storagePolicyId
+        $policy = Get-SpbmStoragePolicy -Name $StoragePolicyName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        if (-not $policy) {
+            return $null
+        }
+        return $policy.Id
     } catch {
         Write-LogMessage -Type "ERROR" -Message "Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
         throw [VcfDeploymentException]::new("Unable to fetch storage policy id `"$StoragePolicyName`" on `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
-Function Get-OrCreateSupervisor {
+function Get-OrCreateSupervisor {
 
     <#
         .SYNOPSIS
@@ -10208,7 +10291,7 @@ Function Get-OrCreateSupervisor {
 
     return $supervisorId
 }
-Function Get-AvailableVmClassNames {
+function Get-AvailableVmClassNames {
 
     <#
         .SYNOPSIS
@@ -10252,7 +10335,7 @@ Function Get-AvailableVmClassNames {
     Write-LogMessage -Type INFO -Message "Using all available VM classes for ArgoCD namespace."
     return $vmClassNames
 }
-Function Add-ArgoCDNamespace {
+function Add-ArgoCDNamespace {
 
     <#
         .SYNOPSIS
@@ -10535,7 +10618,7 @@ Function Add-ArgoCDNamespace {
         throw [VcfDeploymentException]::new("The namespace could not be created: $namespaceError")
     }
 }
-Function Install-ArgoCDOperator {
+function Install-ArgoCDOperator {
 
     <#
         .SYNOPSIS
@@ -10991,7 +11074,7 @@ Function Install-ArgoCDOperator {
         throw [VcfDeploymentException]::new("ArgoCD operator deployment failed. Check logs for details.")
     }
 }
-Function Resolve-HarborSecretValue {
+function Resolve-HarborSecretValue {
 
     <#
         .SYNOPSIS
@@ -11143,7 +11226,7 @@ Function Resolve-HarborSecretValue {
     Write-LogMessage -Type DEBUG -Message "Stored interactive input in environment variable `"$envVarName`" for harborConfiguration.$FieldName."
     return $envValue
 }
-Function ConvertTo-YamlLiteralBlock {
+function ConvertTo-YamlLiteralBlock {
 
     <#
         .SYNOPSIS
@@ -11199,7 +11282,7 @@ Function ConvertTo-YamlLiteralBlock {
     $indentedLines = $lines | ForEach-Object { $contentIndent + $_ }
     return $keyIndent + $KeyName + ": |`n" + ($indentedLines -join "`n") + "`n"
 }
-Function Update-HarborYamlContent {
+function Update-HarborYamlContent {
 
     <#
         .SYNOPSIS
@@ -11390,7 +11473,7 @@ Function Update-HarborYamlContent {
     }
     return $YamlContent
 }
-Function New-HarborDataValuesFile {
+function New-HarborDataValuesFile {
 
     <#
         .SYNOPSIS
@@ -11699,7 +11782,7 @@ Function New-HarborDataValuesFile {
         throw [VcfDeploymentException]::new("New-HarborDataValuesFile: Failed to create Harbor data values file from template `"$HarborTemplateFilePath`": $($_.Exception.Message)")
     }
 }
-Function Convert-CountToInt {
+function Convert-CountToInt {
 
     <#
         .SYNOPSIS
@@ -11868,7 +11951,7 @@ Function Convert-CountToInt {
         }
     }
 }
-Function Get-InteractiveInput {
+function Get-InteractiveInput {
 
     <#
         .SYNOPSIS
@@ -11934,7 +12017,7 @@ Function Get-InteractiveInput {
 
     return $value
 }
-Function Get-JsonDataWithValidation {
+function Get-JsonDataWithValidation {
 
     <#
         .SYNOPSIS
@@ -12016,7 +12099,7 @@ Function Get-JsonDataWithValidation {
         return $null
     }
 }
-Function Test-JsonFile {
+function Test-JsonFile {
 
     <#
         .SYNOPSIS
@@ -12165,7 +12248,7 @@ Function Test-JsonFile {
         }
     }
 }
-Function ConvertFrom-JsonSafely {
+function ConvertFrom-JsonSafely {
 
     <#
         .SYNOPSIS
@@ -12252,7 +12335,7 @@ Function ConvertFrom-JsonSafely {
         throw [VcfDeploymentException]::new("JSON validation failed for `"$JsonFilePath`": $errorMessage")
     }
 }
-Function Test-CommandAvailability {
+function Test-CommandAvailability {
 
     <#
         .SYNOPSIS
@@ -12288,7 +12371,7 @@ Function Test-CommandAvailability {
         throw [VcfDeploymentException]::new("Executable `"$Command`" not found in PATH.  $Description is required for the script to proceed. Exiting")
     }
 }
-Function Test-Filepath {
+function Test-Filepath {
 
     <#
         .SYNOPSIS
@@ -12324,7 +12407,7 @@ Function Test-Filepath {
         throw [VcfDeploymentException]::new("Failed to find `"$Description`" file on disk: `"$FilePath`" not found. Exiting.")
     }
 }
-Function Test-JsonMissingProperties {
+function Test-JsonMissingProperties {
 
     <#
         .SYNOPSIS
@@ -12572,7 +12655,7 @@ Function Test-JsonMissingProperties {
     }
 
     # Helper function to generate expected JSON structure for missing properties.
-Function Get-ExpectedStructure {
+function Get-ExpectedStructure {
 
         <#
             .SYNOPSIS
@@ -12723,7 +12806,7 @@ Function Get-ExpectedStructure {
 
     return $validationResult
 }
-Function Test-JsonNullValues {
+function Test-JsonNullValues {
 
     <#
         .SYNOPSIS
@@ -12932,7 +13015,7 @@ Function Test-JsonNullValues {
 
     return $validationResult
 }
-Function Test-ArrayPropertyNullValue {
+function Test-ArrayPropertyNullValue {
     <#
         .SYNOPSIS
         Iteratively checks for null values in nested array properties.
@@ -13097,7 +13180,7 @@ Function Test-ArrayPropertyNullValue {
         }
     }
 }
-Function Get-EdgeSitesFromParameter {
+function Get-EdgeSitesFromParameter {
 
     <#
         .SYNOPSIS
@@ -13169,7 +13252,7 @@ Function Get-EdgeSitesFromParameter {
 
     return $requestedSites
 }
-Function Get-EffectiveNicListForCluster {
+function Get-EffectiveNicListForCluster {
 
     <#
         .SYNOPSIS
@@ -13204,7 +13287,7 @@ Function Get-EffectiveNicListForCluster {
     }
     return $CommonNicList
 }
-Function Test-InfrastructureNicListEffective {
+function Test-InfrastructureNicListEffective {
 
     <#
         .SYNOPSIS
@@ -13246,7 +13329,7 @@ Function Test-InfrastructureNicListEffective {
         }
     }
 }
-Function Test-EdgeSiteMatching {
+function Test-EdgeSiteMatching {
 
     <#
         .SYNOPSIS
@@ -13376,7 +13459,7 @@ Function Test-EdgeSiteMatching {
 
     return $validationResult
 }
-Function Test-JsonShallowValidation {
+function Test-JsonShallowValidation {
 
     <#
         .SYNOPSIS
@@ -13698,7 +13781,7 @@ Function Test-JsonShallowValidation {
     $siteIndication = if (-not $EdgeSite) { "all sites" } elseif ($null -ne $edgeSitesArray -and $edgeSitesArray.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArray -join '", "')`"" } else { "edgeSite `"$EdgeSite`"" }
     Write-LogMessage -Type DEBUG -Message "Test-JsonShallowValidation completed all validation calls for $siteIndication in $($shallowValidationFunctionElapsed.TotalSeconds.ToString('F3')) seconds."
 }
-Function ConvertTo-IpInt {
+function ConvertTo-IpInt {
 
     <#
         .SYNOPSIS
@@ -13723,7 +13806,7 @@ Function ConvertTo-IpInt {
     $octets = $IpString.Split('.')
     return ([int64]$octets[0] -shl 24) -bor ([int64]$octets[1] -shl 16) -bor ([int64]$octets[2] -shl 8) -bor [int64]$octets[3]
 }
-Function Test-IpAddressInCidrRange {
+function Test-IpAddressInCidrRange {
 
     <#
         .SYNOPSIS
@@ -13834,7 +13917,7 @@ Function Test-IpAddressInCidrRange {
         return $false
     }
 }
-Function Get-JsonPropertyValue {
+function Get-JsonPropertyValue {
 
     <#
         .SYNOPSIS
@@ -13997,7 +14080,7 @@ Function Get-JsonPropertyValue {
         return $null
     }
 }
-Function Get-ValidationPresetRules {
+function Get-ValidationPresetRules {
 
     <#
         .SYNOPSIS
@@ -14095,7 +14178,7 @@ Function Get-ValidationPresetRules {
     Write-LogMessage -Type DEBUG -Message "Retrieved validation rules for preset '$ValidationPreset'"
     return $rules
 }
-Function Test-StringAgainstAllowlist {
+function Test-StringAgainstAllowlist {
 
     <#
         .SYNOPSIS
@@ -14144,7 +14227,7 @@ Function Test-StringAgainstAllowlist {
     Write-LogMessage -Type DEBUG -Message "Allowlist validation passed"
     return $true
 }
-Function Test-StringAgainstDenylist {
+function Test-StringAgainstDenylist {
 
     <#
         .SYNOPSIS
@@ -14192,7 +14275,7 @@ Function Test-StringAgainstDenylist {
     Write-LogMessage -Type DEBUG -Message "Denylist validation passed"
     return $true
 }
-Function Test-AcceptableStrings {
+function Test-AcceptableStrings {
 
     <#
         .SYNOPSIS
@@ -14249,7 +14332,7 @@ Function Test-AcceptableStrings {
     Write-LogMessage -Type ERROR -Message "Validation failed for input value `"$InputText`"${pathInfo}. It should be one of: $($AcceptableStrings -join ', ')"
     return $false
 }
-Function Test-NumericRange {
+function Test-NumericRange {
 
     <#
         .SYNOPSIS
@@ -14324,7 +14407,7 @@ Function Test-NumericRange {
     Write-LogMessage -Type DEBUG -Message "Numeric range validation passed for value: $numericValue"
     return $true
 }
-Function Test-ValidCidrRange {
+function Test-ValidCidrRange {
 
     <#
         .SYNOPSIS
@@ -14442,7 +14525,7 @@ Function Test-ValidCidrRange {
     Write-LogMessage -Type DEBUG -Message "CIDR range validation passed for value: $number (equivalent to /$cidrPrefix CIDR block)"
     return $true
 }
-Function Test-JsonPropertyFormat {
+function Test-JsonPropertyFormat {
 
     <#
         .SYNOPSIS
@@ -14749,7 +14832,7 @@ Function Test-JsonPropertyFormat {
     # All validations passed.
     return $true
 }
-Function Test-TagCatalogCategory {
+function Test-TagCatalogCategory {
 
     <#
         .SYNOPSIS
@@ -14837,7 +14920,7 @@ Function Test-TagCatalogCategory {
         Write-LogMessage -Type INFO -Message "Tag catalog `"$TagCatalog`" already exists on vCenter `"$Script:vCenterName`". Skipping tag catalog creation."
     }
 }
-Function Test-Tag {
+function Test-Tag {
 
     <#
         .SYNOPSIS
@@ -14933,7 +15016,7 @@ Function Test-Tag {
     }
 }
 #Test-JsonDeeperValidation Helper Functions
-Function Test-ValidIPv4Address {
+function Test-ValidIPv4Address {
     <#
         .SYNOPSIS
         Returns $true when the supplied string is a valid dotted-decimal IPv4 address; $false otherwise.
@@ -14944,7 +15027,7 @@ Function Test-ValidIPv4Address {
     if ([String]::IsNullOrWhiteSpace($IpAddress)) { return $false }
     return $IpAddress -match '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'
 }
-Function Test-ValidNetmask {
+function Test-ValidNetmask {
     <#
         .SYNOPSIS
         Returns $true when the supplied string is a valid contiguous IPv4 subnet mask (e.g. 255.255.255.0); $false otherwise.
@@ -14962,7 +15045,7 @@ Function Test-ValidNetmask {
     if ($binary -notmatch '^1*0*$') { return $false }
     return $true
 }
-Function Test-IpInSubnet {
+function Test-IpInSubnet {
     <#
         .SYNOPSIS
         Returns $true when IpAddress falls within the subnet defined by ReferenceIp and SubnetMask.
@@ -14991,7 +15074,7 @@ Function Test-IpInSubnet {
     $maskInt = 0; foreach ($octet in $maskOctets) { $maskInt = ($maskInt -shl 8) + $octet }
     return ($ipInt -band $maskInt) -eq ($refInt -band $maskInt)
 }
-Function Test-TcpPortReachable {
+function Test-TcpPortReachable {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$IpAddress,
         [Parameter(Mandatory = $false)] [int]$Port = 443,
@@ -15014,7 +15097,7 @@ Function Test-TcpPortReachable {
         return $false
     }
 }
-Function Test-VcenterAndEsxReachability {
+function Test-VcenterAndEsxReachability {
 
     <#
         .SYNOPSIS
@@ -15058,7 +15141,7 @@ Function Test-VcenterAndEsxReachability {
     $reachSummary = if ($EsxHosts.Count -eq 0) { "vCenter OK" } else { "all targets OK (vCenter and $($EsxHosts.Count) ESX host(s))" }
     Write-LogMessage -Type INFO -Message "Reachability: $reachSummary."
 }
-Function Test-JsonNetworkingVmKernelAndTemporaryIp {
+function Test-JsonNetworkingVmKernelAndTemporaryIp {
     <#
         .SYNOPSIS
         Validates networking.networkingVmKernelInterfaces and VLAN IDs for each cluster in a deep-validation pass.
@@ -15189,7 +15272,7 @@ Function Test-JsonNetworkingVmKernelAndTemporaryIp {
     }
     return $validationFailures
 }
-Function Test-JsonPrefixFormats {
+function Test-JsonPrefixFormats {
 
     <#
         .SYNOPSIS
@@ -15230,7 +15313,7 @@ Function Test-JsonPrefixFormats {
 
     return $validationFailures
 }
-Function Test-JsonNetworkSegmentGateways {
+function Test-JsonNetworkSegmentGateways {
 
     <#
         .SYNOPSIS
@@ -15323,7 +15406,7 @@ Function Test-JsonNetworkSegmentGateways {
 
     return $validationFailures
 }
-Function Test-JsonStoragePolicyFormats {
+function Test-JsonStoragePolicyFormats {
     <#
         .SYNOPSIS
         Validates storage policy format properties per cluster.
@@ -15368,7 +15451,7 @@ Function Test-JsonStoragePolicyFormats {
 
     return $validationFailures
 }
-Function Test-JsonNumericPropertiesWithRanges {
+function Test-JsonNumericPropertiesWithRanges {
     <#
         .SYNOPSIS
         Validates numeric properties with minimum value requirements per site.
@@ -15417,7 +15500,7 @@ Function Test-JsonNumericPropertiesWithRanges {
 
     return $validationFailures
 }
-Function Test-JsonLbVirtualServerIpCount {
+function Test-JsonLbVirtualServerIpCount {
 
     <#
         .SYNOPSIS
@@ -15464,7 +15547,7 @@ Function Test-JsonLbVirtualServerIpCount {
 
     return 0
 }
-Function Test-JsonRfc1123NetworkNames {
+function Test-JsonRfc1123NetworkNames {
 
     <#
         .SYNOPSIS
@@ -15508,7 +15591,7 @@ Function Test-JsonRfc1123NetworkNames {
 
     return $validationFailures
 }
-Function Test-JsonRfc1123NetworkSegments {
+function Test-JsonRfc1123NetworkSegments {
     <#
         .SYNOPSIS
         Validates that network segment names conform to RFC1123 format.
@@ -15546,7 +15629,7 @@ Function Test-JsonRfc1123NetworkSegments {
 
     return $validationFailures
 }
-Function Test-JsonRfc1123VmClassNames {
+function Test-JsonRfc1123VmClassNames {
 
     <#
         .SYNOPSIS
@@ -15588,7 +15671,7 @@ Function Test-JsonRfc1123VmClassNames {
 
     return $validationFailures
 }
-Function Test-JsonDnsServers {
+function Test-JsonDnsServers {
     <#
         .SYNOPSIS
         Validates DNS server configuration from commonSupervisorSpec.
@@ -15628,7 +15711,7 @@ Function Test-JsonDnsServers {
 
     return $validationFailures
 }
-Function Test-JsonFlbConfiguration {
+function Test-JsonFlbConfiguration {
 
     <#
         .SYNOPSIS
@@ -15679,7 +15762,7 @@ Function Test-JsonFlbConfiguration {
 
     return $validationFailures
 }
-Function Test-JsonControlPlaneConfiguration {
+function Test-JsonControlPlaneConfiguration {
     <#
         .SYNOPSIS
         Validates control plane configuration from commonSupervisorSpec.
@@ -15720,7 +15803,7 @@ Function Test-JsonControlPlaneConfiguration {
 
     return $validationFailures
 }
-Function Test-JsonStartingIpAddresses {
+function Test-JsonStartingIpAddresses {
 
     <#
         .SYNOPSIS
@@ -15766,7 +15849,7 @@ Function Test-JsonStartingIpAddresses {
 
     return $validationFailures
 }
-Function Test-JsonIpAddressesInCidrRanges {
+function Test-JsonIpAddressesInCidrRanges {
     <#
         .SYNOPSIS
         Validates that starting IP addresses are within their respective CIDR ranges.
@@ -15863,7 +15946,7 @@ Function Test-JsonIpAddressesInCidrRanges {
 
     return $validationFailures
 }
-Function Test-JsonShallowSupervisorServicesPathConfiguration {
+function Test-JsonShallowSupervisorServicesPathConfiguration {
 
     <#
         .SYNOPSIS
@@ -15945,7 +16028,7 @@ Function Test-JsonShallowSupervisorServicesPathConfiguration {
 
     return $validationFailures
 }
-Function Test-JsonYamlFilePaths {
+function Test-JsonYamlFilePaths {
 
     <#
         .SYNOPSIS
@@ -16011,7 +16094,7 @@ Function Test-JsonYamlFilePaths {
 
     return $validationFailures
 }
-Function Test-JsonWorkloadServiceCount {
+function Test-JsonWorkloadServiceCount {
     <#
         .SYNOPSIS
         Validates workloadServiceCount as a valid CIDR range per site.
@@ -16050,7 +16133,7 @@ Function Test-JsonWorkloadServiceCount {
 
     return $validationFailures
 }
-Function Test-JsonStoragePolicyTypes {
+function Test-JsonStoragePolicyTypes {
     <#
         .SYNOPSIS
         Validates storage policy type per cluster.
@@ -16084,7 +16167,7 @@ Function Test-JsonStoragePolicyTypes {
 
     return $validationFailures
 }
-Function Test-JsonEsxHostCountByStoragePolicyType {
+function Test-JsonEsxHostCountByStoragePolicyType {
 
     <#
         .SYNOPSIS
@@ -16143,7 +16226,7 @@ Function Test-JsonEsxHostCountByStoragePolicyType {
 
     return $validationFailures
 }
-Function Test-JsonEsxHostFormats {
+function Test-JsonEsxHostFormats {
 
     <#
         .SYNOPSIS
@@ -16181,7 +16264,7 @@ Function Test-JsonEsxHostFormats {
 
     return $validationFailures
 }
-Function Test-JsonvSanWitnessVmName {
+function Test-JsonvSanWitnessVmName {
     <#
         .SYNOPSIS
         Validates vSAN witness FQDN when storage type is VSAN-OSA or VSAN-ESA.
@@ -16261,7 +16344,7 @@ Function Test-JsonvSanWitnessVmName {
 
     return $validationFailures
 }
-Function Test-JsonHaPolicy {
+function Test-JsonHaPolicy {
 
     <#
         .SYNOPSIS
@@ -16328,7 +16411,7 @@ Function Test-JsonHaPolicy {
 
     return $validationFailures
 }
-Function Get-CommonLabEnvironmentEnabled {
+function Get-CommonLabEnvironmentEnabled {
     <#
         .SYNOPSIS
         Returns whether infrastructure JSON enables lab mode (common.labenvironment true).
@@ -16348,7 +16431,7 @@ Function Get-CommonLabEnvironmentEnabled {
     }
     return ($labProp.Value -eq $true)
 }
-Function Get-HarborHostnameFromDataValuesTemplateFile {
+function Get-HarborHostnameFromDataValuesTemplateFile {
     <#
         .SYNOPSIS
         Reads the top-level hostname value from a Harbor data values YAML template.
@@ -16378,7 +16461,7 @@ Function Get-HarborHostnameFromDataValuesTemplateFile {
     }
     return $null
 }
-Function Get-EffectiveHarborHostnameForInfrastructureCluster {
+function Get-EffectiveHarborHostnameForInfrastructureCluster {
     <#
         .SYNOPSIS
         Resolves the Harbor hostname for YAML and validation (JSON hostname or lab template fallback).
@@ -16423,7 +16506,7 @@ Function Get-EffectiveHarborHostnameForInfrastructureCluster {
     }
     return $null
 }
-Function New-LabHarborSelfSignedTlsMaterialFiles {
+function New-LabHarborSelfSignedTlsMaterialFiles {
     <#
         .SYNOPSIS
         Creates temporary PEM files for a Harbor TLS certificate (self-signed, RSA).
@@ -16494,7 +16577,7 @@ Function New-LabHarborSelfSignedTlsMaterialFiles {
         TlsKeyPath = $keyPath
     }
 }
-Function Test-JsonHarborConfiguration {
+function Test-JsonHarborConfiguration {
 
     <#
         .SYNOPSIS
@@ -16709,7 +16792,7 @@ Function Test-JsonHarborConfiguration {
 
     return $validationFailures
 }
-Function Get-ClustersInScope {
+function Get-ClustersInScope {
 
     <#
         .SYNOPSIS
@@ -16740,7 +16823,7 @@ Function Get-ClustersInScope {
     }
     return @($InputData.clusters)
 }
-Function Get-SiteSpecsInScope {
+function Get-SiteSpecsInScope {
 
     <#
         .SYNOPSIS
@@ -16771,7 +16854,7 @@ Function Get-SiteSpecsInScope {
     }
     return @($SupervisorData.siteSpec)
 }
-Function Test-JsonDeeperValidation {
+function Test-JsonDeeperValidation {
 
     <#
         .SYNOPSIS
@@ -17062,7 +17145,7 @@ Function Test-JsonDeeperValidation {
     $siteIndication = if ($edgeSitesArray.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArray -join '", "')`"" } else { "all sites" }
     Write-LogMessage -Type DEBUG -Message "Test-JsonDeeperValidation completed all validation calls for $siteIndication in $($deeperValidationFunctionElapsed.TotalSeconds.ToString('F3')) seconds."
 }
-Function Find-Datastore {
+function Find-Datastore {
 
     <#
         .SYNOPSIS
@@ -17170,7 +17253,7 @@ Function Find-Datastore {
         }
     }
 }
-Function Find-VlcmImage {
+function Find-VlcmImage {
 
     <#
         .SYNOPSIS
