@@ -786,6 +786,7 @@ if ($workDir -and (Test-Path $workDir)) \{\line
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Uplinks:} There is no {\f1 numUplinks} field. The number of VDS uplinks is taken from the length of {\f1 nicList} (e.g. two NICs in {\f1 nicList} means two uplinks). {\b nicList} may be defined at {\b common} (applies to all clusters) or per {\b clusters[]} (cluster overrides common). At least one definition is mandatory: either {\f1 common.nicList} or {\f1 clusters[].nicList} for each cluster. When both are defined, the cluster value takes precedence. Effective list must have 2 or 4 NICs.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Storage:} Use {\f1 storagePolicy.storageType} ({\f1 VMFS}, {\f1 vSAN-ESA}, or {\f1 vSAN-OSA}). The tag catalog name can be omitted; it defaults to {\f1 \{storageType\}-Storage-TagCatalog} (e.g. {\f1 VMFS-Storage-TagCatalog}).\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vSAN witness:} {\f1 vSanWitnessVmName} may be defined at {\f1 common} (applies to all vSAN clusters) or per {\f1 clusters[]} (cluster root level only; cluster overrides common). Required for vSAN-OSA and vSAN-ESA storage types; not used for VMFS.\par}
+{\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b Cluster name override:} Set {\f1 clusters[].overrideClusterName} to give a specific vSphere cluster name to a single edge site, bypassing the {\f1 \{clusterNamePrefix\}-\{edgeSite\}} formula entirely for that cluster. The value must be 1-80 characters (alphanumeric, spaces, {\f1 _}, {\f1 +}, {\f1 -}, {\f1 ()}, {\f1 .}); JSON validation and PowerShell both enforce this. {\f1 common.clusterNamePrefix} is still used for all other clusters that do not set this key.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vSphere HA admission (vSAN OSA/ESA only):} {\f1 haPolicy} may be defined at {\f1 common} or per {\f1 clusters[]} (cluster overrides common). Omitted means {\b {\f1 reservationBased}} (CPU and memory percentage admission; default percentage is ceiling(100 / host count) unless overridden). {\b {\f1 slotBased}} uses host failures tolerated = 1 (slot-style admission). {\b {\f1 disabled}} leaves HA on with admission control off (VM restart only, no capacity reservation). These values apply when the workflow re-applies HA after moving management to the VDS and when the vSAN alarm check remediates {\b vSphere HA host status}. {\b VMFS} clusters are not governed by this JSON key; HA re-apply after the VDS step continues to use {\b reservationBased}. When the key is present, JSON validation accepts only the three strings above.\par}
 {\pard \ql \f0 \sa0 \li360 \fi-360 \bullet \tx360\tab {\b vSAN Health \u8212- Stats Primary election:} The module {\b does not} add Stats Primary to the vSAN {\b silent-check} list (no {\f1 VsanHealthSetVsanClusterSilentChecks} for that test). When the post-witness health summary is non-green {\b only} for Stats Primary election/selection (including common {\f1 perfsvc.masterexist} / label variants on older builds), it {\b re-triggers} evaluation: ensures the vSAN performance service is enabled, runs {\b {\f1 Test-VsanClusterHealth}} when the cmdlet exists (with {\b {\f1 VMCreateTimeoutSeconds}} when supported\u8212-default 120), waits between attempts, and re-reads health up to {\b four} times (45 s between attempts by default). If it still only shows that finding, deployment {\b proceeds with a warning} so a transient leader election does not block the gate. {\f1 common.labenvironment: true} still applies {\b separate} lab-only silent checks for other tests. After a successful vSAN edge deployment, {\b {\f1 Test-VsanClusterHealth}} runs again when available. Manual remediation remains per {\field{\*\fldinst{HYPERLINK "https://knowledge.broadcom.com/external/article/401679/stats-primary-election-alert-via-vsan-he.html"}}{\fldrslt{\ul
 Broadcom KB 401679
@@ -1278,6 +1279,19 @@ VMware supervisor content library
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Yes\par}
 \cell}
 {{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Unique site ID; must match one {\f1 siteSpec[].edgeSite} in supervisor.json.\par}
+\cell}
+}
+\intbl\row}
+{
+\trowd \trgaph120
+\cellx2880\cellx5760\cellx8640
+\trkeep\intbl
+{
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 {\f1 overrideClusterName}\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 No\par}
+\cell}
+{{\pard\intbl \ql \f0 \sa0 \li0 \fi0 Overrides the auto-generated vSphere cluster name for this site. When set, replaces the {\f1 \{clusterNamePrefix\}-\{edgeSite\}} formula for this cluster only. Must be 1-80 chars; alphanumeric, spaces, {\f1 _}, {\f1 +}, {\f1 -}, {\f1 ()}, {\f1 .}. Omit to use the generated name.\par}
 \cell}
 }
 \intbl\row}

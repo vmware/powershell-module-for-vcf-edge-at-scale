@@ -27,6 +27,40 @@
 # =============================================================================
 #
 #region Exported — entry points, templates, configuration help
+function Confirm-FileOverwritePrompt {
+
+    <#
+        .SYNOPSIS
+        Prompts the user to confirm overwriting an existing file.
+
+        .DESCRIPTION
+        When the file at FilePath already exists, reads a y/N response from the user and returns
+        $true for yes or $false for no (keep existing). When the file does not exist, returns $true
+        without prompting. Throws when Read-Host is unavailable so callers receive a clear error.
+
+        .PARAMETER FilePath
+        Full path to the file that would be overwritten.
+
+        .OUTPUTS
+        [Boolean] $true to write the file; $false to keep the existing copy.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Boolean])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FilePath
+    )
+
+    if (-not (Test-Path -LiteralPath $FilePath -PathType Leaf)) {
+        return $true
+    }
+    try {
+        $answer = Read-Host "File `"$FilePath`" already exists. Overwrite? (y/N)"
+    } catch {
+        throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
+    }
+    return $answer -match '^[yY]$'
+}
 function Test-VcfEdgeAtScaleDeploymentRootInitialized {
 
     <#
@@ -37,8 +71,8 @@ function Test-VcfEdgeAtScaleDeploymentRootInitialized {
         Private helper; not exported. Used by Invoke-VcfEdgeAtScaleModuleInitialize only.
 
         .DESCRIPTION
-        True when Docs, Logs, ServicesYaml exist, root infrastructure.json and supervisor.json exist, and all
-        VcfEdgeAtScaleServiceYamlTemplateFileNames files exist under ServicesYaml.
+        True when all DEPLOY_LAYOUT_SUBDIRECTORIES (Docs, Logs, ServicesYaml, Tools) exist, root infrastructure.json
+        and supervisor.json exist, and all VcfEdgeAtScaleServiceYamlTemplateFileNames files exist under ServicesYaml.
 
         .PARAMETER DeploymentRoot
         Resolved full path to the deployment base directory.
@@ -53,21 +87,21 @@ function Test-VcfEdgeAtScaleDeploymentRootInitialized {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DeploymentRoot
     )
 
-    foreach ($dirName in @("Docs", "Logs", "ServicesYaml")) {
+    foreach ($dirName in $Script:DEPLOY_LAYOUT_SUBDIRECTORIES) {
         $childPath = Join-Path -Path $DeploymentRoot -ChildPath $dirName
         if (-not (Test-Path -LiteralPath $childPath -PathType Container)) {
             return $false
         }
     }
-    $infrastructurePath = Join-Path -Path $DeploymentRoot -ChildPath "infrastructure.json"
-    $supervisorPath = Join-Path -Path $DeploymentRoot -ChildPath "supervisor.json"
+    $infrastructurePath = Join-Path -Path $DeploymentRoot -ChildPath $Script:INFRA_JSON_FILENAME
+    $supervisorPath = Join-Path -Path $DeploymentRoot -ChildPath $Script:SUPERVISOR_JSON_FILENAME
     if (-not (Test-Path -LiteralPath $infrastructurePath -PathType Leaf)) {
         return $false
     }
     if (-not (Test-Path -LiteralPath $supervisorPath -PathType Leaf)) {
         return $false
     }
-    $servicesYamlDir = Join-Path -Path $DeploymentRoot -ChildPath "ServicesYaml"
+    $servicesYamlDir = Join-Path -Path $DeploymentRoot -ChildPath $Script:SERVICES_YAML_DIR_NAME
     foreach ($yamlBaseName in $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames) {
         $yamlPath = Join-Path -Path $servicesYamlDir -ChildPath $yamlBaseName
         if (-not (Test-Path -LiteralPath $yamlPath -PathType Leaf)) {
@@ -111,7 +145,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
 
     $templatesPath = Get-ModuleTemplatesPath
     $templateRestoreHint = "Reinstall the VcfEdgeAtScale module (for example Install-Module VcfEdgeAtScale -Force) or copy missing files from https://github.com/vmware/powershell-module-for-vcf-edge-at-scale (see the VcfEdgeAtScale/Templates folder in that repository)."
-    $defaultBaseDirectory = Join-Path -Path $HOME -ChildPath "VCFEdgeAtScale"
+    $defaultBaseDirectory = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
 
     Write-Host ""
     Write-Host "VcfEdgeAtScale initialize" -ForegroundColor Cyan
@@ -133,7 +167,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
             $env:VcfEdgeAtScaleRootDirectory = $null
             if ($IsWindows) {
                 try {
-                    [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", $null, [System.EnvironmentVariableTarget]::User)
+                    [System.Environment]::SetEnvironmentVariable($Script:ENV_VAR_NAME, $null, [System.EnvironmentVariableTarget]::User)
                     Write-Host "  Stale value cleared from session and user environment. Choose a folder below." -ForegroundColor Green
                 } catch {
                     Write-Host "  Stale value cleared from session. User-level clear failed: $($_.Exception.Message)" -ForegroundColor Yellow
@@ -165,7 +199,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
                 }
                 switch -Regex ($useDifferentDirectoryResponse.Trim()) {
                     "^(?i)(y|yes)$" {
-                        Write-Host "  Choose a new base path below (default remains Join-Path `$HOME 'VCFEdgeAtScale')." -ForegroundColor Gray
+                        Write-Host "  Choose a new base path below (default remains Join-Path `$HOME '$($Script:DEFAULT_DEPLOY_DIR_NAME)')." -ForegroundColor Gray
                     }
                     default {
                         $baseDirectory = $envRootResolved
@@ -217,7 +251,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
     } catch {
         throw "Could not resolve the base directory path after create. Path: $baseDirectory. $($_.Exception.Message)"
     }
-    $subdirectories = @("Docs", "Logs", "ServicesYaml", "Tools")
+    $subdirectories = $Script:DEPLOY_LAYOUT_SUBDIRECTORIES
     $subdirectoriesCreated = [System.Collections.Generic.List[String]]::new()
     foreach ($subdirectoryName in $subdirectories) {
         $childPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $subdirectoryName
@@ -231,8 +265,8 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         }
     }
 
-    $servicesYamlDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath "ServicesYaml"
-    $docsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath "Docs"
+    $servicesYamlDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SERVICES_YAML_DIR_NAME
+    $docsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:DOCS_DIR_NAME
 
     Write-Host ""
     Write-Host "  Supervisor service YAML (ServicesYaml)" -ForegroundColor Magenta
@@ -242,22 +276,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
             throw "Required module template is missing: $fromPath. $templateRestoreHint"
         }
         $toPath = Join-Path -Path $servicesYamlDirectory -ChildPath $templateFileName
-        $shouldCopyServiceYaml = $true
-        if (Test-Path -LiteralPath $toPath -PathType Leaf) {
-            try {
-                $overwriteAnswer = Read-Host "File `"$toPath`" already exists. Overwrite? (y/N)"
-            } catch {
-                throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
-            }
-            switch ($overwriteAnswer) {
-                "y" { }
-                "Y" { }
-                default {
-                    $shouldCopyServiceYaml = $false
-                }
-            }
-        }
-        if (-not $shouldCopyServiceYaml) {
+        if (-not (Confirm-FileOverwritePrompt -FilePath $toPath)) {
             Write-Host "    Skipped (keep existing): $templateFileName" -ForegroundColor Yellow
             continue
         }
@@ -284,22 +303,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
             continue
         }
         $destinationDocumentationPath = Join-Path -Path $docsDirectory -ChildPath $documentationPair.DestinationFileName
-        $shouldCopyDocumentation = $true
-        if (Test-Path -LiteralPath $destinationDocumentationPath -PathType Leaf) {
-            try {
-                $overwriteDocumentationAnswer = Read-Host "File `"$destinationDocumentationPath`" already exists. Overwrite? (y/N)"
-            } catch {
-                throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
-            }
-            switch ($overwriteDocumentationAnswer) {
-                "y" { }
-                "Y" { }
-                default {
-                    $shouldCopyDocumentation = $false
-                }
-            }
-        }
-        if (-not $shouldCopyDocumentation) {
+        if (-not (Confirm-FileOverwritePrompt -FilePath $destinationDocumentationPath)) {
             Write-Host "    Skipped (keep existing): $($documentationPair.DestinationFileName)" -ForegroundColor Yellow
             continue
         }
@@ -313,7 +317,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
     }
 
     # Help JSON files are not user-edited; auto-refresh silently when the module version changes.
-    $helpJsonFileNames = @("infrastructure-config-help.json", "supervisor-config-help.json")
+    $helpJsonFileNames = @($Script:INFRA_HELP_FILENAME, $Script:SUPERVISOR_HELP_FILENAME)
     foreach ($helpFileName in $helpJsonFileNames) {
         $helpTemplatePath = Join-Path -Path $templatesPath -ChildPath $helpFileName
         $helpDocsPath = Join-Path -Path $docsDirectory -ChildPath $helpFileName
@@ -327,8 +331,8 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         }
     }
 
-    $toolsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath "Tools"
-    $moduleToolsPath = Join-Path -Path (Split-Path -Path $templatesPath -Parent) -ChildPath "Tools"
+    $toolsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:TOOLS_DIR_NAME
+    $moduleToolsPath = Join-Path -Path (Split-Path -Path $templatesPath -Parent) -ChildPath $Script:TOOLS_DIR_NAME
 
     Write-Host ""
     Write-Host "  Tools" -ForegroundColor Magenta
@@ -338,22 +342,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         Write-Warning "Optional tool '$configUiFileName' is not in the module Tools folder (source not found at $configUiSourcePath). Skipping this copy; Initialize continues. $templateRestoreHint"
     } else {
         $configUiDestinationPath = Join-Path -Path $toolsDirectory -ChildPath $configUiFileName
-        $shouldCopyConfigUi = $true
-        if (Test-Path -LiteralPath $configUiDestinationPath -PathType Leaf) {
-            try {
-                $overwriteConfigUiAnswer = Read-Host "File `"$configUiDestinationPath`" already exists. Overwrite? (y/N)"
-            } catch {
-                throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
-            }
-            switch ($overwriteConfigUiAnswer) {
-                "y" { }
-                "Y" { }
-                default {
-                    $shouldCopyConfigUi = $false
-                }
-            }
-        }
-        if ($shouldCopyConfigUi) {
+        if (Confirm-FileOverwritePrompt -FilePath $configUiDestinationPath) {
             $pyExeHint = (Get-PythonExecutable)?.Executable ?? "python3"
             try {
                 Copy-Item -LiteralPath $configUiSourcePath -Destination $configUiDestinationPath -Force -ErrorAction Stop
@@ -383,10 +372,10 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         }
     }
 
-    $infrastructureDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "infrastructure.json"
-    $supervisorDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath "supervisor.json"
-    $infrastructureTemplatePath = Join-Path -Path $templatesPath -ChildPath "infrastructure.json"
-    $supervisorTemplatePath = Join-Path -Path $templatesPath -ChildPath "supervisor.json"
+    $infrastructureDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:INFRA_JSON_FILENAME
+    $supervisorDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME
+    $infrastructureTemplatePath = Join-Path -Path $templatesPath -ChildPath $Script:INFRA_JSON_FILENAME
+    $supervisorTemplatePath = Join-Path -Path $templatesPath -ChildPath $Script:SUPERVISOR_JSON_FILENAME
 
     if (-not $TemplatesOnly) {
         Write-Host ""
@@ -490,7 +479,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
     if ($IsWindows) {
         # On Windows, persist to the user environment registry so new sessions inherit it automatically.
         try {
-            [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
+            [System.Environment]::SetEnvironmentVariable($Script:ENV_VAR_NAME, $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
             $persistedEnvSucceeded = $true
         } catch {
             Write-Warning "Could not persist VcfEdgeAtScaleRootDirectory to the user environment: $($_.Exception.Message)"
@@ -544,7 +533,7 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
                 New-Item -ItemType File -Path $PROFILE -Force | Out-Null
             }
             $existingContent = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
-            if ($existingContent -notmatch [Regex]::Escape("VcfEdgeAtScaleRootDirectory")) {
+            if ($existingContent -notmatch [Regex]::Escape($Script:ENV_VAR_NAME)) {
                 Add-Content -LiteralPath $PROFILE -Value "`n$profileLine" -Encoding UTF8
                 $appendedToProfile = $true
             }
@@ -602,8 +591,8 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
         throw "Could not resolve deployment root: $deploymentRootRaw. $($_.Exception.Message)"
     }
 
-    $defaultInfrastructurePath = Join-Path -Path $deploymentRoot -ChildPath "infrastructure.json"
-    $defaultSupervisorPath = Join-Path -Path $deploymentRoot -ChildPath "supervisor.json"
+    $defaultInfrastructurePath = Join-Path -Path $deploymentRoot -ChildPath $Script:INFRA_JSON_FILENAME
+    $defaultSupervisorPath = Join-Path -Path $deploymentRoot -ChildPath $Script:SUPERVISOR_JSON_FILENAME
 
     Write-Host ""
     Write-Host "Default JSON files under deployment root:"
@@ -648,8 +637,8 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
         throw "supervisor file not found: $supervisorSourcePath"
     }
 
-    $logsSourcePath = Join-Path -Path $deploymentRoot -ChildPath "Logs"
-    $servicesYamlSourcePath = Join-Path -Path $deploymentRoot -ChildPath "ServicesYaml"
+    $logsSourcePath = Join-Path -Path $deploymentRoot -ChildPath $Script:LOGS_DIR_NAME
+    $servicesYamlSourcePath = Join-Path -Path $deploymentRoot -ChildPath $Script:SERVICES_YAML_DIR_NAME
 
     $stamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $zipFileName = "VcfEdgeAtScale-logs-$stamp.zip"
@@ -659,13 +648,13 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
 
     try {
         $null = New-Item -ItemType Directory -Path $stagingRoot -Force -ErrorAction Stop
-        $stagingLogs = Join-Path -Path $stagingRoot -ChildPath "Logs"
-        $stagingServicesYaml = Join-Path -Path $stagingRoot -ChildPath "ServicesYaml"
+        $stagingLogs = Join-Path -Path $stagingRoot -ChildPath $Script:LOGS_DIR_NAME
+        $stagingServicesYaml = Join-Path -Path $stagingRoot -ChildPath $Script:SERVICES_YAML_DIR_NAME
         $null = New-Item -ItemType Directory -Path $stagingLogs -Force -ErrorAction Stop
         $null = New-Item -ItemType Directory -Path $stagingServicesYaml -Force -ErrorAction Stop
 
-        Copy-Item -LiteralPath $infrastructureSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath "infrastructure.json") -Force -ErrorAction Stop
-        Copy-Item -LiteralPath $supervisorSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath "supervisor.json") -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $infrastructureSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath $Script:INFRA_JSON_FILENAME) -Force -ErrorAction Stop
+        Copy-Item -LiteralPath $supervisorSourcePath -Destination (Join-Path -Path $stagingRoot -ChildPath $Script:SUPERVISOR_JSON_FILENAME) -Force -ErrorAction Stop
 
         if (Test-Path -LiteralPath $logsSourcePath -PathType Container) {
             $logChildren = @(Get-ChildItem -LiteralPath $logsSourcePath -Force -ErrorAction SilentlyContinue)
@@ -692,8 +681,8 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
         }
 
         $compressItems = @(
-            (Join-Path -Path $stagingRoot -ChildPath "infrastructure.json"),
-            (Join-Path -Path $stagingRoot -ChildPath "supervisor.json"),
+            (Join-Path -Path $stagingRoot -ChildPath $Script:INFRA_JSON_FILENAME),
+            (Join-Path -Path $stagingRoot -ChildPath $Script:SUPERVISOR_JSON_FILENAME),
             $stagingLogs,
             $stagingServicesYaml
         )
@@ -988,7 +977,7 @@ function Start-VcfEdgeAtScale {
     if ($Initialize) {
         $initBaseDirectory = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $initBaseDirectory -PathType Container)) {
-            New-LogFile -BaseDirectory $initBaseDirectory -Directory "Logs"
+            New-LogFile -BaseDirectory $initBaseDirectory -Directory $Script:LOGS_DIR_NAME
         }
 
         # Print next-step hints for customizing JSON; direct editing first, browser UI second.
@@ -998,7 +987,7 @@ function Start-VcfEdgeAtScale {
         Write-Host "  Option 1 — Direct JSON editing:" -ForegroundColor White
         Write-Host "    Open infrastructure.json and supervisor.json in any text editor." -ForegroundColor Gray
         Write-Host "    Run 'Start-VcfEdgeAtScale -ValidateOnly' to validate before deploying." -ForegroundColor Gray
-        $toolScript = Join-Path -Path (Join-Path -Path $initBaseDirectory -ChildPath "Tools") -ChildPath "veas-json-generator.py"
+        $toolScript = Join-Path -Path (Join-Path -Path $initBaseDirectory -ChildPath $Script:TOOLS_DIR_NAME) -ChildPath "veas-json-generator.py"
         Write-Host "  Option 2 — Browser-based UI:" -ForegroundColor White
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $toolScript)) {
             Write-Host "    $pyExe `"$toolScript`"" -ForegroundColor Gray
@@ -1017,7 +1006,7 @@ function Start-VcfEdgeAtScale {
     if ($Version) {
         $versionLogBase = $env:VcfEdgeAtScaleRootDirectory
         if (-not [String]::IsNullOrWhiteSpace($versionLogBase) -and (Test-Path -LiteralPath $versionLogBase.Trim() -PathType Container)) {
-            New-LogFile -BaseDirectory $versionLogBase.Trim() -Directory "Logs"
+            New-LogFile -BaseDirectory $versionLogBase.Trim() -Directory $Script:LOGS_DIR_NAME
         } else {
             New-LogFile
         }
@@ -1070,7 +1059,7 @@ function Start-VcfEdgeAtScale {
     if ($CheckForUpdates) {
         $checkLogBase = $env:VcfEdgeAtScaleRootDirectory
         if (-not [String]::IsNullOrWhiteSpace($checkLogBase) -and (Test-Path -LiteralPath $checkLogBase.Trim() -PathType Container)) {
-            New-LogFile -BaseDirectory $checkLogBase.Trim() -Directory "Logs"
+            New-LogFile -BaseDirectory $checkLogBase.Trim() -Directory $Script:LOGS_DIR_NAME
         } else {
             New-LogFile
         }
@@ -1089,10 +1078,10 @@ function Start-VcfEdgeAtScale {
 
     $vcfEdgeRootRaw = $env:VcfEdgeAtScaleRootDirectory
     if ([String]::IsNullOrWhiteSpace($vcfEdgeRootRaw)) {
-        $exampleVcfEdgeRootDirectory = Join-Path -Path $HOME -ChildPath "VCFEdgeAtScale"
+        $exampleVcfEdgeRootDirectory = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
         Write-Warning (
             "VcfEdgeAtScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
-            "The following is an example only (your default Initialize path is Join-Path `$HOME 'VCFEdgeAtScale'; use the directory you chose at Initialize if different): " +
+            "The following is an example only (your default Initialize path is Join-Path `$HOME '$($Script:DEFAULT_DEPLOY_DIR_NAME)'; use the directory you chose at Initialize if different): " +
             "`$env:VcfEdgeAtScaleRootDirectory = `"$exampleVcfEdgeRootDirectory`""
         )
         return
@@ -1105,10 +1094,10 @@ function Start-VcfEdgeAtScale {
     }
 
     if (-not $PSBoundParameters.ContainsKey("InfrastructureJson") -or [String]::IsNullOrWhiteSpace($InfrastructureJson)) {
-        $InfrastructureJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "infrastructure.json"
+        $InfrastructureJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:INFRA_JSON_FILENAME
     }
     if (-not $PSBoundParameters.ContainsKey("SupervisorJson") -or [String]::IsNullOrWhiteSpace($SupervisorJson)) {
-        $SupervisorJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "supervisor.json"
+        $SupervisorJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME
     }
     if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
         throw "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeAtScaleRootDirectory."
@@ -1117,7 +1106,7 @@ function Start-VcfEdgeAtScale {
         throw "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeAtScaleRootDirectory."
     }
 
-    New-LogFile -BaseDirectory $vcfEdgeRootDirectory -Directory "Logs"
+    New-LogFile -BaseDirectory $vcfEdgeRootDirectory -Directory $Script:LOGS_DIR_NAME
 
     $savedProgressPreference = $Global:ProgressPreference
     try {
@@ -1141,8 +1130,8 @@ function Start-VcfEdgeAtScale {
         # Silently refresh help JSON files in Docs if the module has been upgraded since they were last copied.
         try {
             $helpTemplatesPath = Get-ModuleTemplatesPath
-            $helpDocsDirectory = Join-Path -Path $vcfEdgeRootDirectory -ChildPath "Docs"
-            foreach ($helpFileName in @("infrastructure-config-help.json", "supervisor-config-help.json")) {
+            $helpDocsDirectory = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:DOCS_DIR_NAME
+            foreach ($helpFileName in @($Script:INFRA_HELP_FILENAME, $Script:SUPERVISOR_HELP_FILENAME)) {
                 $null = Update-HelpJsonIfStale `
                     -DocsPath (Join-Path -Path $helpDocsDirectory -ChildPath $helpFileName) `
                     -TemplatePath (Join-Path -Path $helpTemplatesPath -ChildPath $helpFileName)
@@ -1779,7 +1768,7 @@ function Get-ConfigurationHelpData {
     $helpJsonPath = $null
     $vcfEdgeRootForHelp = $env:VcfEdgeAtScaleRootDirectory
     if (-not [String]::IsNullOrWhiteSpace($vcfEdgeRootForHelp)) {
-        $docsHelpCandidatePath = Join-Path -Path $vcfEdgeRootForHelp.Trim() -ChildPath (Join-Path -Path "Docs" -ChildPath $HelpFileName)
+        $docsHelpCandidatePath = Join-Path -Path $vcfEdgeRootForHelp.Trim() -ChildPath (Join-Path -Path $Script:DOCS_DIR_NAME -ChildPath $HelpFileName)
         if (Test-Path -LiteralPath $docsHelpCandidatePath -PathType Leaf) {
             try {
                 $resolvedDocsPath = (Resolve-Path -LiteralPath $docsHelpCandidatePath).Path
@@ -2019,7 +2008,7 @@ function Show-InfrastructureJsonConfigurationHelp {
         [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
     )
 
-    $config = Get-ConfigurationHelpData -HelpFileName "infrastructure-config-help.json" -Filter $Filter
+    $config = Get-ConfigurationHelpData -HelpFileName $Script:INFRA_HELP_FILENAME -Filter $Filter
     if ($null -ne $config) {
         Show-ConfigurationHelpTable -Config $config -Format $Format -Title "Infrastructure.json Configuration Reference" -WidthThreshold $WidthThreshold
     }
@@ -2087,7 +2076,7 @@ function Show-SupervisorJsonConfigurationHelp {
         [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
     )
 
-    $config = Get-ConfigurationHelpData -HelpFileName "supervisor-config-help.json" -Filter $Filter
+    $config = Get-ConfigurationHelpData -HelpFileName $Script:SUPERVISOR_HELP_FILENAME -Filter $Filter
     if ($null -ne $config) {
         Show-ConfigurationHelpTable -Config $config -Format $Format -Title "Supervisor.json Configuration Reference" -WidthThreshold $WidthThreshold
     }

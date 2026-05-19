@@ -1730,6 +1730,16 @@ Describe "Test-VcfEdgeAtScaleDeploymentRootInitialized" {
         $base = Join-Path $script:initTestRoot "missing-docs"
         New-Item -ItemType Directory -Path (Join-Path $base "Logs") -Force | Out-Null
         New-Item -ItemType Directory -Path (Join-Path $base "ServicesYaml") -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $base "Tools") -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $base "infrastructure.json") -Force | Out-Null
+        New-Item -ItemType File -Path (Join-Path $base "supervisor.json") -Force | Out-Null
+        $r = InModuleScope VcfEdgeAtScale -ArgumentList $base { param($p) Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot $p }
+        $r | Should -Be $false
+    }
+
+    It "Returns false when Tools subdirectory is missing" {
+        $base = Join-Path $script:initTestRoot "missing-tools"
+        foreach ($d in @("Docs","Logs","ServicesYaml")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
         New-Item -ItemType File -Path (Join-Path $base "infrastructure.json") -Force | Out-Null
         New-Item -ItemType File -Path (Join-Path $base "supervisor.json") -Force | Out-Null
         $r = InModuleScope VcfEdgeAtScale -ArgumentList $base { param($p) Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot $p }
@@ -1738,7 +1748,7 @@ Describe "Test-VcfEdgeAtScaleDeploymentRootInitialized" {
 
     It "Returns false when infrastructure.json is missing" {
         $base = Join-Path $script:initTestRoot "missing-infra"
-        foreach ($d in @("Docs","Logs","ServicesYaml")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
+        foreach ($d in @("Docs","Logs","ServicesYaml","Tools")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
         New-Item -ItemType File -Path (Join-Path $base "supervisor.json") -Force | Out-Null
         $r = InModuleScope VcfEdgeAtScale -ArgumentList $base { param($p) Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot $p }
         $r | Should -Be $false
@@ -1746,7 +1756,7 @@ Describe "Test-VcfEdgeAtScaleDeploymentRootInitialized" {
 
     It "Returns false when a required YAML template file is absent from ServicesYaml" {
         $base = Join-Path $script:initTestRoot "missing-yaml"
-        foreach ($d in @("Docs","Logs","ServicesYaml")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
+        foreach ($d in @("Docs","Logs","ServicesYaml","Tools")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
         New-Item -ItemType File -Path (Join-Path $base "infrastructure.json") -Force | Out-Null
         New-Item -ItemType File -Path (Join-Path $base "supervisor.json") -Force | Out-Null
         # Override yaml list to a single known name; create NO files in ServicesYaml.
@@ -1757,7 +1767,7 @@ Describe "Test-VcfEdgeAtScaleDeploymentRootInitialized" {
 
     It "Returns true when all required subdirs, JSON, and YAML files are present" {
         $base = Join-Path $script:initTestRoot "complete"
-        foreach ($d in @("Docs","Logs","ServicesYaml")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
+        foreach ($d in @("Docs","Logs","ServicesYaml","Tools")) { New-Item -ItemType Directory -Path (Join-Path $base $d) -Force | Out-Null }
         New-Item -ItemType File -Path (Join-Path $base "infrastructure.json") -Force | Out-Null
         New-Item -ItemType File -Path (Join-Path $base "supervisor.json") -Force | Out-Null
         InModuleScope VcfEdgeAtScale { $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames = @("required.yml") }
@@ -3022,6 +3032,80 @@ Describe "Get-ClusterNameFromPrefix / Get-DatastoreNameFromPrefix / Get-VdsNameF
 
     It "Preserves hyphens that are already part of the prefix" {
         InModuleScope VcfEdgeAtScale { Get-ClusterNameFromPrefix -ClusterNamePrefix "cl-edge" -EdgeSite "siteA" } | Should -Be "cl-edge-siteA"
+    }
+}
+
+Describe "Get-EffectiveClusterName" {
+    It "Returns override name when overrideClusterName is set" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = "my-special-cluster" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be "my-special-cluster"
+    }
+
+    It "Falls back to prefix+site formula when overrideClusterName is absent" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be "cl0-site1"
+    }
+
+    It "Falls back to prefix+site formula when overrideClusterName is empty string" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site2"; overrideClusterName = "" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cluster" -EdgeSite "site2"
+        } | Should -Be "cluster-site2"
+    }
+
+    It "Falls back to prefix+site formula when overrideClusterName is whitespace only" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site3"; overrideClusterName = "   " }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cluster" -EdgeSite "site3"
+        } | Should -Be "cluster-site3"
+    }
+
+    It "Trims leading and trailing whitespace from override name" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = "  trimmed-cluster  " }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be "trimmed-cluster"
+    }
+
+    It "Accepts override names with allowed special characters" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = "Cluster_Edge+01 (prod)" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be "Cluster_Edge+01 (prod)"
+    }
+
+    It "Accepts override names containing a period" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = "cluster.prod" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be "cluster.prod"
+    }
+
+    It "Throws when overrideClusterName contains invalid characters" {
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = "bad/name" }
+        { InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } } | Should -Throw
+    }
+
+    It "Throws when overrideClusterName exceeds 80 characters" {
+        $longName = "a" * 81
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = $longName }
+        { InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } } | Should -Throw
+    }
+
+    It "Accepts an override name of exactly 80 characters" {
+        $maxName = "a" * 80
+        $cluster = [PSCustomObject]@{ edgeSite = "site1"; overrideClusterName = $maxName }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
+            Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        } | Should -Be ("a" * 80)
     }
 }
 
