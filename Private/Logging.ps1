@@ -2692,6 +2692,9 @@ Function Set-VclsRetreatModeForCluster {
         .PARAMETER TaskPollIntervalSeconds
         Seconds between polls when waiting for the reconfigure task to complete. Default is 3.
 
+        .PARAMETER RetreatMode
+        When $false, the function returns immediately without making any changes. Default is $true.
+
         .PARAMETER TaskWaitTimeoutSeconds
         Maximum seconds to wait for the reconfigure task. Default is 120.
 
@@ -2702,10 +2705,16 @@ Function Set-VclsRetreatModeForCluster {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Bool]$RetreatMode = $true,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$TaskPollIntervalSeconds = 3,
         [Parameter(Mandatory = $false)] [ValidateRange(10, 600)] [Int]$TaskWaitTimeoutSeconds = 120
     )
+
+    if (-not $RetreatMode) {
+        Write-LogMessage -Type DEBUG -Message "Set-VclsRetreatModeForCluster: RetreatMode is false; skipping vCLS retreat mode for cluster `"$ClusterName`"."
+        return
+    }
 
     try {
         $clusterObject = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction Stop

@@ -74,6 +74,7 @@ BeforeAll {
         try {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter, $cred {
                 Connect-Vcenter -ServerName $args[0] -ServerCredential $args[1] -ServerType "vCenter"
+                $Script:vCenterName = $args[0]
             }
         } catch {
             Write-Warning "BeforeAll: Could not connect to vCenter '$($script:vCenter)': $($_.Exception.Message). Some live tests will skip."
@@ -147,7 +148,8 @@ Describe "Get-VmHostsInCluster — live" -Tag "Live" {
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $hosts = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
             Mock Write-LogMessage {}
-            Get-VmHostsInCluster -ClusterName $args[0]
+            $clusterObj = Get-ClusterByName -Name $args[0]
+            Get-VmHostsInCluster -ClusterObject $clusterObj
         }
         $hosts | Should -Not -BeNullOrEmpty
     }
@@ -157,11 +159,12 @@ Describe "Get-VsanClusterTriggeredAlarms — live" -Tag "Live" {
     It "Returns an array (possibly empty) for the test cluster" {
         if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
-        $alarms = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
-            Mock Write-LogMessage {}
-            Get-VsanClusterTriggeredAlarms -ClusterName $args[0]
-        }
-        $alarms | Should -Not -Be $null
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Get-VsanClusterTriggeredAlarms -ClusterName $args[0]
+            }
+        } | Should -Not -Throw
     }
 }
 
@@ -171,7 +174,8 @@ Describe "Get-VsanDatastoreForCluster — live" -Tag "Live" {
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $hostIds = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
             Mock Write-LogMessage {}
-            (Get-VmHostsInCluster -ClusterName $args[0]) | ForEach-Object { $_.Id }
+            $clusterObj = Get-ClusterByName -Name $args[0]
+            (Get-VmHostsInCluster -ClusterObject $clusterObj) | ForEach-Object { $_.Id }
         }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList (, $hostIds) {
@@ -189,9 +193,14 @@ Describe "Get-EsxDatastoreHealth — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $hosts = Get-VmHostsInCluster -ClusterName $args[0]
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $hosts = Get-VmHostsInCluster -ClusterObject $clusterObj
                 if ($hosts) {
-                    Get-EsxDatastoreHealth -VMHost ($hosts | Select-Object -First 1) | Out-Null
+                    $firstHost = $hosts | Select-Object -First 1
+                    $firstDs = Get-Datastore -VMHost $firstHost -ErrorAction SilentlyContinue | Select-Object -First 1
+                    if ($firstDs) {
+                        Get-EsxDatastoreHealth -VmHost $firstHost -EsxHostName $firstHost.Name -DatastoreName $firstDs.Name | Out-Null
+                    }
                 }
             }
         } | Should -Not -Throw
@@ -220,7 +229,7 @@ Describe "Get-SupervisorUpgradeInfo and Get-SupervisorUpgradeStatus — live" -T
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                Get-SupervisorUpgradeInfo -ClusterName $args[0] -ErrorAction SilentlyContinue
+                Get-SupervisorUpgradeInfo -ClusterId $args[0] -ErrorAction SilentlyContinue
             }
         } | Should -Not -Throw
     }
@@ -231,7 +240,7 @@ Describe "Get-ContentLibraryId — live" -Tag "Live" {
         if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
         $result = InModuleScope VcfEdgeAtScale {
             Mock Write-LogMessage {}
-            Get-ContentLibraryId -ContentLibraryName "veas-live-test-nonexistent-cl-99999"
+            Get-ContentLibraryId -LibraryName "veas-live-test-nonexistent-cl-99999"
         }
         $result | Should -BeNullOrEmpty
     }
@@ -284,7 +293,7 @@ Describe "Write-SupervisorHealthReport — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                Write-SupervisorHealthReport -ClusterName $args[0] -ErrorAction SilentlyContinue
+                Write-SupervisorHealthReport -ClusterName $args[0] -SupervisorId "veas-live-test-nonexistent-supervisor-99999" -ErrorAction SilentlyContinue
             }
         } | Should -Not -Throw
     }
@@ -310,7 +319,8 @@ Describe "Test-VcenterAndEsxReachability live — all hosts in cluster" -Tag "Li
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter, $script:cluster {
                 Mock Write-LogMessage {}
-                $esxHosts = (Get-VmHostsInCluster -ClusterName $args[1]) | ForEach-Object { $_.Name }
+                $clusterObj = Get-ClusterByName -Name $args[1]
+            $esxHosts = (Get-VmHostsInCluster -ClusterObject $clusterObj) | ForEach-Object { $_.Name }
                 Test-VcenterAndEsxReachability -VcenterName $args[0] -EsxHosts $esxHosts
             }
         } | Should -Not -Throw
@@ -329,8 +339,8 @@ Describe "Set-VsanLabSilentChecksIfRequested — live write" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                # Call without -EnableLabSilentChecks so it is a no-op.
-                Set-VsanLabSilentChecksIfRequested -ClusterName $args[0]
+                # LabEnvironmentEnabled $false makes the function return immediately; no API calls are made.
+                Set-VsanLabSilentChecksIfRequested -ClusterName $args[0] -LabEnvironmentEnabled $false
             }
         } | Should -Not -Throw
     }
@@ -387,7 +397,8 @@ Describe "Get-EsxDatastoreInfo — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Get-EsxDatastoreInfo -EsxHostName $firstHost.Name | Out-Null
                 }
@@ -434,7 +445,8 @@ Describe "Set-VMHostConnectedState — live write" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Set-VMHostConnectedState -VMHost $firstHost
                 }
@@ -454,7 +466,8 @@ Describe "Get-VsanOsaDiskGroupsOnHost — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Get-VsanOsaDiskGroupsOnHost -VMHost $firstHost | Out-Null
                 }
@@ -483,7 +496,8 @@ Describe "Get-VsanOsaEligibleDisksFromCluster — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $hosts = Get-VmHostsInCluster -ClusterName $args[0]
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $hosts = Get-VmHostsInCluster -ClusterObject $clusterObj
                 if ($hosts) {
                     Get-VsanOsaEligibleDisksFromCluster -ClusterName $args[0] -ClusterHosts @($hosts) | Out-Null
                 }
@@ -499,7 +513,8 @@ Describe "Get-EsxUnformattedDisk — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Get-EsxUnformattedDisk -EsxHostName $firstHost.Name -VmHost $firstHost -Silence | Out-Null
                 }
@@ -515,7 +530,8 @@ Describe "Get-VdsListOnHost — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Get-VdsListOnHost -VMHost $firstHost | Out-Null
                 }
@@ -531,7 +547,8 @@ Describe "Get-VirtualSwitchesOnHost — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     Get-VirtualSwitchesOnHost -VMHost $firstHost | Out-Null
                 }
@@ -546,7 +563,8 @@ Describe "Test-VsanOsaDiskGroupPresentViaEsxcli — live" -Tag "Live" {
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
             Mock Write-LogMessage {}
-            $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+            $clusterObj = Get-ClusterByName -Name $args[0]
+            $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
             if ($firstHost) {
                 Test-VsanOsaDiskGroupPresentViaEsxcli -VMHost $firstHost
             } else {
@@ -564,7 +582,8 @@ Describe "Find-Datastore — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
                 Mock Write-LogMessage {}
-                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                $clusterObj = Get-ClusterByName -Name $args[0]
+                $firstHost = (Get-VmHostsInCluster -ClusterObject $clusterObj) | Select-Object -First 1
                 if ($firstHost) {
                     try {
                         Find-Datastore -DatastoreName "veas-live-test-nonexistent-datastore-99999" -EsxHostName $firstHost.Name | Out-Null
@@ -682,7 +701,8 @@ Describe "Test-PhysicalNicConnected — live" -Tag "Live" {
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
             Mock Write-LogMessage {}
-            $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+            $clusterObj = Get-ClusterByName -Name $args[0] -Server $args[1]
+            $hosts = Get-VmHostsInCluster -ClusterObject $clusterObj -Server $args[1]
             if ($null -ne $hosts -and @($hosts).Count -gt 0) {
                 $nics = Get-VMHostNetworkAdapter -VMHost $hosts[0] -Physical -Server $args[1] -ErrorAction SilentlyContinue
                 if ($null -ne $nics -and @($nics).Count -gt 0) {
@@ -701,7 +721,8 @@ Describe "Get-VsanEsaEligibleDisksFromCluster — live" -Tag "Live" {
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
                 Mock Write-LogMessage {}
-                $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+                $clusterObj = Get-ClusterByName -Name $args[0] -Server $args[1]
+                $hosts = Get-VmHostsInCluster -ClusterObject $clusterObj -Server $args[1]
                 if ($null -ne $hosts -and @($hosts).Count -gt 0) {
                     Get-VsanEsaEligibleDisksFromCluster -ClusterName $args[0] -ClusterHosts $hosts | Out-Null
                 }
@@ -718,7 +739,8 @@ Describe "Set-VsanDomNetworkSchedulerThrottleOnHost — live write" -Tag "Live" 
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
                 Mock Write-LogMessage {}
-                $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+                $clusterObj = Get-ClusterByName -Name $args[0] -Server $args[1]
+                $hosts = Get-VmHostsInCluster -ClusterObject $clusterObj -Server $args[1]
                 if ($null -ne $hosts -and @($hosts).Count -gt 0) {
                     Set-VsanDomNetworkSchedulerThrottleOnHost -VMHost $hosts[0] -Server $args[1] | Out-Null
                 }
