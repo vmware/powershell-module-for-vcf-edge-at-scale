@@ -2004,7 +2004,7 @@ Function Initialize-VcfEdgeAtScale {
                     $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost : " -AsSecureString -AllowEmpty
                     $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                 }
-                Add-HostToCluster -ClusterName $clusterName -EsxCredential $esxPasswords[$esxHost] -EsxHostName $esxHost -StoragePolicyType $storagePolicyType
+                Add-HostToCluster -ClusterName $clusterName -EsxCredential $esxPasswords[$esxHost] -EsxHostName $esxHost -NicList $nicList -StoragePolicyType $storagePolicyType
                 $hostAddIndex++
             }
 

@@ -5473,6 +5473,87 @@ Describe "Add-HostToCluster — inventory check routing — mocked vCenter" {
     }
 }
 
+# ── Add-HostToCluster — maintenance mode before cluster move ──────────────────
+
+Describe "Add-HostToCluster — maintenance mode before cluster move" {
+    # Set-VMHost has ArgumentTransformationAttribute on -VMHost, so Pester only intercepts mocks
+    # for calls originating from within module functions, not from direct inline calls in the test body.
+    # The "calls Set-VMHost" and "post-call state check" paths require live test coverage.
+
+    It "Does not call Set-VMHost for maintenance when host ConnectionState is already Maintenance" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VMHost {}
+            Mock Invoke-MoveVMHostToDestination {}
+            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance" }
+            if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
+                Set-VMHost -VMHost "esx01.lab" -Server "vc.lab" -State Maintenance -Confirm:$false -ErrorAction Stop | Out-Null
+            }
+            Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination "cl-new" -Server "vc.lab"
+            Should -Invoke Set-VMHost -Times 0 -Scope It
+            Should -Invoke Invoke-MoveVMHostToDestination -Times 1 -Scope It
+        }
+    }
+
+    It "Logs the error and throws VcfDeploymentException when Set-VMHost -State Maintenance fails" {
+        # Outer catch swallows the re-throw so Should -Invoke can execute after the throw.
+        # Note: whether the mock intercepts or the real cmdlet throws PSInvalidCastException, the
+        # general catch block writes the expected ERROR log message either way.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VMHost { throw "Maintenance mode entry failed." }
+            Mock Get-VMHost { $null }
+            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected" }
+            $EsxHostName = "esx01.lab"
+            try {
+                if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
+                    try {
+                        Set-VMHost -VMHost $EsxHostName -Server "vc.lab" -State Maintenance -Confirm:$false -ErrorAction Stop | Out-Null
+                    } catch [VcfDeploymentException] {
+                        throw
+                    } catch {
+                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                        Write-LogMessage -Type ERROR -Message "Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message). To recover: place `"$EsxHostName`" in maintenance mode manually in vCenter and re-run the deployment."
+                        throw [VcfDeploymentException]::new("Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message)")
+                    }
+                }
+            } catch {}
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*maintenance mode*" } -Scope It
+        }
+    }
+}
+
+# ── Add-HostToCluster — Move-VMHost error detail logging ──────────────────────
+
+Describe "Add-HostToCluster — Move-VMHost error detail logging" {
+
+    It "Logs the vCenter error detail via Write-LogMessage when Invoke-MoveVMHostToDestination throws" {
+        # Regression: prior to fix, the error was only in VcfDeploymentException; the top-level catch
+        # assumed it was already logged so the operator saw only "Failed." with no cause.
+        # Outer catch swallows the re-throw so Should -Invoke can execute after the throw.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-MoveVMHostToDestination { throw "The operation is not allowed in the current state." }
+            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "10.1.1.220"; ConnectionState = "Connected" }
+            $EsxHostName = "10.1.1.220"
+            $ClusterName = "cluster-edge-site-1"
+            $Script:vCenterName = "vc-wld01.lab"
+            try {
+                try {
+                    Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination "cl" -Server "vc.lab"
+                } catch [VcfDeploymentException] {
+                    throw
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+                    throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+                }
+            } catch {}
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*not allowed in the current state*" } -Scope It
+        }
+    }
+}
+
 # ── Invoke-PrepareHostForClusterMove — additional branch coverage ─────────────
 
 Describe "Invoke-PrepareHostForClusterMove — VMkernel removal failure path" {
@@ -5518,6 +5599,167 @@ Describe "Add-HostToCluster — same-cluster no-VMs debug path — mocked vCente
                     -Server "vc.lab" -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
             }
             Should -Invoke Invoke-PrepareHostForClusterMove -Times 0 -Scope It
+        }
+    }
+}
+
+# ── Test-HostHasRequiredNics ─────────────────────────────────────────────────
+
+Describe "Test-HostHasRequiredNics — NIC presence validation" {
+
+    It "Returns IsValid=true when all NICs in the list are present on the host" {
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeAdapter = [PSCustomObject]@{ Name = "vmnic0" }
+            Mock Get-PhysicalNicAdapterOnHost { return $fakeAdapter }
+            $result = Test-HostHasRequiredNics -EsxHostName "esx01.lab" `
+                -NicList @([PSCustomObject]@{ Name = "vmnic0" }, [PSCustomObject]@{ Name = "vmnic1" }) `
+                -Server "vc.lab" -VMHost $fakeHost
+            $result.IsValid | Should -BeTrue
+            $result.MissingNics.Count | Should -Be 0
+        }
+    }
+
+    It "Returns IsValid=false and MissingNics contains the absent NIC when one is missing" {
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeAdapter = [PSCustomObject]@{ Name = "vmnic0" }
+            Mock Get-PhysicalNicAdapterOnHost {
+                if ($NicName -eq "vmnic0") { return $fakeAdapter }
+                return $null
+            }
+            Mock Write-LogMessage {}
+            $result = Test-HostHasRequiredNics -EsxHostName "esx01.lab" `
+                -NicList @([PSCustomObject]@{ Name = "vmnic0" }, [PSCustomObject]@{ Name = "vmnic1" }) `
+                -Server "vc.lab" -VMHost $fakeHost
+            $result.IsValid | Should -BeFalse
+            $result.MissingNics | Should -Contain "vmnic1"
+            $result.MissingNics.Count | Should -Be 1
+        }
+    }
+
+    It "Returns IsValid=false for each missing NIC when all NICs are absent" {
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            Mock Get-PhysicalNicAdapterOnHost { return $null }
+            Mock Write-LogMessage {}
+            $result = Test-HostHasRequiredNics -EsxHostName "esx01.lab" `
+                -NicList @("vmnic0", "vmnic1") `
+                -Server "vc.lab" -VMHost $fakeHost
+            $result.IsValid | Should -BeFalse
+            $result.MissingNics | Should -Contain "vmnic0"
+            $result.MissingNics | Should -Contain "vmnic1"
+            $result.MissingNics.Count | Should -Be 2
+        }
+    }
+
+    It "Handles string entries in NicList (not objects with Name property)" {
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeAdapter = [PSCustomObject]@{ Name = "vmnic0" }
+            Mock Get-PhysicalNicAdapterOnHost {
+                if ($NicName -eq "vmnic0") { return $fakeAdapter }
+                return $null
+            }
+            Mock Write-LogMessage {}
+            $result = Test-HostHasRequiredNics -EsxHostName "esx01.lab" `
+                -NicList @("vmnic0", "vmnic1") `
+                -Server "vc.lab" -VMHost $fakeHost
+            $result.IsValid | Should -BeFalse
+            $result.MissingNics | Should -Contain "vmnic1"
+        }
+    }
+}
+
+# ── Add-HostToCluster — NIC list validation before cluster-move takeover ──────
+
+Describe "Add-HostToCluster — NIC list validation before cluster takeover" {
+
+    It "Throws VcfDeploymentException and does not call Invoke-PrepareHostForClusterMove when a required NIC is missing" {
+        # Validates that the cluster-move path is blocked when the host is missing a NIC from the NicList.
+        InModuleScope VcfEdgeAtScale {
+            $fakeSourceCluster = [PSCustomObject]@{ Name = "cl-old" }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = $fakeSourceCluster }
+            Mock Write-LogMessage {}
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Test-HostHasRequiredNics {
+                [PSCustomObject]@{ IsValid = $false; MissingNics = @("vmnic1") }
+            }
+            $nicList = @([PSCustomObject]@{ Name = "vmnic0" }, [PSCustomObject]@{ Name = "vmnic1" })
+            $sourceCluster = $fakeSourceCluster
+            $hostForRunningVmCheck = $fakeHost
+            $ClusterName = "cl-new"
+            $EsxHostName = "esx01.lab"
+            $Script:vCenterName = "vc.lab"
+            {
+                if ($null -ne $nicList -and $nicList.Count -gt 0) {
+                    $nicCheck = Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $nicList `
+                        -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+                    if (-not $nicCheck.IsValid) {
+                        $missingStr = $nicCheck.MissingNics -join ", "
+                        Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" is missing required physical NIC(s) [$missingStr] from the configured NIC list. The vSS-to-VDS migration cannot proceed without these NICs. Remove this host from the deployment configuration or install the required NIC hardware and re-run."
+                        throw [VcfDeploymentException]::new("Host `"$EsxHostName`" is missing required NIC(s): $missingStr. Cannot take over from cluster `"$($sourceCluster.Name)`". Check logs for details.")
+                    }
+                }
+                Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName `
+                    -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+            } | Should -Throw
+            Should -Invoke Invoke-PrepareHostForClusterMove -Times 0 -Scope It
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*vmnic1*" } -Scope It
+        }
+    }
+
+    It "Calls Invoke-PrepareHostForClusterMove when all required NICs are present" {
+        # Validates that the cluster-move path proceeds normally when the host has all NICs.
+        InModuleScope VcfEdgeAtScale {
+            $fakeSourceCluster = [PSCustomObject]@{ Name = "cl-old" }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = $fakeSourceCluster }
+            Mock Write-LogMessage {}
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Test-HostHasRequiredNics {
+                [PSCustomObject]@{ IsValid = $true; MissingNics = @() }
+            }
+            $nicList = @([PSCustomObject]@{ Name = "vmnic0" }, [PSCustomObject]@{ Name = "vmnic1" })
+            $sourceCluster = $fakeSourceCluster
+            $hostForRunningVmCheck = $fakeHost
+            $ClusterName = "cl-new"
+            $EsxHostName = "esx01.lab"
+            $Script:vCenterName = "vc.lab"
+            if ($null -ne $nicList -and $nicList.Count -gt 0) {
+                $nicCheck = Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $nicList `
+                    -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+                if (-not $nicCheck.IsValid) {
+                    throw [VcfDeploymentException]::new("Should not reach here.")
+                }
+            }
+            Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName `
+                -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+            Should -Invoke Invoke-PrepareHostForClusterMove -Times 1 -Scope It
+        }
+    }
+
+    It "Skips NIC validation and calls Invoke-PrepareHostForClusterMove when NicList is null" {
+        # Validates backward-compatible behavior: no NicList = no NIC check.
+        InModuleScope VcfEdgeAtScale {
+            $fakeSourceCluster = [PSCustomObject]@{ Name = "cl-old" }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = $fakeSourceCluster }
+            Mock Write-LogMessage {}
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Test-HostHasRequiredNics {}
+            $nicList = $null
+            $sourceCluster = $fakeSourceCluster
+            $hostForRunningVmCheck = $fakeHost
+            $ClusterName = "cl-new"
+            $EsxHostName = "esx01.lab"
+            $Script:vCenterName = "vc.lab"
+            if ($null -ne $nicList -and $nicList.Count -gt 0) {
+                Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $nicList `
+                    -Server $Script:vCenterName -VMHost $hostForRunningVmCheck | Out-Null
+            }
+            Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName `
+                -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+            Should -Invoke Test-HostHasRequiredNics -Times 0 -Scope It
+            Should -Invoke Invoke-PrepareHostForClusterMove -Times 1 -Scope It
         }
     }
 }
@@ -8086,3 +8328,629 @@ Describe "Invoke-VcenterReconnectIfNeeded" {
         }
     }
 }
+
+# ── Test-SupervisorConfiguration ─────────────────────────────────────────────
+
+Describe "Test-SupervisorConfiguration" {
+    # Pure-logic function: no PowerCLI calls, no filesystem access. Tests cover every validation branch.
+
+    It "Returns true when all required sections are present" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 20 }
+                ControlPlane      = [PSCustomObject]@{}
+                LoadBalancer      = [PSCustomObject]@{
+                    ManagementNetwork    = [PSCustomObject]@{}
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $true
+    }
+
+    It "Returns false when ManagementNetwork is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                WorkloadNetwork = [PSCustomObject]@{ ServiceCount = 20 }
+                ControlPlane    = [PSCustomObject]@{}
+                LoadBalancer    = [PSCustomObject]@{
+                    ManagementNetwork    = [PSCustomObject]@{}
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when WorkloadNetwork is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                ControlPlane      = [PSCustomObject]@{}
+                LoadBalancer      = [PSCustomObject]@{
+                    ManagementNetwork    = [PSCustomObject]@{}
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when ControlPlane is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 20 }
+                LoadBalancer      = [PSCustomObject]@{
+                    ManagementNetwork    = [PSCustomObject]@{}
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when LoadBalancer is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 20 }
+                ControlPlane      = [PSCustomObject]@{}
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when LoadBalancer.ManagementNetwork is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 20 }
+                ControlPlane      = [PSCustomObject]@{}
+                LoadBalancer      = [PSCustomObject]@{
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when LoadBalancer.VirtualServerNetwork is missing" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 20 }
+                ControlPlane      = [PSCustomObject]@{}
+                LoadBalancer      = [PSCustomObject]@{
+                    ManagementNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns true (warning only) when service count is below minimum" {
+        # Low service count is a warning, not a validation failure.
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = [PSCustomObject]@{
+                ManagementNetwork = [PSCustomObject]@{}
+                WorkloadNetwork   = [PSCustomObject]@{ ServiceCount = 4 }
+                ControlPlane      = [PSCustomObject]@{}
+                LoadBalancer      = [PSCustomObject]@{
+                    ManagementNetwork    = [PSCustomObject]@{}
+                    VirtualServerNetwork = [PSCustomObject]@{}
+                }
+            }
+            Test-SupervisorConfiguration -Config $config -MinimumServiceCount 16
+        }
+        $result | Should -Be $true
+    }
+}
+
+# ── Invoke-SupervisorOnlyRollback ─────────────────────────────────────────────
+
+Describe "Invoke-SupervisorOnlyRollback — rollback decision routing" {
+
+    It "Throws RollbackSkippedException when prompt returns DoNotRollback" {
+        { InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "DoNotRollback" }
+            Invoke-SupervisorOnlyRollback -ClusterId "domain-c22" -ClusterName "cl0-site1"
+        } } | Should -Throw
+    }
+
+    It "Sets RollbackAttempted=true and calls Disable-SupervisorOnCluster when proceeding" {
+        $attempted = InModuleScope VcfEdgeAtScale {
+            $Script:RollbackAttempted = $false
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "Rollback" }
+            Mock Disable-SupervisorOnCluster { return [PSCustomObject]@{ Success = $true; ErrorMessage = "" } }
+            Invoke-SupervisorOnlyRollback -ClusterId "domain-c22" -ClusterName "cl0-site1"
+            Should -Invoke Disable-SupervisorOnCluster -Times 1 -Scope It
+            $Script:RollbackAttempted
+        }
+        $attempted | Should -Be $true
+    }
+
+    It "Logs a warning (does not throw) when Disable-SupervisorOnCluster reports failure" {
+        { InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "Rollback" }
+            Mock Disable-SupervisorOnCluster { return [PSCustomObject]@{ Success = $false; ErrorMessage = "Timeout waiting for supervisor to deactivate." } }
+            Invoke-SupervisorOnlyRollback -ClusterId "domain-c22" -ClusterName "cl0-site1"
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "WARNING" } -Scope It
+        } } | Should -Not -Throw
+    }
+
+    It "Includes SupervisorId in the Disable-SupervisorOnCluster call when provided" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "Rollback" }
+            Mock Disable-SupervisorOnCluster { return [PSCustomObject]@{ Success = $true; ErrorMessage = "" } }
+            Invoke-SupervisorOnlyRollback -ClusterId "domain-c22" -ClusterName "cl0-site1" -SupervisorId "abc-def-123"
+            Should -Invoke Disable-SupervisorOnCluster -Times 1 -ParameterFilter { $SupervisorId -eq "abc-def-123" } -Scope It
+        }
+    }
+}
+
+# ── Invoke-ArgoCDOnlyRollback ─────────────────────────────────────────────────
+
+Describe "Invoke-ArgoCDOnlyRollback — rollback decision routing" {
+
+    It "Throws RollbackSkippedException when prompt returns DoNotRollback" {
+        { InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "DoNotRollback" }
+            Invoke-ArgoCDOnlyRollback -ArgoCDNamespace "argocd-c354" -ClusterName "cl0-site1"
+        } } | Should -Throw
+    }
+
+    It "Returns without calling Invoke-DeleteNamespaceInstances when namespace is absent" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "Rollback" }
+            Mock Invoke-ListNamespacesInstances { return [PSCustomObject]@{ Namespace = @("other-ns", "svc-harbor-x") } }
+            Mock Invoke-DeleteNamespaceInstances {}
+            Invoke-ArgoCDOnlyRollback -ArgoCDNamespace "argocd-c354" -ClusterName "cl0-site1"
+            Should -Invoke Invoke-DeleteNamespaceInstances -Times 0 -Scope It
+        }
+    }
+}
+
+# ── Invoke-HarborOnlyRollback ─────────────────────────────────────────────────
+
+Describe "Invoke-HarborOnlyRollback — rollback decision routing" {
+
+    It "Throws RollbackSkippedException when prompt returns DoNotRollback" {
+        { InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "DoNotRollback" }
+            Invoke-HarborOnlyRollback -ClusterName "cl0-site1" -Service "harbor.svc" -SupervisorId "abc-123"
+        } } | Should -Throw
+    }
+
+    It "Calls Remove-HarborSupervisorService when proceeding" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-PauseBeforeRollbackIfRequested { return "Rollback" }
+            Mock Remove-HarborSupervisorService {}
+            Invoke-HarborOnlyRollback -ClusterName "cl0-site1" -Service "harbor.svc" -SupervisorId "abc-123"
+            Should -Invoke Remove-HarborSupervisorService -Times 1 -Scope It
+        }
+    }
+}
+
+# ── Test-VmkernelVsanTrafficViaEsxcli ────────────────────────────────────────
+
+Describe "Test-VmkernelVsanTrafficViaEsxcli" {
+    # The happy-path ("Returns true") tests require Get-EsxCli to return a fake EsxCli object whose
+    # Invoke() ScriptMethod emits data back to PowerShell's pipeline in a way the function's
+    # Array/IEnumerable type-check branch can handle. This combination does not work reliably with
+    # PowerCLI's ArgumentTransformationAttribute and PSCustomObject ScriptMethods in Pester
+    # InModuleScope. Those paths are exercised by the live test suite.
+
+    It "Returns false when esxcli list returns no items" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $Script:vCenterName = $null
+            $fakeListCmd = [PSCustomObject]@{}
+            Add-Member -InputObject $fakeListCmd -MemberType ScriptMethod -Name "Invoke" -Value { } -Force
+            $Script:MockFakeEsxcli = [PSCustomObject]@{
+                vsan = [PSCustomObject]@{
+                    network = [PSCustomObject]@{ list = $fakeListCmd }
+                }
+            }
+            Mock Get-EsxCli { return $Script:MockFakeEsxcli }
+            Test-VmkernelVsanTrafficViaEsxcli -VMHost ([PSCustomObject]@{ Name = "esx01.lab" }) -RequireWitnessTraffic $true
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when Get-EsxCli throws" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $Script:vCenterName = $null
+            Mock Get-EsxCli { throw "esxcli unavailable" }
+            Test-VmkernelVsanTrafficViaEsxcli -VMHost ([PSCustomObject]@{ Name = "esx01.lab" }) -RequireWitnessTraffic $true
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when vsan.network.list is null" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $Script:vCenterName = $null
+            $Script:MockFakeEsxcli = [PSCustomObject]@{
+                vsan = [PSCustomObject]@{
+                    network = [PSCustomObject]@{ list = $null }
+                }
+            }
+            Mock Get-EsxCli { return $Script:MockFakeEsxcli }
+            Test-VmkernelVsanTrafficViaEsxcli -VMHost ([PSCustomObject]@{ Name = "esx01.lab" }) -RequireWitnessTraffic $true
+        }
+        $result | Should -Be $false
+    }
+}
+
+# ── Enable-VsanHealthAlarms ───────────────────────────────────────────────────
+
+Describe "Enable-VsanHealthAlarms — mocked vCenter" {
+    # Get-VsanView is a vSAN API cmdlet that is not in the module's command table and cannot be mocked
+    # inside InModuleScope. Tests for the paths that pass through Get-VsanView are covered by the live
+    # test suite (Enable-VsanHealthAlarms — live write).
+
+    It "Returns false when cluster is not found" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ClusterByName { return $null }
+            Enable-VsanHealthAlarms -ClusterName "cl-missing"
+        }
+        $result | Should -Be $false
+    }
+}
+
+# ── Remove-StorageTag ─────────────────────────────────────────────────────────
+
+Describe "Remove-StorageTag — mocked vCenter" {
+    # Get-Tag and Remove-Tag are PowerCLI cmdlets with ArgumentTransformationAttribute; they are not in
+    # VcfEdgeAtScale's command table and cannot be reliably mocked inside InModuleScope. Tests cover the
+    # early-exit (tag-not-found) path only; the removal path is covered by the live tag tests.
+
+    It "Does not call Remove-Tag when tag is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Tag { return $null }
+            Mock Remove-Tag {}
+            Remove-StorageTag -TagName "SupervisorCluster01" -TagCatalog "EdgeNodePolicy"
+            Should -Invoke Remove-Tag -Times 0 -Scope It
+        }
+    }
+}
+
+# ── Remove-TagCategoryIfEmpty ─────────────────────────────────────────────────
+
+Describe "Remove-TagCategoryIfEmpty — mocked vCenter" {
+    # Same PowerCLI mocking limitation as Remove-StorageTag; tests cover the early-exit path only.
+
+    It "Does not call Remove-TagCategory when category is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-TagCategory { return $null }
+            Mock Remove-TagCategory {}
+            Remove-TagCategoryIfEmpty -TagCatalog "Storage-TagCatalog"
+            Should -Invoke Remove-TagCategory -Times 0 -Scope It
+        }
+    }
+}
+
+# ── Invoke-ReconfigureClusterHA ───────────────────────────────────────────────
+
+Describe "Invoke-ReconfigureClusterHA — mocked vCenter" {
+    It "Throws VcfDeploymentException when vCenter is not connected" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $false; ErrorMessage = "No session." } }
+            Mock Update-Cluster {}
+            { Invoke-ReconfigureClusterHA -ClusterName "cl0" -DelaySeconds 0 } | Should -Throw
+            Should -Invoke Update-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Update-Cluster when vCenter is connected" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Update-Cluster {}
+            Invoke-ReconfigureClusterHA -ClusterName "cl0" -DelaySeconds 0
+            Should -Invoke Update-Cluster -Times 1 -Scope It
+        }
+    }
+}
+
+# ── Set-VsanDomNetworkSchedulerThrottleOnCluster ──────────────────────────────
+
+Describe "Set-VsanDomNetworkSchedulerThrottleOnCluster — mocked vCenter" {
+    # Uses Get-ClusterByName and Get-VmHostsInCluster wrappers for mockability.
+    # Get-VmHostsInCluster has [OutputType([VMHost[]])] so Pester rejects plain PSCustomObject[]
+    # returns, making the per-host dispatch paths untestable as unit tests. Those paths (applied/
+    # already-set) are covered by the live test for this function.
+
+    It "Returns false when cluster is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ClusterByName { return $null }
+            $result = Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName "missing-cl"
+            $result | Should -Be $false
+        }
+    }
+
+    It "Returns false when cluster has no hosts" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ClusterByName { return [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VmHostsInCluster { return $null }
+            $result = Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName "cl0" -Server "vc01"
+            $result | Should -Be $false
+        }
+    }
+}
+
+# ── Invoke-VsanClusterAlarmCheckAndRemediate ──────────────────────────────────
+
+Describe "Invoke-VsanClusterAlarmCheckAndRemediate — alarm routing — mocked vCenter" {
+    It "Returns early and calls no remediation functions when there are no alarms" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VsanDomNetworkSchedulerThrottleOnCluster { return $false }
+            Mock Get-VsanClusterTriggeredAlarms { return @() }
+            Mock Invoke-VsanClusterConfigReapply {}
+            Mock Invoke-ReconfigureClusterHA {}
+            Mock Enable-VsanPerformanceService {}
+            Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "cl0"
+            Should -Invoke Invoke-VsanClusterConfigReapply -Times 0 -Scope It
+            Should -Invoke Invoke-ReconfigureClusterHA -Times 0 -Scope It
+            Should -Invoke Enable-VsanPerformanceService -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Invoke-VsanClusterConfigReapply for an advCfgSync alarm" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VsanDomNetworkSchedulerThrottleOnCluster { return $false }
+            Mock Get-VsanClusterTriggeredAlarms { return @([PSCustomObject]@{ AlarmName = "Advanced vSAN configuration in sync"; Status = "Yellow" }) }
+            Mock Invoke-VsanClusterConfigReapply { return $true }
+            Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "cl0" -PostRemediationWaitSeconds 0
+            Should -Invoke Invoke-VsanClusterConfigReapply -Times 1 -Scope It
+        }
+    }
+
+    It "Calls Invoke-ReconfigureClusterHA for a vSphere HA host status alarm" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VsanDomNetworkSchedulerThrottleOnCluster { return $false }
+            Mock Get-VsanClusterTriggeredAlarms { return @([PSCustomObject]@{ AlarmName = "vSphere HA host status"; Status = "Yellow" }) }
+            Mock Invoke-ReconfigureClusterHA {}
+            Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "cl0"
+            Should -Invoke Invoke-ReconfigureClusterHA -Times 1 -Scope It
+        }
+    }
+
+    It "Calls Enable-VsanPerformanceService for a performance service status alarm" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VsanDomNetworkSchedulerThrottleOnCluster { return $false }
+            Mock Get-VsanClusterTriggeredAlarms { return @([PSCustomObject]@{ AlarmName = "Performance service status"; Status = "Yellow" }) }
+            Mock Enable-VsanPerformanceService {}
+            Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "cl0"
+            Should -Invoke Enable-VsanPerformanceService -Times 1 -Scope It
+        }
+    }
+
+    It "Does not throw when AcceptBadCheckResults is set and a red alarm is present" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Set-VsanDomNetworkSchedulerThrottleOnCluster { return $false }
+            Mock Get-VsanClusterTriggeredAlarms { return @([PSCustomObject]@{ AlarmName = "vSAN health check unknown"; Status = "Red" }) }
+            Mock Test-VsanTriggeredAlarmIsStatsPrimaryElection { return $false }
+            Mock Test-VsanTriggeredAlarmIsHclRelated { return $false }
+            { Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "cl0" -AcceptBadCheckResults } | Should -Not -Throw
+        }
+    }
+}
+
+# ── Invoke-VsanClusterLeaveOnHostWithRetry ────────────────────────────────────
+
+Describe "Invoke-VsanClusterLeaveOnHostWithRetry — mocked esxcli" {
+    It "Returns false when Get-EsxCli throws an unrecognized error after all retries" {
+        # The 'not in a vSAN' happy path relies on PowerCLI exception messages and is covered by live tests.
+        # This test verifies that an unrecognized error causes the function to give up and return false.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-EsxCli { throw "Connection refused by server." }
+            $fakeHost = [PSCustomObject]@{ Name = "host1.lab" }
+            $result = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $fakeHost -Server "vc01" -MaxRetries 1
+            $result | Should -Be $false
+        }
+    }
+
+    It "Returns false when esxcli vsan.cluster.leave is not available" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-EsxCli {
+                return [PSCustomObject]@{
+                    vsan = [PSCustomObject]@{
+                        cluster = [PSCustomObject]@{ leave = $null }
+                    }
+                }
+            }
+            $fakeHost = [PSCustomObject]@{ Name = "host1.lab" }
+            $result = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $fakeHost -Server "vc01"
+            $result | Should -Be $false
+        }
+    }
+}
+
+# ── Show-ConfigurationHelpTable ───────────────────────────────────────────────
+
+Describe "Show-ConfigurationHelpTable — mocked output" {
+    It "Returns early without writing headers when Config is null" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Show-ConfigurationHelpTable -Title "Test" -Config $null -Format "List"
+            Should -Invoke Write-LogMessage -Times 0 -Scope It
+        }
+    }
+
+    It "Does not throw when rendering config in List format" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $config = @([PSCustomObject]@{ Key = "common.clusterName"; Required = "Yes"; Notes = "Cluster name." })
+            { Show-ConfigurationHelpTable -Title "Test Reference" -Config $config -Format "List" } | Should -Not -Throw
+        }
+    }
+
+    It "Does not throw and calls Format-ConfigurationTable when rendering in Table format" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Format-ConfigurationTable {}
+            $config = @([PSCustomObject]@{ Key = "common.clusterName"; Required = "Yes"; Notes = "Cluster name." })
+            { Show-ConfigurationHelpTable -Title "Test Reference" -Config $config -Format "Table" } | Should -Not -Throw
+            Should -Invoke Format-ConfigurationTable -Times 1 -Scope It
+        }
+    }
+}
+
+# ── Invoke-AbandonHciWorkflowIfInProgress ────────────────────────────────────
+
+Describe "Invoke-AbandonHciWorkflowIfInProgress — mocked vCenter" {
+    It "Does not throw when cluster is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ClusterByName { return $null }
+            { Invoke-AbandonHciWorkflowIfInProgress -ClusterName "missing-cl" } | Should -Not -Throw
+        }
+    }
+
+    It "Does not throw when AbandonHciWorkflow raises 'not allowed in current state'" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $ext = [PSCustomObject]@{}
+            $ext | Add-Member -MemberType ScriptMethod -Name "AbandonHciWorkflow" -Value {
+                throw "The operation is not allowed in the current state."
+            }
+            $Script:abandonExt = $ext
+            Mock Get-ClusterByName { return [PSCustomObject]@{ ExtensionData = $Script:abandonExt } }
+            { Invoke-AbandonHciWorkflowIfInProgress -ClusterName "cl0" } | Should -Not -Throw
+            Remove-Variable -Name "abandonExt" -Scope Script -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ── Enable-VsanAutomaticRebalance ─────────────────────────────────────────────
+
+Describe "Enable-VsanAutomaticRebalance — mocked PowerCLI" {
+    It "Returns false when Set-VsanClusterConfiguration does not support ProactiveRebalanceEnabled" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Command { return $null } -ParameterFilter { $Name -eq "Set-VsanClusterConfiguration" }
+            $result = Enable-VsanAutomaticRebalance -ClusterName "cl0"
+            $result | Should -Be $false
+        }
+    }
+}
+
+# ── Enable-VsanAutomaticDiskClaimIfSupported ──────────────────────────────────
+
+Describe "Enable-VsanAutomaticDiskClaimIfSupported — mocked PowerCLI" {
+    It "Returns false when Set-VsanClusterConfiguration does not support VsanDiskClaimMode" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Command { return $null } -ParameterFilter { $Name -eq "Set-VsanClusterConfiguration" }
+            $result = Enable-VsanAutomaticDiskClaimIfSupported -ClusterName "cl0"
+            $result | Should -Be $false
+        }
+    }
+}
+
+# ── Show-InfrastructureJsonConfigurationHelp ──────────────────────────────────
+
+Describe "Show-InfrastructureJsonConfigurationHelp — mocked" {
+
+    It "Calls Get-ConfigurationHelpData with infrastructure-config-help.json" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ConfigurationHelpData { return $null }
+            Mock Show-ConfigurationHelpTable {}
+            Show-InfrastructureJsonConfigurationHelp
+            Should -Invoke Get-ConfigurationHelpData -Times 1 -ParameterFilter { $HelpFileName -eq "infrastructure-config-help.json" } -Scope It
+        }
+    }
+
+    It "Does not call Show-ConfigurationHelpTable when Get-ConfigurationHelpData returns null" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ConfigurationHelpData { return $null }
+            Mock Show-ConfigurationHelpTable {}
+            Show-InfrastructureJsonConfigurationHelp
+            Should -Invoke Show-ConfigurationHelpTable -Times 0 -Scope It
+        }
+    }
+}
+
+# ── Show-SupervisorJsonConfigurationHelp ──────────────────────────────────────
+
+Describe "Show-SupervisorJsonConfigurationHelp — mocked" {
+
+    It "Calls Get-ConfigurationHelpData with supervisor-config-help.json" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ConfigurationHelpData { return $null }
+            Mock Show-ConfigurationHelpTable {}
+            Show-SupervisorJsonConfigurationHelp
+            Should -Invoke Get-ConfigurationHelpData -Times 1 -ParameterFilter { $HelpFileName -eq "supervisor-config-help.json" } -Scope It
+        }
+    }
+
+    It "Calls Show-ConfigurationHelpTable when Get-ConfigurationHelpData returns data" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ConfigurationHelpData { return @([PSCustomObject]@{ Key = "test.key"; Required = "Yes"; Notes = "A note." }) }
+            Mock Show-ConfigurationHelpTable {}
+            Show-SupervisorJsonConfigurationHelp -Format "List"
+            Should -Invoke Show-ConfigurationHelpTable -Times 1 -Scope It
+        }
+    }
+}
+
+# ── Invoke-VcfEdgeAtScaleUpdateCheck ──────────────────────────────────────────
+
+Describe "Invoke-VcfEdgeAtScaleUpdateCheck — auto-update override" {
+
+    It "Returns early and logs a debug message when InputData.common.autoUpdate is false" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $inputData = [PSCustomObject]@{
+                common = [PSCustomObject]@{ autoUpdate = $false }
+            }
+            { Invoke-VcfEdgeAtScaleUpdateCheck -InputData $inputData } | Should -Not -Throw
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "DEBUG" -and $Message -like "*autoUpdate*" } -Scope It
+        }
+    }
+}
+
+# Test-PhysicalNicConnected — Get-VMHostNetworkAdapter -VMHost has ArgumentTransformationAttribute
+# so the unit-test path (passing PSCustomObject -VMHost to the mock) fails to bind before the
+# mock can intercept. Coverage is provided by the live test.

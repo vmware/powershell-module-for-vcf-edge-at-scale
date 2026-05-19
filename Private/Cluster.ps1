@@ -535,6 +535,7 @@ Function Invoke-ReconfigureClusterHA {
         If "vSphere HA host status" (red) or "Unable to apply DRS resource settings on host" alarms appear after deployment, run this function again with a longer delay (e.g. -DelaySeconds 30) so vCenter can re-evaluate the management network for HA heartbeats and DRS.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$DelaySeconds = 10,
@@ -1413,6 +1414,101 @@ Function Get-NonMgmtVmkernelAdaptersOnHost {
         Where-Object { $_.Name -ne "vmk0" }
 }
 
+Function Get-PhysicalNicAdapterOnHost {
+
+    <#
+        .SYNOPSIS
+        Returns the named physical NIC adapter object on a host, or null if not found. Thin wrapper over
+        Get-VMHostNetworkAdapter enabling unit tests to mock this call without fighting PowerCLI type constraints.
+
+        .PARAMETER NicName
+        Physical network adapter name (e.g. vmnic0).
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .PARAMETER VMHost
+        The VMHost object to query.
+
+        .EXAMPLE
+        Get-PhysicalNicAdapterOnHost -NicName "vmnic1" -VMHost $vmhostObj -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$NicName,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -Name $NicName -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Test-HostHasRequiredNics {
+
+    <#
+        .SYNOPSIS
+        Validates that a host physically has all NICs required by the destination cluster NIC list.
+
+        .DESCRIPTION
+        Extracts NIC names from NicList (each entry may be a string or an object with a Name property) and
+        checks that each adapter is physically present on the host using Get-PhysicalNicAdapterOnHost.
+        Used as a pre-flight guard on the cluster-move path: if any required NIC is absent the host
+        cannot support the vSS-to-VDS migration and the takeover is rejected before any disruptive
+        changes are made.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the host, used in log messages.
+
+        .PARAMETER NicList
+        Array of NIC entries (strings or objects with a Name property) from the effective NIC list for
+        the destination cluster.
+
+        .PARAMETER Server
+        vCenter server name. Defaults to $Script:vCenterName.
+
+        .PARAMETER VMHost
+        The VMHost object for the host to validate.
+
+        .OUTPUTS
+        PSCustomObject with:
+          IsValid     — $true when all NICs are present; $false when one or more are missing.
+          MissingNics — Array of missing NIC names (empty when IsValid is $true).
+
+        .EXAMPLE
+        $check = Test-HostHasRequiredNics -EsxHostName "esx01.lab" -NicList $nicList -VMHost $vmhostObj
+        if (-not $check.IsValid) { throw "Missing NICs: $($check.MissingNics -join ', ')" }
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Array]$NicList,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    $missingNics = [System.Collections.Generic.List[String]]::new()
+    foreach ($item in $NicList) {
+        $nicName = if ($item -is [String]) { $item.Trim() } else { $item.Name }
+        if ([String]::IsNullOrWhiteSpace($nicName)) {
+            continue
+        }
+        $adapter = Get-PhysicalNicAdapterOnHost -NicName $nicName -Server $Server -VMHost $VMHost
+        if (-not $adapter) {
+            Write-LogMessage -Type DEBUG -Message "Host `"$EsxHostName`": required NIC `"$nicName`" not found on the host."
+            $missingNics.Add($nicName)
+        }
+    }
+
+    return [PSCustomObject]@{
+        IsValid     = ($missingNics.Count -eq 0)
+        MissingNics = $missingNics.ToArray()
+    }
+}
+
 Function Invoke-AddHostToClusterRunningVmSafetyCheck {
     <#
         .SYNOPSIS
@@ -1549,7 +1645,7 @@ Function Add-HostToCluster {
         It performs the following operations:
         1. Retrieves the target cluster object from vCenter
         2. If the host is already in vCenter inventory, checks for powered-on VMs; if any exist, logs them and prompts Y/N (default N) before continuing
-        3a. If the host is already in vCenter inventory (different cluster): uses Move-VMHost to relocate it
+        3a. If the host is already in vCenter inventory (different cluster): validates that the host has all required physical NICs from NicList (if provided) before proceeding — rejects the takeover when any NIC is absent; then uses Move-VMHost to relocate it
         3b. If the host is not yet in vCenter inventory: uses Add-VMHost with the provided credentials
         4. Verifies that the host is in the correct cluster after the operation
         5. Provides appropriate logging for success or failure scenarios
@@ -1597,6 +1693,12 @@ Function Add-HostToCluster {
 
         .PARAMETER AddHostTaskPollIntervalSeconds
         When waiting for the Add-VMHost task (RunAsync), seconds between Get-Task polls. Default is 5.
+
+        .PARAMETER NicList
+        Effective NIC list for the destination cluster (cluster-level or common). When the host is being
+        moved from another cluster, each NIC in this list must be physically present on the host or the
+        takeover is rejected before any disruptive changes are made. Optional; when omitted, the NIC
+        presence check is skipped.
     #>
 
     [CmdletBinding()]
@@ -1609,6 +1711,7 @@ Function Add-HostToCluster {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$HostAppearanceRecheckDelaySeconds = 5,
         [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$HostStateChangeDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [AllowNull()] [Array]$NicList = $null,
         [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300,
         [Parameter(Mandatory = $false)] [ValidateSet("VMFS", "vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType = "VMFS"
     )
@@ -1678,6 +1781,17 @@ Function Add-HostToCluster {
                 $sourceCluster = $null
             }
             if ($null -ne $sourceCluster -and $sourceCluster.Name -ne $ClusterName) {
+                # Validate that the host has every physical NIC required by the destination cluster's NIC list
+                # before taking any disruptive action. A host missing one or more required NICs cannot support
+                # the vSS-to-VDS migration and must not be taken over.
+                if ($null -ne $NicList -and $NicList.Count -gt 0) {
+                    $nicCheck = Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $NicList -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
+                    if (-not $nicCheck.IsValid) {
+                        $missingStr = $nicCheck.MissingNics -join ", "
+                        Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" is missing required physical NIC(s) [$missingStr] from the configured NIC list. The vSS-to-VDS migration cannot proceed without these NICs. Remove this host from the deployment configuration or install the required NIC hardware and re-run."
+                        throw [VcfDeploymentException]::new("Host `"$EsxHostName`" is missing required NIC(s): $missingStr. Cannot take over from cluster `"$($sourceCluster.Name)`". Check logs for details.")
+                    }
+                }
                 Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
             } else {
                 $parentDisplayName = if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) { $hostForRunningVmCheck.Parent.Name } else { "(no cluster parent)" }
@@ -1695,26 +1809,54 @@ Function Add-HostToCluster {
     $ProgressPreference = 'SilentlyContinue'
     try {
         if ($null -ne $hostForRunningVmCheck) {
+            # vSphere requires the host to be in maintenance mode before an inter-cluster relocation.
+            if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
+                Write-LogMessage -Type INFO -NoNewline -Message "Entering maintenance mode on host `"$EsxHostName`" before cluster move... "
+                try {
+                    Set-VMHost -VMHost $EsxHostName -Server $Script:vCenterName -State Maintenance -Confirm:$false -ErrorAction Stop | Out-Null
+                    $hostStateRefresh = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+                    if ($null -eq $hostStateRefresh -or $hostStateRefresh.ConnectionState -ne "Maintenance") {
+                        $actualState = if ($hostStateRefresh) { $hostStateRefresh.ConnectionState } else { "not found in vCenter" }
+                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                        Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" state is `"$actualState`" after maintenance mode request (expected: Maintenance). Place the host in maintenance mode manually in vCenter and re-run the deployment."
+                        throw [VcfDeploymentException]::new("Host `"$EsxHostName`" did not enter maintenance mode (state: `"$actualState`"). Place the host in maintenance mode manually in vCenter and re-run.")
+                    }
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch [VcfDeploymentException] {
+                    throw
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    Write-LogMessage -Type ERROR -Message "Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message). To recover: place `"$EsxHostName`" in maintenance mode manually in vCenter and re-run the deployment."
+                    throw [VcfDeploymentException]::new("Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message)")
+                }
+            } else {
+                Write-LogMessage -Type DEBUG -Message "Host `"$EsxHostName`" is already in maintenance mode; skipping maintenance mode entry before cluster move."
+            }
             Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
             try {
                 Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $clusterObject -Server $Script:vCenterName
                 Write-LogMessage -Type INFO -CompletePending -Message "Done."
             } catch [System.UnauthorizedAccessException] {
                 Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
                 throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
             } catch [System.TimeoutException] {
                 Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
                 throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
             } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
                 Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry."
                 throw [VcfDeploymentException]::new("vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry.")
             } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
                 Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                Write-LogMessage -Type ERROR -Message "vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
                 throw [VcfDeploymentException]::new("vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
             } catch [VcfDeploymentException] {
                 throw
             } catch {
                 Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
                 throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
             }
         } else {
@@ -1891,7 +2033,8 @@ Function Add-HostToCluster {
 
     # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
 
-    # Only set to connected state if host is not already connected (error condition).
+    # Set host to Connected: for the Move path this exits maintenance mode (ConnectionState = "Maintenance"
+    # after the cluster relocation); for the Add path this handles a newly added host coming up Disconnected.
     if ($verifyHost.ConnectionState -ne "Connected") {
         Write-LogMessage -Type INFO -NoNewline -Message "Setting host `"$EsxHostName`" to connected state (current state: `"$($verifyHost.ConnectionState)`")... "
         try {
@@ -1918,9 +2061,13 @@ Function Add-HostToCluster {
         }
     }
 
-        Write-LogMessage -Type INFO -CompletePending -Message "Success"
+        if ($null -eq $hostForRunningVmCheck) {
+            Write-LogMessage -Type INFO -CompletePending -Message "Success"
+        }
     } catch {
-        Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+        if ($null -eq $hostForRunningVmCheck) {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+        }
         if ($StoragePolicyType -eq "vSAN-ESA" -or $StoragePolicyType -eq "vSAN-OSA") {
             Write-LogMessage -Type INFO -Message "vSAN witness traffic or host add failed for cluster `"$ClusterName`". You will be prompted whether to roll back (same sequence as cleanup: VMkernel removal, management restore, vSAN disk/leave/tags, VDS removal, cluster removal)."
         }
@@ -5479,13 +5626,13 @@ Function Set-VsanDomNetworkSchedulerThrottleOnCluster {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
     )
-    $clusterObject = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction SilentlyContinue
+    $clusterObject = try { Get-ClusterByName -ClusterName $ClusterName -Server $Server } catch { $null }
     if (-not $clusterObject) {
         Write-LogMessage -Type DEBUG -Message "Set-VsanDomNetworkSchedulerThrottleOnCluster: cluster `"$ClusterName`" not found."
         return $false
     }
-    $clusterHosts = Get-VMHost -Location $clusterObject -Server $Server -ErrorAction SilentlyContinue
-    if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
+    $clusterHosts = Get-VmHostsInCluster -ClusterName $ClusterName
+    if (-not $clusterHosts -or @($clusterHosts).Count -eq 0) {
         Write-LogMessage -Type DEBUG -Message "Set-VsanDomNetworkSchedulerThrottleOnCluster: no hosts in cluster `"$ClusterName`"."
         return $false
     }
@@ -5496,12 +5643,13 @@ Function Set-VsanDomNetworkSchedulerThrottleOnCluster {
         if ($result.Applied) { $appliedCount++ }
         elseif ($result.AlreadySet) { $alreadySetCount++ }
     }
+    $totalHostCount = @($clusterHosts).Count
     if ($appliedCount -gt 0) {
-        Write-LogMessage -Type DEBUG -Message "Suppress 10 GB networking alarm if present (Broadcom KB 394932) on $appliedCount/$($clusterHosts.Count) host(s) in cluster `"$ClusterName`"."
+        Write-LogMessage -Type DEBUG -Message "Suppress 10 GB networking alarm if present (Broadcom KB 394932) on $appliedCount/$totalHostCount host(s) in cluster `"$ClusterName`"."
         return $true
     }
-    if ($alreadySetCount -eq $clusterHosts.Count) {
-        Write-LogMessage -Type DEBUG -Message "DOM throttle (10G alarm suppression) already set on all $($clusterHosts.Count) host(s) in cluster `"$ClusterName`". Skipping."
+    if ($alreadySetCount -eq $totalHostCount) {
+        Write-LogMessage -Type DEBUG -Message "DOM throttle (10G alarm suppression) already set on all $totalHostCount host(s) in cluster `"$ClusterName`". Skipping."
     }
     return $appliedCount -gt 0
 }
