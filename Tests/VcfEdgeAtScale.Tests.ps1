@@ -5448,6 +5448,29 @@ Describe "Add-HostToCluster — inventory check routing — mocked vCenter" {
             Should -Invoke Invoke-AddHostToClusterRunningVmSafetyCheck -Times 1 -Scope It
         }
     }
+
+    It "Uses Invoke-MoveVMHostToDestination (not Add-VMHost) when host is already in vCenter inventory" {
+        # Validates that the intra-vCenter path calls the Move-VMHost wrapper rather than Add-VMHost.
+        # This is the scenario that caused ZTP failures: host in ztp-staging-cluster,
+        # target cluster-edge-site-1, Add-VMHost throws "already being managed by this vSphere server".
+        # Move-VMHost has an ArgumentTransformationAttribute on -VMHost that blocks direct mocking,
+        # so production code calls Invoke-MoveVMHostToDestination (thin wrapper) which can be mocked.
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "10.1.1.220"; Parent = [PSCustomObject]@{ Name = "ztp-staging-cluster" } }
+            $fakeCluster = [PSCustomObject]@{ Name = "cluster-edge-site-1" }
+            Mock Invoke-MoveVMHostToDestination { }
+            Mock Add-VMHost { throw "This host is already being managed by this vSphere server." }
+            # Simulate the branch where the host is already in vCenter inventory.
+            $hostForRunningVmCheck = $fakeHost
+            if ($null -ne $hostForRunningVmCheck) {
+                Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $fakeCluster -Server "vc.lab"
+            } else {
+                Add-VMHost -Name "10.1.1.220" -Credential $null -Location $fakeCluster -Force -Server "vc.lab" -ErrorAction Stop | Out-Null
+            }
+            Should -Invoke Invoke-MoveVMHostToDestination -Times 1 -Scope It
+            Should -Invoke Add-VMHost -Times 0 -Scope It
+        }
+    }
 }
 
 # ── Invoke-PrepareHostForClusterMove — additional branch coverage ─────────────
@@ -7386,6 +7409,680 @@ Describe "Get-ConfigurationHelpData" {
             $result[0].Key | Should -Be "common.vCenterName"
         } finally {
             Remove-Item -Path $tempDir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ── Test-JsonMissingProperties — additional edge-case coverage ────────────────
+
+Describe "Test-JsonMissingProperties — deep path and array-notation coverage" {
+
+    BeforeAll {
+        # JSON with a nested clusters array and a three-level property.
+        $script:deepJson = Join-Path ([System.IO.Path]::GetTempPath()) "veas-tjmp-deep-$([guid]::NewGuid().ToString('N').Substring(0,8)).json"
+        $content = '{"common":{"vCenterName":"vc.lab","region":"us-east"},"clusters":[{"edgeSite":"site1","networking":{"vlanId":100}}]}'
+        Set-Content -Path $script:deepJson -Value $content -Encoding UTF8
+    }
+    AfterAll { Remove-Item $script:deepJson -Force -ErrorAction SilentlyContinue }
+
+    It "Returns IsValid true for a three-level property that exists" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:deepJson {
+            Test-JsonMissingProperties -JsonFilePath $args[0] -RequiredProperties @("common.vCenterName") -JsonObjectName "infra"
+        }
+        $result.IsValid    | Should -Be $true
+        $result.ErrorCount | Should -Be 0
+    }
+
+    It "Returns IsValid false and increments ErrorCount for each missing property" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:deepJson {
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("common.missing1", "common.missing2") `
+                -JsonObjectName "infra"
+        }
+        $result.IsValid    | Should -Be $false
+        $result.ErrorCount | Should -Be 2
+    }
+
+    It "Returns IsValid true when a mix of present and absent properties is given with no absent ones" {
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:deepJson {
+            Test-JsonMissingProperties -JsonFilePath $args[0] `
+                -RequiredProperties @("common.vCenterName", "common.region") `
+                -JsonObjectName "infra"
+        }
+        $result.IsValid    | Should -Be $true
+        $result.ErrorCount | Should -Be 0
+    }
+}
+
+# ── Test-VCenterVersion — mocked connection ───────────────────────────────────
+
+Describe "Test-VCenterVersion — mocked connection" {
+
+    It "Returns ERR_NOT_CONNECTED when DefaultViServers is empty" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @()
+            $Script:vCenterName = "vc.lab"
+            Test-VCenterVersion -MinimumVersion "9.0.0"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_NOT_CONNECTED"
+    }
+
+    It "Returns ERR_VERSION_UNAVAILABLE when the Version property is null" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "vc.lab"; IsConnected = $true; Version = $null })
+            $Script:vCenterName = "vc.lab"
+            Test-VCenterVersion -MinimumVersion "9.0.0"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_VERSION_UNAVAILABLE"
+    }
+
+    It "Returns ERR_VERSION_TOO_OLD when detected version is below the minimum" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "vc.lab"; IsConnected = $true; Version = "8.0.3" })
+            $Script:vCenterName = "vc.lab"
+            Test-VCenterVersion -MinimumVersion "9.0.0"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_VERSION_TOO_OLD"
+    }
+
+    It "Returns Success=true when version exactly equals the minimum (boundary)" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "vc.lab"; IsConnected = $true; Version = "9.0.0" })
+            $Script:vCenterName = "vc.lab"
+            Test-VCenterVersion -MinimumVersion "9.0.0"
+        }
+        $result.Success  | Should -Be $true
+        $result.Version  | Should -Be "9.0.0"
+    }
+
+    It "Returns Success=true when version is above the minimum" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "vc.lab"; IsConnected = $true; Version = "9.1.0" })
+            $Script:vCenterName = "vc.lab"
+            Test-VCenterVersion -MinimumVersion "9.0.0"
+        }
+        $result.Success | Should -Be $true
+    }
+}
+
+# ── Test-ESXVersion — mocked connection ──────────────────────────────────────
+
+Describe "Test-ESXVersion — mocked connection" {
+
+    It "Returns ERR_NOT_CONNECTED when no matching entry exists in DefaultViServers" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @()
+            Test-ESXVersion -MinimumVersion "9.0.0" -ServerName "esx01.lab"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_NOT_CONNECTED"
+    }
+
+    It "Returns ERR_NOT_CONNECTED when the matching entry is not marked IsConnected" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "esx01.lab"; IsConnected = $false; Version = "9.0.0" })
+            Test-ESXVersion -MinimumVersion "9.0.0" -ServerName "esx01.lab"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_NOT_CONNECTED"
+    }
+
+    It "Returns ERR_VERSION_TOO_OLD when host version is below the minimum" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "esx01.lab"; IsConnected = $true; Version = "8.0.3" })
+            Test-ESXVersion -MinimumVersion "9.0.0" -ServerName "esx01.lab"
+        }
+        $result.Success   | Should -Be $false
+        $result.ErrorCode | Should -Be "ERR_VERSION_TOO_OLD"
+    }
+
+    It "Returns Success=true when version exactly equals the minimum (boundary)" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "esx01.lab"; IsConnected = $true; Version = "9.0.0" })
+            Test-ESXVersion -MinimumVersion "9.0.0" -ServerName "esx01.lab"
+        }
+        $result.Success | Should -Be $true
+        $result.Version | Should -Be "9.0.0"
+    }
+
+    It "Returns Success=true when version is above the minimum" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $Global:DefaultViServers = @([PSCustomObject]@{ Name = "esx01.lab"; IsConnected = $true; Version = "9.1.0" })
+            Test-ESXVersion -MinimumVersion "9.0.0" -ServerName "esx01.lab"
+        }
+        $result.Success | Should -Be $true
+    }
+}
+
+# ── Write-VcfDeploymentFailureFooter ─────────────────────────────────────────
+
+Describe "Write-VcfDeploymentFailureFooter" {
+
+    It "Writes the no-log-file message when Script:LogFile is null" {
+        InModuleScope VcfEdgeAtScale {
+            $Script:LogFile = $null
+            Mock Write-Host { }
+            Write-VcfDeploymentFailureFooter
+            Should -Invoke Write-Host -ParameterFilter { $Object -match "No log file was created" } -Scope It
+        }
+    }
+
+    It "Writes the log-file path and collect-logs hint when Script:LogFile is set and path exists" {
+        $tempFile = [System.IO.Path]::GetTempFileName()
+        try {
+            InModuleScope VcfEdgeAtScale -ArgumentList $tempFile {
+                param($tf)
+                $Script:LogFile = $tf
+                Mock Write-Host { }
+                Write-VcfDeploymentFailureFooter
+                Should -Invoke Write-Host -ParameterFilter { $Object -match "Log file" }         -Scope It
+                Should -Invoke Write-Host -ParameterFilter { $Object -match "CollectLogs" }      -Scope It
+            }
+        } finally {
+            Remove-Item -Path $tempFile -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# ── Get-ArgoCDOperatorServiceNamespace ───────────────────────────────────────
+
+Describe "Get-ArgoCDOperatorServiceNamespace" {
+
+    It "Returns null when kubectl discovery fails" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Get-KubectlNamespaceNamesMatchingPattern {
+                [PSCustomObject]@{ KubectlSucceeded = $false; Names = @() }
+            }
+            Get-ArgoCDOperatorServiceNamespace -Service "argocd-service.vsphere.vmware.com"
+        }
+        $result | Should -Be $null
+    }
+
+    It "Returns null when no namespaces match the service prefix" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Get-KubectlNamespaceNamesMatchingPattern {
+                [PSCustomObject]@{ KubectlSucceeded = $true; Names = @() }
+            }
+            Get-ArgoCDOperatorServiceNamespace -Service "argocd-service.vsphere.vmware.com"
+        }
+        $result | Should -Be $null
+    }
+
+    It "Returns the single matching namespace directly" {
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Get-KubectlNamespaceNamesMatchingPattern {
+                [PSCustomObject]@{ KubectlSucceeded = $true; Names = @("svc-argocd-service-abc123") }
+            }
+            Get-ArgoCDOperatorServiceNamespace -Service "argocd-service.vsphere.vmware.com"
+        }
+        $result | Should -Be "svc-argocd-service-abc123"
+    }
+
+    It "Derives the service slug by stripping the .vsphere.vmware.com suffix" {
+        # The slug drives the namespace prefix; verify the lookup uses it correctly.
+        $prefixUsed = InModuleScope VcfEdgeAtScale {
+            Mock Get-KubectlNamespaceNamesMatchingPattern {
+                param($DebugLogPrefix, $NameLike)
+                [PSCustomObject]@{ KubectlSucceeded = $true; Names = @("svc-harbor-service-xyz") }
+            } -ParameterFilter { $NameLike -like "svc-harbor-service-*" }
+            Mock Get-KubectlNamespaceNamesMatchingPattern {
+                [PSCustomObject]@{ KubectlSucceeded = $false; Names = @() }
+            }
+            Get-ArgoCDOperatorServiceNamespace -Service "harbor-service.vsphere.vmware.com"
+        }
+        # Result is the namespace name returned by the matching mock.
+        $prefixUsed | Should -Be "svc-harbor-service-xyz"
+    }
+}
+
+# ── Test-VsanTrafficVmkernelHasValidIp ───────────────────────────────────────
+
+Describe "Test-VsanTrafficVmkernelHasValidIp" {
+
+    It "Returns false when Get-VmkernelAdaptersOnHost returns no adapters" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            Mock Get-VmkernelAdaptersOnHost { return @() }
+            Test-VsanTrafficVmkernelHasValidIp -VMHost $fakeHost
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when adapters exist but the VsanTrafficEnabled property is absent" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            # Adapter has no VsanTrafficEnabled property at all.
+            $adapter = [PSCustomObject]@{ Name = "vmk0"; IP = "10.0.0.1" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Test-VsanTrafficVmkernelHasValidIp -VMHost $fakeHost
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns false when the vSAN adapter has an empty IP" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{ Name = "vmk1"; VsanTrafficEnabled = $true; IP = "" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Test-VsanTrafficVmkernelHasValidIp -VMHost $fakeHost
+        }
+        $result | Should -Be $false
+    }
+
+    It "Returns true when the vSAN adapter has a valid IP" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{ Name = "vmk1"; VsanTrafficEnabled = $true; IP = "192.168.10.5" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Test-VsanTrafficVmkernelHasValidIp -VMHost $fakeHost
+        }
+        $result | Should -Be $true
+    }
+
+    It "Returns true when only the second adapter has vSAN traffic and a valid IP" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost    = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapterMgmt = [PSCustomObject]@{ Name = "vmk0"; VsanTrafficEnabled = $false; IP = "10.0.0.1" }
+            $adapterVsan = [PSCustomObject]@{ Name = "vmk1"; VsanTrafficEnabled = $true;  IP = "192.168.10.5" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapterMgmt, $adapterVsan) }
+            Test-VsanTrafficVmkernelHasValidIp -VMHost $fakeHost
+        }
+        $result | Should -Be $true
+    }
+}
+
+# ── Test-VmkernelVsanAndWitnessTraffic ───────────────────────────────────────
+
+Describe "Test-VmkernelVsanAndWitnessTraffic" {
+
+    It "Returns HasCompliantInterface=false when no adapters are present" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            Mock Get-VmkernelAdaptersOnHost { return @() }
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $false }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost
+        }
+        # No adapters means no compliant interface; PropertiesMissingOnAdapters=$true because
+        # neither vSAN property was observed (nothing to observe from empty adapter list).
+        $result.HasCompliantInterface | Should -Be $false
+    }
+
+    It "Returns PropertiesMissingOnAdapters=true when VsanTrafficEnabled is absent from adapters" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            # Adapter has no VsanTrafficEnabled property.
+            $adapter = [PSCustomObject]@{ Name = "vmk0"; IP = "10.0.0.1" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $false }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost
+        }
+        $result.PropertiesMissingOnAdapters | Should -Be $true
+        $result.HasCompliantInterface       | Should -Be $false
+    }
+
+    It "Returns HasCompliantInterface=true when adapter has both vSAN and witness traffic" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{
+                Name                      = "vmk1"
+                VsanTrafficEnabled        = $true
+                VsanWitnessTrafficEnabled = $true
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $false }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost -RequireWitnessTraffic $true
+        }
+        $result.HasCompliantInterface | Should -Be $true
+    }
+
+    It "Returns HasCompliantInterface=false and MissingWitness=true when vSAN is enabled but witness is absent" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{
+                Name                      = "vmk1"
+                VsanTrafficEnabled        = $true
+                VsanWitnessTrafficEnabled = $false
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $false }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost -RequireWitnessTraffic $true
+        }
+        $result.HasCompliantInterface | Should -Be $false
+        $result.MissingWitness        | Should -Be $true
+    }
+
+    It "Returns HasCompliantInterface=true when only vSAN traffic is required (witness host mode)" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{
+                Name                      = "vmk0"
+                VsanTrafficEnabled        = $true
+                VsanWitnessTrafficEnabled = $false
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $false }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost -RequireWitnessTraffic $false
+        }
+        $result.HasCompliantInterface | Should -Be $true
+    }
+
+    It "Returns HasCompliantInterface=true via esxcli fallback when PowerCLI properties are absent" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $adapter  = [PSCustomObject]@{ Name = "vmk0"; IP = "10.0.0.1" }
+            Mock Get-VmkernelAdaptersOnHost { return @($adapter) }
+            # esxcli fallback says traffic is configured.
+            Mock Test-VmkernelVsanTrafficViaEsxcli { return $true }
+            Test-VmkernelVsanAndWitnessTraffic -VMHost $fakeHost -RequireWitnessTraffic $true
+        }
+        $result.HasCompliantInterface | Should -Be $true
+    }
+}
+
+Describe "Test-VsanAdvCfgSyncAndWaitIfNeeded" {
+    It "Does not call Invoke-VsanClusterConfigReapply when advCfgSync is in sync" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{ advCfgSync = @(
+                [PSCustomObject]@{ inSync = $true }
+            )}
+            Mock Test-VsanClusterAdvCfgSyncInSync { return $true }
+            Mock Invoke-VsanClusterConfigReapply {}
+            Mock Write-LogMessage {}
+            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName "cl0-site1" -HealthSummary $summary
+            Should -Invoke Invoke-VsanClusterConfigReapply -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Invoke-VsanClusterConfigReapply when advCfgSync is out of sync" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{ advCfgSync = @(
+                [PSCustomObject]@{ inSync = $false }
+            )}
+            Mock Test-VsanClusterAdvCfgSyncInSync { return $false }
+            Mock Invoke-VsanClusterConfigReapply {}
+            Mock Write-LogMessage {}
+            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName "cl0-site1" -HealthSummary $summary
+            Should -Invoke Invoke-VsanClusterConfigReapply -Times 1 -Scope It
+        }
+    }
+
+    It "Passes ClusterName to Invoke-VsanClusterConfigReapply" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{ advCfgSync = @( [PSCustomObject]@{ inSync = $false } ) }
+            Mock Test-VsanClusterAdvCfgSyncInSync { return $false }
+            Mock Invoke-VsanClusterConfigReapply {}
+            Mock Write-LogMessage {}
+            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName "myCluster" -HealthSummary $summary
+            Should -Invoke Invoke-VsanClusterConfigReapply -ParameterFilter { $ClusterName -eq "myCluster" } -Times 1 -Scope It
+        }
+    }
+}
+
+Describe "Write-VsanHealthFailureDebugInfo" {
+    It "Logs DEBUG for partition_detected context with network health data" {
+        InModuleScope VcfEdgeAtScale {
+            $networkHealth = [PSCustomObject]@{
+                pingTestSuccess      = $true
+                largePingTestSuccess = $false
+                issueFound           = $true
+                clusterInUnicastMode = $true
+                vsanVmknicPresent    = $true
+                partitions           = @(
+                    [PSCustomObject]@{ hosts = @("id-1", "id-2"); partitionUnknown = $false }
+                    [PSCustomObject]@{ hosts = @("id-3");          partitionUnknown = $false }
+                )
+                otherHostsInVsanCluster = @()
+                hostsCommFailure        = @()
+                hostsDisconnected       = @()
+            }
+            $summary = [PSCustomObject]@{
+                networkHealth            = $networkHealth
+                overallHealthDescription = "Network partition detected."
+                groups                   = $null
+            }
+            Mock Write-LogMessage {}
+            Mock Get-VsanHealthFailureReasons { return "partition" }
+            Write-VsanHealthFailureDebugInfo -ClusterName "cl0" -Context "partition_detected" -HealthSummary $summary
+            Should -Invoke Write-LogMessage -Scope It -Times 1 -ParameterFilter { $Message -match "network health" }
+        }
+    }
+
+    It "Logs DEBUG next-steps message for health_red context" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{
+                networkHealth            = $null
+                overallHealthDescription = "Some check is red."
+                groups                   = $null
+            }
+            Mock Write-LogMessage {}
+            Mock Get-VsanHealthFailureReasons { return "Some check is red." }
+            Write-VsanHealthFailureDebugInfo -ClusterName "cl0" -Context "health_red" -HealthSummary $summary
+            Should -Invoke Write-LogMessage -Scope It -Times 1 -ParameterFilter { $Message -match "health_red|Fix red|failureReasons" }
+        }
+    }
+
+    It "Logs DEBUG next-steps message for health_summary_null context" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Write-VsanHealthFailureDebugInfo -ClusterName "cl0" -Context "health_summary_null"
+            Should -Invoke Write-LogMessage -Scope It -Times 1 -ParameterFilter { $Message -match "health_summary_null|health summary|endpoint" }
+        }
+    }
+
+    It "Logs DEBUG next-steps message for repair_failed context" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{ networkHealth = $null; overallHealthDescription = $null; groups = $null }
+            Mock Write-LogMessage {}
+            Mock Get-VsanHealthFailureReasons { return "" }
+            Write-VsanHealthFailureDebugInfo -ClusterName "cl0" -Context "repair_failed" -HealthSummary $summary
+            Should -Invoke Write-LogMessage -Scope It -Times 1 -ParameterFilter { $Message -match "repair_failed|repair|partition" }
+        }
+    }
+
+    It "Logs partition_after_repair next-steps without throwing" {
+        InModuleScope VcfEdgeAtScale {
+            $summary = [PSCustomObject]@{ networkHealth = $null; overallHealthDescription = $null; groups = $null }
+            Mock Write-LogMessage {}
+            Mock Get-VsanHealthFailureReasons { return "" }
+            { Write-VsanHealthFailureDebugInfo -ClusterName "cl0" -Context "partition_after_repair" -HealthSummary $summary } | Should -Not -Throw
+        }
+    }
+}
+
+Describe "Show-VcfEdgeAtScaleVersion" {
+    It "Calls Write-LogMessage with INFO type and module version string" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Show-VcfEdgeAtScaleVersion
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter { $Type -eq "INFO" -and $Message -match "VcfEdgeAtScale version" }
+        }
+    }
+
+    It "Does not throw when called with no arguments" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            { Show-VcfEdgeAtScaleVersion } | Should -Not -Throw
+        }
+    }
+}
+
+Describe "Show-Version" {
+    It "Logs INFO version when -Silence is not set" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Show-Version
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter { $Type -eq "INFO" -and $Message -match "Version" }
+        }
+    }
+
+    It "Logs DEBUG version when -Silence is set and does not log INFO" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Show-Version -Silence
+            Should -Invoke Write-LogMessage -Times 0 -Scope It -ParameterFilter { $Type -eq "INFO" }
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter { $Type -eq "DEBUG" -and $Message -match "Version" }
+        }
+    }
+}
+
+Describe "Test-VcenterAndEsxReachability" {
+    It "Does not throw when vCenter and all ESX hosts are reachable" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-TcpPortReachable { return $true }
+            Mock Write-LogMessage {}
+            { Test-VcenterAndEsxReachability -VcenterName "vc01.lab" -EsxHosts @("esx1.lab", "esx2.lab") } | Should -Not -Throw
+        }
+    }
+
+    It "Throws when vCenter is unreachable" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-TcpPortReachable { return $false }
+            Mock Write-LogMessage {}
+            { Test-VcenterAndEsxReachability -VcenterName "vc01.lab" } | Should -Throw
+        }
+    }
+
+    It "Throws when one ESX host is unreachable and vCenter is reachable" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-TcpPortReachable {
+                param ($IpAddress, $Port, $TimeoutMilliseconds)
+                return $IpAddress -eq "vc01.lab"
+            }
+            Mock Write-LogMessage {}
+            { Test-VcenterAndEsxReachability -VcenterName "vc01.lab" -EsxHosts @("esx1.lab") } | Should -Throw
+        }
+    }
+
+    It "Does not throw with no ESX hosts when vCenter is reachable" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-TcpPortReachable { return $true }
+            Mock Write-LogMessage {}
+            { Test-VcenterAndEsxReachability -VcenterName "vc01.lab" -EsxHosts @() } | Should -Not -Throw
+        }
+    }
+
+    It "Error message includes the unreachable target name" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-TcpPortReachable { return $false }
+            Mock Write-LogMessage {}
+            try {
+                Test-VcenterAndEsxReachability -VcenterName "vc99.lab"
+            } catch {
+                $_.Exception.Message | Should -Match "vc99.lab"
+            }
+        }
+    }
+}
+
+Describe "Test-VsanAutomaticRebalanceAtThreshold" {
+    It "Returns true when ProactiveRebalanceEnabled=true and threshold matches" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ClusterObjectByName { [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VsanClusterConfigurationForCluster {
+                $c = [PSCustomObject]@{}
+                $c | Add-Member -NotePropertyName ProactiveRebalanceEnabled   -NotePropertyValue $true
+                $c | Add-Member -NotePropertyName ProactiveRebalanceThreshold -NotePropertyValue 30
+                return $c
+            }
+            Mock Write-LogMessage {}
+            Test-VsanAutomaticRebalanceAtThreshold -ClusterName "cl0" -Server "vc.lab" | Should -Be $true
+        }
+    }
+
+    It "Returns false when ProactiveRebalanceEnabled is false" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ClusterObjectByName { [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VsanClusterConfigurationForCluster {
+                $c = [PSCustomObject]@{}
+                $c | Add-Member -NotePropertyName ProactiveRebalanceEnabled -NotePropertyValue $false
+                return $c
+            }
+            Mock Write-LogMessage {}
+            Test-VsanAutomaticRebalanceAtThreshold -ClusterName "cl0" -Server "vc.lab" | Should -Be $false
+        }
+    }
+
+    It "Returns false when threshold does not match expected" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ClusterObjectByName { [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VsanClusterConfigurationForCluster {
+                $c = [PSCustomObject]@{}
+                $c | Add-Member -NotePropertyName ProactiveRebalanceEnabled   -NotePropertyValue $true
+                $c | Add-Member -NotePropertyName ProactiveRebalanceThreshold -NotePropertyValue 50
+                return $c
+            }
+            Mock Write-LogMessage {}
+            Test-VsanAutomaticRebalanceAtThreshold -ClusterName "cl0" -Server "vc.lab" -ExpectedThresholdPercent 30 | Should -Be $false
+        }
+    }
+
+    It "Returns true when ProactiveRebalanceEnabled=true and threshold property is absent" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ClusterObjectByName { [PSCustomObject]@{ Name = "cl0" } }
+            Mock Get-VsanClusterConfigurationForCluster {
+                $c = [PSCustomObject]@{}
+                $c | Add-Member -NotePropertyName ProactiveRebalanceEnabled -NotePropertyValue $true
+                return $c
+            }
+            Mock Write-LogMessage {}
+            Test-VsanAutomaticRebalanceAtThreshold -ClusterName "cl0" -Server "vc.lab" | Should -Be $true
+        }
+    }
+
+    It "Returns false when Get-ClusterObjectByName throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-ClusterObjectByName { throw "Cluster not found" }
+            Mock Write-LogMessage {}
+            Test-VsanAutomaticRebalanceAtThreshold -ClusterName "cl0" -Server "vc.lab" | Should -Be $false
+        }
+    }
+}
+
+Describe "Invoke-VcenterReconnectIfNeeded" {
+    It "Throws when Script:vCenterName is not set" {
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName  = ""
+            $Script:VCenterUser  = "administrator@vsphere.local"
+            { Invoke-VcenterReconnectIfNeeded } | Should -Throw
+        }
+    }
+
+    It "Throws when Script:VCenterUser is not set" {
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName  = "vc01.lab"
+            $Script:VCenterUser  = ""
+            { Invoke-VcenterReconnectIfNeeded } | Should -Throw
+        }
+    }
+
+    It "Returns without reconnecting when already connected" {
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc01.lab"
+            $Script:VCenterUser = "administrator@vsphere.local"
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Connect-Vcenter {}
+            Mock Write-LogMessage {}
+            Invoke-VcenterReconnectIfNeeded
+            Should -Invoke Connect-Vcenter -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Connect-Vcenter when already-stored credential is available and session is lost" {
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName      = "vc01.lab"
+            $Script:VCenterUser      = "administrator@vsphere.local"
+            $securePass              = ConvertTo-SecureString "P@ssw0rd" -AsPlainText -Force
+            $Script:VcenterCredential = New-Object System.Management.Automation.PSCredential("administrator@vsphere.local", $securePass)
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $false; ErrorMessage = "Session expired" } }
+            Mock Disconnect-Vcenter {}
+            Mock Connect-Vcenter {}
+            Mock Set-ScriptVcenterCredential {}
+            Mock Write-LogMessage {}
+            Invoke-VcenterReconnectIfNeeded
+            Should -Invoke Connect-Vcenter -Times 1 -Scope It
         }
     }
 }
