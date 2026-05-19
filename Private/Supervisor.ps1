@@ -5152,6 +5152,9 @@ Function Test-PhysicalNicConnected {
         .OUTPUTS
         Boolean: $true if the pNIC reports link connected; $false otherwise.
     #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$NicName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,

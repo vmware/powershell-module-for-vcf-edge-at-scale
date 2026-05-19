@@ -2004,7 +2004,7 @@ Function Initialize-VcfEdgeAtScale {
                     $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost : " -AsSecureString -AllowEmpty
                     $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                 }
-                Add-HostToCluster -ClusterName $clusterName -EsxCredential $esxPasswords[$esxHost] -EsxHostName $esxHost -StoragePolicyType $storagePolicyType
+                Add-HostToCluster -ClusterName $clusterName -EsxCredential $esxPasswords[$esxHost] -EsxHostName $esxHost -NicList $nicList -StoragePolicyType $storagePolicyType
                 $hostAddIndex++
             }
 
@@ -2564,9 +2564,9 @@ Function Initialize-VcfEdgeAtScale {
                         }
                         $vdsRemovalSucceeded = $true
                         Write-LogMessage -Type INFO -NoNewline -Message "Removing VDS(es) for cluster `"$clusterName`"... "
-                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName } catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" during rollback: $($_.Exception.Message)." }
-                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" } catch { $vdsRemovalSucceeded = $false }
-                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" } catch { $vdsRemovalSucceeded = $false }
+                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName $vdsName -SkipPortGroupInUseRestoreFallback } catch { $vdsRemovalSucceeded = $false; Write-LogMessage -Type WARNING -Message "Could not remove VDS `"$vdsName`" during rollback: $($_.Exception.Message)." }
+                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw1" -SkipPortGroupInUseRestoreFallback } catch { $vdsRemovalSucceeded = $false }
+                        try { Remove-EdgeClusterDistributedSwitch -ClusterName $clusterName -VdsName "$vdsName-sw2" -SkipPortGroupInUseRestoreFallback } catch { $vdsRemovalSucceeded = $false }
                         if ($vdsRemovalSucceeded) {
                             Write-LogMessage -Type INFO -CompletePending -Message "Done"
                             try {

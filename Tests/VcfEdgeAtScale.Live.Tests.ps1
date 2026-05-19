@@ -202,9 +202,12 @@ Describe "Find-SupervisorByName — live" -Tag "Live" {
     It "Returns null without throwing when supervisor name does not exist" {
         if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
         {
-            InModuleScope VcfEdgeAtScale {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:vcUser, $script:vcPass {
                 Mock Write-LogMessage {}
-                Find-SupervisorByName -SupervisorName "veas-live-test-nonexistent-supervisor-12345"
+                $session = New-VCenterRestApiSession -VcenterUser $args[0] -VcenterInsecurePassword $args[1]
+                if ($session.Success) {
+                    Find-SupervisorByName -SupervisorName "veas-live-test-nonexistent-supervisor-12345" -SessionHeaders $session.SessionHeaders | Out-Null
+                }
             }
         } | Should -Not -Throw
     }
@@ -435,6 +438,303 @@ Describe "Set-VMHostConnectedState — live write" -Tag "Live" {
                 if ($firstHost) {
                     Set-VMHostConnectedState -VMHost $firstHost
                 }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Tier B additions — vSAN storage and networking reads
+# ---------------------------------------------------------------------------
+
+Describe "Get-VsanOsaDiskGroupsOnHost — live" -Tag "Live" {
+    It "Returns without throwing for the first host in the cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                if ($firstHost) {
+                    Get-VsanOsaDiskGroupsOnHost -VMHost $firstHost | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Get-VsanClusterHealthSummaryViaView — live" -Tag "Live" {
+    It "Returns without throwing for the test cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Get-VsanClusterHealthSummaryViaView -ClusterName $args[0] | Out-Null
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Get-VsanOsaEligibleDisksFromCluster — live" -Tag "Live" {
+    It "Returns without throwing for the test cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $hosts = Get-VmHostsInCluster -ClusterName $args[0]
+                if ($hosts) {
+                    Get-VsanOsaEligibleDisksFromCluster -ClusterName $args[0] -ClusterHosts @($hosts) | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Get-EsxUnformattedDisk — live" -Tag "Live" {
+    It "Returns without throwing for the first host in the cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                if ($firstHost) {
+                    Get-EsxUnformattedDisk -EsxHostName $firstHost.Name -VmHost $firstHost -Silence | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Get-VdsListOnHost — live" -Tag "Live" {
+    It "Returns without throwing for the first host in the cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                if ($firstHost) {
+                    Get-VdsListOnHost -VMHost $firstHost | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Get-VirtualSwitchesOnHost — live" -Tag "Live" {
+    It "Returns without throwing for the first host in the cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                if ($firstHost) {
+                    Get-VirtualSwitchesOnHost -VMHost $firstHost | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Test-VsanOsaDiskGroupPresentViaEsxcli — live" -Tag "Live" {
+    It "Returns a boolean without throwing for the first host in the cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+            Mock Write-LogMessage {}
+            $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+            if ($firstHost) {
+                Test-VsanOsaDiskGroupPresentViaEsxcli -VMHost $firstHost
+            } else {
+                $true
+            }
+        }
+        $result | Should -BeOfType [bool]
+    }
+}
+
+Describe "Find-Datastore — live" -Tag "Live" {
+    It "Does not throw an untyped exception when the datastore does not exist" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                $firstHost = (Get-VmHostsInCluster -ClusterName $args[0]) | Select-Object -First 1
+                if ($firstHost) {
+                    try {
+                        Find-Datastore -DatastoreName "veas-live-test-nonexistent-datastore-99999" -EsxHostName $firstHost.Name | Out-Null
+                    } catch [VcfDeploymentException] {
+                        # Expected on production hosts with no unformatted disks — typed exception means correct error handling.
+                    }
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Test-ContentLibraryBySubscriptionUri — live" -Tag "Live" {
+    It "Returns false when no content library matches the subscription URI" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        $result = InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Test-ContentLibraryBySubscriptionUri -SubscriptionUri "https://veas-live-test-nonexistent.example.com/lib.json"
+        }
+        $result | Should -Be $false
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Tier D additions — vSAN cluster and HA write operations
+# ---------------------------------------------------------------------------
+
+Describe "Invoke-AbandonHciWorkflowIfInProgress — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster (no-op when workflow already skipped)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Invoke-AbandonHciWorkflowIfInProgress -ClusterName $args[0]
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Invoke-VsanClusterConfigReapply — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Invoke-VsanClusterConfigReapply -ClusterName $args[0] | Out-Null
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Invoke-ReconfigureClusterHA — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster (re-applies HA/DRS; no state change when already configured)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Invoke-ReconfigureClusterHA -ClusterName $args[0] -DelaySeconds 0
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Set-VsanDomNetworkSchedulerThrottleOnCluster — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster (idempotent: already-set is success)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
+                Mock Write-LogMessage {}
+                Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName $args[0] -Server $args[1] | Out-Null
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Enable-VsanAutomaticRebalance — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Enable-VsanAutomaticRebalance -ClusterName $args[0] | Out-Null
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Enable-VsanAutomaticDiskClaimIfSupported — live write" -Tag "Live" {
+    It "Runs without throwing for the test cluster" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
+                Mock Write-LogMessage {}
+                Enable-VsanAutomaticDiskClaimIfSupported -ClusterName $args[0] | Out-Null
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Test-PhysicalNicConnected — live" -Tag "Live" {
+    It "Returns a boolean for the first physical NIC on the first cluster host" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
+            Mock Write-LogMessage {}
+            $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+            if ($null -ne $hosts -and @($hosts).Count -gt 0) {
+                $nics = Get-VMHostNetworkAdapter -VMHost $hosts[0] -Physical -Server $args[1] -ErrorAction SilentlyContinue
+                if ($null -ne $nics -and @($nics).Count -gt 0) {
+                    $result = Test-PhysicalNicConnected -NicName $nics[0].Name -Server $args[1] -VMHost $hosts[0]
+                    $result | Should -BeOfType [bool]
+                }
+            }
+        }
+    }
+}
+
+Describe "Get-VsanEsaEligibleDisksFromCluster — live" -Tag "Live" {
+    It "Runs without throwing for the test cluster (result may be empty on OSA clusters)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
+                Mock Write-LogMessage {}
+                $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+                if ($null -ne $hosts -and @($hosts).Count -gt 0) {
+                    Get-VsanEsaEligibleDisksFromCluster -ClusterName $args[0] -ClusterHosts $hosts | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Set-VsanDomNetworkSchedulerThrottleOnHost — live write" -Tag "Live" {
+    It "Runs without throwing for the first host in the test cluster (idempotent)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
+                Mock Write-LogMessage {}
+                $hosts = Get-VmHostsInCluster -ClusterName $args[0] -Server $args[1]
+                if ($null -ne $hosts -and @($hosts).Count -gt 0) {
+                    Set-VsanDomNetworkSchedulerThrottleOnHost -VMHost $hosts[0] -Server $args[1] | Out-Null
+                }
+            }
+        } | Should -Not -Throw
+    }
+}
+
+Describe "Invoke-VsanClusterHealthRetestAfterDeployment — live" -Tag "Live" {
+    It "Runs without throwing for the test cluster (non-fatal; skips if Test-VsanClusterHealth unavailable)" {
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
+        {
+            InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
+                Mock Write-LogMessage {}
+                Invoke-VsanClusterHealthRetestAfterDeployment -ClusterName $args[0] -Server $args[1]
             }
         } | Should -Not -Throw
     }

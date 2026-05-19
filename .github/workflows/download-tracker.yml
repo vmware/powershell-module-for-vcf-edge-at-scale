@@ -5,18 +5,18 @@ on:
     - cron: '0 */4 * * *' # Runs every four hours
   workflow_dispatch:      # Allows you to run it manually
 
-permissions:
-  contents: read
-  pull-requests: write
-
 jobs:
+  count-downloads:
+    permissions:
+      contents: read
+      pull-requests: write
   count-downloads:
     runs-on: ubuntu-latest
     steps:
       - name: Fetch and Count Downloads
         run: |
           # We use jq to navigate the JSON structure directly
-          TOTAL_DOWNLOADS=$(curl -s https://api.github.com/repos/vmware/powershell-module-for-simple-supervisor-deployment-at-scale/releases \
+          TOTAL_DOWNLOADS=$(curl -s https://api.github.com/repos/vmware/powershell-module-for-vcf-edge-at-scale/releases \
             | jq '[.[] | .assets[].download_count] | add')
           
           echo "Total Release Downloads: $TOTAL_DOWNLOADS"

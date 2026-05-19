@@ -1,47 +1,7 @@
 # Release Notes
 
-<a id="v1.0.3.1011"></a>
-## 1.0.3.1011
-
-### Release date: 2026-05-19
-
-### Details
-
-- Fix : Resolved a ZTP compatibility issue
-
-<a id="v1.0.3.1010"></a>
-## 1.0.3.1010
-
-### Release date: 2026-05-18
-
-### Details
-
-- Fix : Bypasses the vSAN witness inventory check for 1-node VMFS edge deployments. This ensures that benign, misconfigured witness parameters no longer block installations where a witness isn't actually required.
-- Feature: Allows hosts from existing clusters to be added, provided they have no running VMs.
-- Feature: Added Light-mode support for JSON Generator UI
-
----
-
-<a id="v1.0.3.1009"></a>
-## 1.0.3.1009
-
-### Release date: 2026-05-17
-
-### Details
-- Feature: Added module staleness check: `Start-VcfEdgeAtScale` now detects when the module on disk has been updated since the current PowerShell session imported it and warns the user to open a new window.
-- Security: Windows-equivalent ACL restriction applied for harbor data files (current-user full control, all inherited ACEs stripped) via `System.Security.AccessControl` when running on Windows. The existing `chmod 600` path is unchanged for macOS/Linux. Both platforms now enforce owner-only read on the Harbor data values temp file.
-- Security:  Environment variables `HARBOR_ADMIN_PASSWORD` and `SECRET_KEY` cleared from the process environment after every run (success or failure). Previously, credentials entered interactively via `Resolve-HarborSecretValue` persisted in the process environment for the entire session lifetime.
-- Fix: Converted all remaining plain `throw "string"` sites in `Cluster.ps1`, `Networking.ps1`, and `Supervisor.ps1` (34 locations) to `throw [VcfDeploymentException]::new()` with a preceding `Write-LogMessage -Type ERROR` where not already present. This eliminates double-logging caused by outer generic `catch {}` blocks re-wrapping and re-logging the original message, and ensures all deployment failures route through the `catch [VcfDeploymentException]` handler for clean user-facing output.
-- Fix: Resolved issue with VM detection safeguard during host-add.
-- Fix: Resovled issue with vcf-cli detection edge-case impacting Log creation.
-- Fix: Minor element positioning fixes for JSON generator UI.
-
----
-
-<a id="v1.0.3.1008"></a>
-## 1.0.3.1008
-
-### Release date: 2026-05-15
+<a id="v1.0.3.1012"></a>
+## 1.0.3.1012
 
 ### Details
 - Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.

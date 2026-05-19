@@ -1910,7 +1910,7 @@ Function Show-ConfigurationHelpTable {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Title,
-        [Parameter(Mandatory = $true)] [AllowNull()] [Array]$Config,
+        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyCollection()] [Array]$Config,
         [Parameter(Mandatory = $true)] [ValidateSet('Auto', 'GridView', 'List', 'Table')] [String]$Format,
         [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
     )

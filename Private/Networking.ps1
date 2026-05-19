@@ -330,6 +330,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
 
         .NOTES
         Skips hosts that do not have vmk0 on the specified VDS. Restore is only ever to vSwitch0-restore/Management; the restore vSwitch is created before any move. Order: (1) if vSwitch0-restore already exists with a pNIC and Management port group, move vmk0 there; (2) else if the host has an unused pNIC (not on the VDS), create or complete vSwitch0-restore and Management port group then move vmk0—this path also recovers retry after partial failure; (3) else remove one pNIC from the VDS, create vSwitch0-restore and Management port group, then move vmk0. When creating the Management port group, the VLAN ID from the current management DPG is applied. When removing a pNIC from the VDS, tries lowest-numbered first (e.g. vmnic0 then vmnic1). Moves vmk0 via HostNetworkSystem.UpdateVirtualNic. When move fails, throws with instructions to use vCenter Migrate VMkernel Adapter and retry.
+        When removing a pNIC from the VDS, tries highest-numbered first (e.g. vmnic1 before vmnic0) so the lowest-numbered NIC (typically vmnic0, the original management-bearing NIC) remains on the VDS until it is deleted and is then unassigned. On re-deploy, Get-FirstUnusedNicFromNicList (NicList order) adds that lowest-numbered NIC first, giving deterministic deploy/restore/deploy cycles.
         Returns a result object: RestoreAttempted (bool), Success (bool), HostsRestoredCount (int), Message (string).
         Caller should skip VDS removal when RestoreAttempted is true and Success is false.
     #>
@@ -661,7 +662,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
             }
         }
 
-        # No existing VSS worked and no unused pNIC. Remove one pNIC from the VDS to build vSwitch0-restore. Try lowest-numbered first (e.g. vmnic0) so the other (e.g. vmnic1) stays on the VDS; vSphere often uses the higher uplink for management and may roll back if we remove it first.
+        # No existing VSS worked and no unused pNIC. Remove one pNIC from the VDS to build vSwitch0-restore. Try highest-numbered first (e.g. vmnic1 before vmnic0) so the lowest-numbered NIC stays on the VDS; vmnic0 was the original management-bearing NIC (on vSwitch0 before the VDS was added) and vSphere blocks its removal to avoid losing management.
         $pnicsOnVds = @(Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -VirtualSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
         if (-not $pnicsOnVds -or $pnicsOnVds.Count -eq 0) {
             Write-LogMessage -Type WARNING -Message "Host `"$hostName`" has no pNICs on VDS `"$VdsNameWithMgmt`"; cannot restore management to VSS. Skipping."
@@ -670,7 +671,7 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
         $pnicNamesSorted = @($pnicsOnVds | ForEach-Object { $_.Name } | Sort-Object)
         $pnicToRemove = $null
         $pnicNameForRestore = $null
-        $orderToTry = if ($pnicNamesSorted.Count -ge 2) { @($pnicNamesSorted[0], $pnicNamesSorted[-1]) } else { @($pnicNamesSorted[0]) }
+        $orderToTry = if ($pnicNamesSorted.Count -ge 2) { @($pnicNamesSorted[-1], $pnicNamesSorted[0]) } else { @($pnicNamesSorted[0]) }
         Write-LogMessage -Type INFO -Message "Host `"$hostName`": removing a pNIC from VDS (trying: $($orderToTry -join ', ')); only after removal will we create vSwitch0-restore and Management port group, then move vmk0."
         foreach ($chosenNicName in $orderToTry) {
             $pnicToRemove = Get-VMHostNetworkAdapter -VMHost $vmhost -Physical -Name $chosenNicName -Server $Server -ErrorAction SilentlyContinue
@@ -1239,7 +1240,7 @@ Function Remove-EdgeClusterDistributedSwitch {
         return
     }
 
-    $failedPortGroupNames = [System.Collections.ArrayList]::new()
+    $failedPortGroupNames = [System.Collections.Generic.List[String]]::new()
 
     # Detach all hosts from the VDS (remove every pNIC from the VDS) so port groups can be removed. Without this, Remove-VDPortgroup can fail with "Operation is not valid due to the current state of the object" when hosts are still attached. -WarningAction SilentlyContinue suppresses VMHost.DatastoreIdList deprecation.
     $hostsOnVds = @(Get-VMHost -DistributedSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
