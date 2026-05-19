@@ -27,7 +27,7 @@
 # =============================================================================
 #
 #region Private — cleanup, deployment bootstrap, validation, vLCM helpers
-Function Get-ArgoCDNamespaceFromCluster {
+function Get-ArgoCDNamespaceFromCluster {
 
     <#
         .SYNOPSIS
@@ -65,7 +65,7 @@ Function Get-ArgoCDNamespaceFromCluster {
     }
     return ($prefix + "-" + $moRefId) -replace "--", "-"
 }
-Function Invoke-VcfEdgeAtScaleCleanup {
+function Invoke-VcfEdgeAtScaleCleanup {
     <#
         .SYNOPSIS
         Runs the cleanup workflow for one or more edge clusters (Supervisor-only, Compute-only, All, or ArgoCD). Used by Initialize-VcfEdgeAtScale when -CleanUp is set.
@@ -547,7 +547,7 @@ Function Invoke-VcfEdgeAtScaleCleanup {
         throw [VcfDeploymentException]::new()
     }
 }
-Function Get-VsanWitnessNameForCluster {
+function Get-VsanWitnessNameForCluster {
 
     <#
         .SYNOPSIS
@@ -577,7 +577,7 @@ Function Get-VsanWitnessNameForCluster {
     }
     return $null
 }
-Function Get-EffectiveHaPolicyForCluster {
+function Get-EffectiveHaPolicyForCluster {
 
     <#
         .SYNOPSIS
@@ -618,7 +618,7 @@ Function Get-EffectiveHaPolicyForCluster {
     }
     return "reservationBased"
 }
-Function Get-EffectiveSupervisorServicesYamlPath {
+function Get-EffectiveSupervisorServicesYamlPath {
 
     <#
         .SYNOPSIS
@@ -704,7 +704,7 @@ Function Get-EffectiveSupervisorServicesYamlPath {
 
     return $null
 }
-Function Get-EffectiveArgoCdYamlPath {
+function Get-EffectiveArgoCdYamlPath {
 
     <#
         .SYNOPSIS
@@ -738,7 +738,7 @@ Function Get-EffectiveArgoCdYamlPath {
 
     return Get-EffectiveSupervisorServicesYamlPath -Cluster $Cluster -CommonData $CommonData -LogicalYamlPathPropertyName $PropertyName
 }
-Function Resolve-InfrastructureReferencedFilePath {
+function Resolve-InfrastructureReferencedFilePath {
 
     <#
         .SYNOPSIS
@@ -814,7 +814,7 @@ Function Resolve-InfrastructureReferencedFilePath {
 
     return $trimmed
 }
-Function Update-InfrastructureJsonReferencedFilePaths {
+function Update-InfrastructureJsonReferencedFilePaths {
 
     <#
         .SYNOPSIS
@@ -903,7 +903,7 @@ Function Update-InfrastructureJsonReferencedFilePaths {
         }
     }
 }
-Function Get-EffectiveSupervisorServiceFlag {
+function Get-EffectiveSupervisorServiceFlag {
 
     <#
         .SYNOPSIS
@@ -961,7 +961,7 @@ Function Get-EffectiveSupervisorServiceFlag {
     }
     return $false
 }
-Function Get-EffectiveVmkernelMtu {
+function Get-EffectiveVmkernelMtu {
 
     <#
         .SYNOPSIS
@@ -1014,7 +1014,7 @@ Function Get-EffectiveVmkernelMtu {
     }
     return $DefaultMtu
 }
-Function Invoke-HarborDeploymentPhase {
+function Invoke-HarborDeploymentPhase {
     <#
         .SYNOPSIS
         Deploys the Harbor Supervisor Service for a single edge site.
@@ -1277,7 +1277,7 @@ Function Invoke-HarborDeploymentPhase {
 
     return $harborServiceName
 }
-Function Invoke-ArgoCDDeploymentPhase {
+function Invoke-ArgoCDDeploymentPhase {
     <#
         .SYNOPSIS
         Deploys the Argo CD Supervisor Service for a single edge site.
@@ -1374,7 +1374,7 @@ Function Invoke-ArgoCDDeploymentPhase {
 
     return $argocdVmClass
 }
-Function Initialize-VcfEdgeAtScale {
+function Initialize-VcfEdgeAtScale {
 
     <#
         .SYNOPSIS
@@ -2603,7 +2603,7 @@ Function Initialize-VcfEdgeAtScale {
         $Script:VcenterCredential = $null
     }
 }
-Function ConvertFrom-Yaml {
+function ConvertFrom-Yaml {
 
     <#
     .SYNOPSIS
@@ -2703,7 +2703,7 @@ Function ConvertFrom-Yaml {
         }
     }
 }
-Function ConvertTo-Yaml {
+function ConvertTo-Yaml {
 
     <#
     .SYNOPSIS
@@ -2770,7 +2770,7 @@ Function ConvertTo-Yaml {
         return $yamlContent -join "`n"
     }
 }
-Function ConvertFrom-YamlInternal {
+function ConvertFrom-YamlInternal {
 
     <#
     .SYNOPSIS
@@ -2886,7 +2886,7 @@ Function ConvertFrom-YamlInternal {
     $array[0] = $result
     return $array
 }
-Function Get-YamlLine {
+function Get-YamlLine {
 
     <#
     .SYNOPSIS
@@ -2973,7 +2973,7 @@ Function Get-YamlLine {
 
     return $null
 }
-Function ConvertFrom-YamlValue {
+function ConvertFrom-YamlValue {
 
     <#
     .SYNOPSIS
@@ -3057,7 +3057,7 @@ Function ConvertFrom-YamlValue {
     # Return as string.
     return $Value
 }
-Function Add-ObjectProperty {
+function Add-ObjectProperty {
 
     <#
     .SYNOPSIS
@@ -3113,7 +3113,7 @@ Function Add-ObjectProperty {
 
     $Object[$Path] = $Value
 }
-Function ConvertTo-YamlInternal {
+function ConvertTo-YamlInternal {
 
     <#
     .SYNOPSIS
@@ -3253,7 +3253,7 @@ Function ConvertTo-YamlInternal {
 
     return $yamlLines
 }
-Function ConvertTo-YamlValue {
+function ConvertTo-YamlValue {
 
     <#
     .SYNOPSIS
@@ -3347,7 +3347,7 @@ Function ConvertTo-YamlValue {
         return $Value.ToString()
     }
 }
-Function Test-EsxHostUniqueness {
+function Test-EsxHostUniqueness {
 
     <#
         .SYNOPSIS
@@ -3433,7 +3433,7 @@ Function Test-EsxHostUniqueness {
 
     return $validationResult
 }
-Function Get-NetworkSegmentDetailsFromInputData {
+function Get-NetworkSegmentDetailsFromInputData {
     <#
         .SYNOPSIS
         Collects network segment details (Name, VlanId, EdgeSite) from infrastructure.json input data.
@@ -3486,7 +3486,7 @@ Function Get-NetworkSegmentDetailsFromInputData {
 
     return $networkSegmentDetails
 }
-Function Get-DuplicateNetworkSegmentGroups {
+function Get-DuplicateNetworkSegmentGroups {
     <#
         .SYNOPSIS
         Returns Group-Object groups for network segment names that appear more than once.
@@ -3513,7 +3513,7 @@ Function Get-DuplicateNetworkSegmentGroups {
     $groupedNames = $NetworkSegmentDetails | Group-Object -Property Name
     return $groupedNames | Where-Object { $_.Count -gt 1 }
 }
-Function Test-NetworkSegmentNameUniqueness {
+function Test-NetworkSegmentNameUniqueness {
 
     <#
         .SYNOPSIS
@@ -3608,7 +3608,7 @@ Function Test-NetworkSegmentNameUniqueness {
 
     return $validationResult
 }
-Function Invoke-HarborEnvVarPreflight {
+function Invoke-HarborEnvVarPreflight {
 
     <#
         .SYNOPSIS
@@ -3689,7 +3689,7 @@ Function Invoke-HarborEnvVarPreflight {
         }
     }
 }
-Function Get-VcfEdgeAtScaleConfigUiVersion {
+function Get-VcfEdgeAtScaleConfigUiVersion {
 
     <#
         .SYNOPSIS
@@ -3729,7 +3729,7 @@ Function Get-VcfEdgeAtScaleConfigUiVersion {
     }
     return $null
 }
-Function Sync-VcfEdgeAtScaleConfigUiTool {
+function Sync-VcfEdgeAtScaleConfigUiTool {
 
     <#
         .SYNOPSIS
@@ -3810,7 +3810,7 @@ Function Sync-VcfEdgeAtScaleConfigUiTool {
         Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
     }
 }
-Function Get-VcfEdgeAtScaleUiTemplateVersion {
+function Get-VcfEdgeAtScaleUiTemplateVersion {
 
     <#
         .SYNOPSIS
@@ -3851,7 +3851,7 @@ Function Get-VcfEdgeAtScaleUiTemplateVersion {
     }
     return $null
 }
-Function Sync-VcfEdgeAtScaleUiTemplate {
+function Sync-VcfEdgeAtScaleUiTemplate {
 
     <#
         .SYNOPSIS
@@ -3935,7 +3935,7 @@ Function Sync-VcfEdgeAtScaleUiTemplate {
         Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
     }
 }
-Function Invoke-VcfEdgeAtScaleUpdateCheck {
+function Invoke-VcfEdgeAtScaleUpdateCheck {
 
     <#
         .SYNOPSIS

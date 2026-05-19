@@ -27,7 +27,7 @@
 # =============================================================================
 #
 #region Private — logging, vCenter connectivity, content library, witness prep
-Function Initialize-ScriptVcfPowerCliModuleVersion {
+function Initialize-ScriptVcfPowerCliModuleVersion {
 
     <#
         .SYNOPSIS
@@ -87,7 +87,7 @@ Function Initialize-ScriptVcfPowerCliModuleVersion {
 
     $Script:VcfPowerCliModuleVersion = [Version]$vcfPowerCliRelease
 }
-Function Get-VcfSdkInitializeCommand {
+function Get-VcfSdkInitializeCommand {
 
     <#
         .SYNOPSIS
@@ -125,7 +125,7 @@ Function Get-VcfSdkInitializeCommand {
 
     return $null
 }
-Function Test-VcfPowerCliVersionAtLeast {
+function Test-VcfPowerCliVersionAtLeast {
 
     <#
         .SYNOPSIS
@@ -155,7 +155,7 @@ Function Test-VcfPowerCliVersionAtLeast {
 
     return ($Script:VcfPowerCliModuleVersion -ge $MinimumVersion)
 }
-Function Get-VcenterRestApiPlainPassword {
+function Get-VcenterRestApiPlainPassword {
 
     <#
         .SYNOPSIS
@@ -222,7 +222,7 @@ Function Get-VcenterRestApiPlainPassword {
 
     return $null
 }
-Function ConvertTo-SecureStringForCredential {
+function ConvertTo-SecureStringForCredential {
 
     <#
         .SYNOPSIS
@@ -236,7 +236,7 @@ Function ConvertTo-SecureStringForCredential {
 
     return ConvertTo-SecureString -String $PlainText -AsPlainText -Force
 }
-Function Set-ScriptVcenterCredential {
+function Set-ScriptVcenterCredential {
 
     <#
         .SYNOPSIS
@@ -257,7 +257,7 @@ Function Set-ScriptVcenterCredential {
 
     $Script:VcenterCredential = $Credential
 }
-Function Test-LogLevel {
+function Test-LogLevel {
 
     <#
         .SYNOPSIS
@@ -300,7 +300,7 @@ Function Test-LogLevel {
 
     return ($messageLevel -ge $configuredLevelValue)
 }
-Function Write-ErrorAndReturn {
+function Write-ErrorAndReturn {
 
     <#
         .SYNOPSIS
@@ -378,7 +378,7 @@ Function Write-ErrorAndReturn {
         ErrorCode = $ErrorCode
     }
 }
-Function Get-CleanErrorMessage {
+function Get-CleanErrorMessage {
 
     <#
         .SYNOPSIS
@@ -447,7 +447,7 @@ Function Get-CleanErrorMessage {
         }
     }
 }
-Function Get-CleanServiceErrorMessage {
+function Get-CleanServiceErrorMessage {
 
     <#
         .SYNOPSIS
@@ -558,7 +558,7 @@ Function Get-CleanServiceErrorMessage {
     # Final fallback: return original message.
     return $ErrorMessage
 }
-Function Get-PythonExecutable {
+function Get-PythonExecutable {
 
     <#
         .SYNOPSIS
@@ -604,7 +604,7 @@ Function Get-PythonExecutable {
     }
     return $null
 }
-Function Get-VcfEdgeAtScaleInstallSource {
+function Get-VcfEdgeAtScaleInstallSource {
 
     <#
         .SYNOPSIS
@@ -674,7 +674,7 @@ Function Get-VcfEdgeAtScaleInstallSource {
 
     return "N/A"
 }
-Function Get-EnvironmentSetup {
+function Get-EnvironmentSetup {
 
     <#
         .SYNOPSIS
@@ -829,7 +829,7 @@ Function Get-EnvironmentSetup {
     Write-LogMessage -Type DEBUG -Message "Client Operating System is $operatingSystem."
 
 }
-Function New-LogFile {
+function New-LogFile {
 
     [CmdletBinding(SupportsShouldProcess)]
     <#
@@ -931,7 +931,7 @@ Function New-LogFile {
         }
     }
 }
-Function Write-LogEntryToFile {
+function Write-LogEntryToFile {
 
     <#
         .SYNOPSIS
@@ -964,7 +964,7 @@ Function Write-LogEntryToFile {
         Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen -SuppressOutputToFile
     }
 }
-Function Write-LogMessage {
+function Write-LogMessage {
 
     <#
         .SYNOPSIS
@@ -1173,7 +1173,7 @@ Function Write-LogMessage {
         Write-LogEntryToFile -LogContent ('[' + $timeStamp + '] ' + '(' + $Type + ')' + ' ' + $Message)
     }
 }
-Function Show-Version {
+function Show-Version {
 
     <#
         .SYNOPSIS
@@ -1204,7 +1204,7 @@ Function Show-Version {
         Write-LogMessage -Type DEBUG -Message "Script Version: $Script:ModuleVersion"
     }
 }
-Function Connect-Vcenter {
+function Connect-Vcenter {
 
     <#
         .SYNOPSIS
@@ -1398,7 +1398,7 @@ Function Connect-Vcenter {
         }
     }
 }
-Function Test-VcenterConnection {
+function Test-VcenterConnection {
 
     <#
         .SYNOPSIS
@@ -1538,7 +1538,7 @@ Function Test-VcenterConnection {
         return $result
     }
 }
-Function Invoke-VcenterReconnectIfNeeded {
+function Invoke-VcenterReconnectIfNeeded {
     <#
         .SYNOPSIS
         Ensures an active vCenter connection; if the session was lost, reconnects using stored or prompted credentials.
@@ -1602,7 +1602,7 @@ Function Invoke-VcenterReconnectIfNeeded {
     Set-ScriptVcenterCredential -Credential $vCenterCredential
     Write-LogMessage -Type INFO -Message "Reconnected to vCenter `"$Script:vCenterName`" using prompted credentials."
 }
-Function Disconnect-Vcenter {
+function Disconnect-Vcenter {
 
     <#
         .SYNOPSIS
@@ -1754,7 +1754,7 @@ Function Disconnect-Vcenter {
         }
     }
 }
-Function Test-VCenterVersion {
+function Test-VCenterVersion {
 
     <#
         .SYNOPSIS
@@ -1882,7 +1882,7 @@ Function Test-VCenterVersion {
         return Write-ErrorAndReturn -ErrorMessage "Failed to validate vCenter version for `"$Script:vCenterName`": $_" -ErrorCode "ERR_VALIDATION_EXCEPTION"
     }
 }
-Function Test-ESXVersion {
+function Test-ESXVersion {
 
     <#
         .SYNOPSIS
@@ -1950,7 +1950,7 @@ Function Test-ESXVersion {
         return Write-ErrorAndReturn -ErrorMessage "Failed to validate ESX version for `"$ServerName`": $_" -ErrorCode "ERR_VALIDATION_EXCEPTION"
     }
 }
-Function New-SubscriptionBasedContentLibrary {
+function New-SubscriptionBasedContentLibrary {
 
     <#
         .SYNOPSIS
@@ -2225,7 +2225,7 @@ Function New-SubscriptionBasedContentLibrary {
         throw "Failed to query lifecycle content libraries on `"$Script:vCenterName`". Check logs for details."
     }
 }
-Function Get-SupervisorLifecycleContentLibraries {
+function Get-SupervisorLifecycleContentLibraries {
 
     <#
         .SYNOPSIS
@@ -2327,7 +2327,7 @@ Function Get-SupervisorLifecycleContentLibraries {
         }
     }
 }
-Function Set-SupervisorLifecycleContentLibrary {
+function Set-SupervisorLifecycleContentLibrary {
 
     <#
         .SYNOPSIS
@@ -2407,7 +2407,7 @@ Function Set-SupervisorLifecycleContentLibrary {
         }
     }
 }
-Function Initialize-SupervisorLifecycleContentLibrary {
+function Initialize-SupervisorLifecycleContentLibrary {
 
     <#
         .SYNOPSIS
@@ -2504,7 +2504,7 @@ Function Initialize-SupervisorLifecycleContentLibrary {
         }
     }
 }
-Function Test-ContentLibraryBySubscriptionUri {
+function Test-ContentLibraryBySubscriptionUri {
 
     <#
         .SYNOPSIS
@@ -2591,7 +2591,7 @@ Function Test-ContentLibraryBySubscriptionUri {
         throw [VcfDeploymentException]::new("Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
     }
 }
-Function Initialize-SupervisorContentLibrary {
+function Initialize-SupervisorContentLibrary {
 
     <#
         .SYNOPSIS
@@ -2671,7 +2671,7 @@ Function Initialize-SupervisorContentLibrary {
         Write-LogMessage -Type WARNING -Message "Content library ID not available. Skipping lifecycle content library association."
     }
 }
-Function Set-VclsRetreatModeForCluster {
+function Set-VclsRetreatModeForCluster {
     <#
         .SYNOPSIS
         Puts vSphere Cluster Services (vCLS) in retreat mode for a cluster using the cluster reconfigure API.

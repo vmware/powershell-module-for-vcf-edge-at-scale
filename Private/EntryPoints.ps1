@@ -27,7 +27,7 @@
 # =============================================================================
 #
 #region Exported — entry points, templates, configuration help
-Function Test-VcfEdgeAtScaleDeploymentRootInitialized {
+function Test-VcfEdgeAtScaleDeploymentRootInitialized {
 
     <#
         .SYNOPSIS
@@ -76,7 +76,7 @@ Function Test-VcfEdgeAtScaleDeploymentRootInitialized {
     }
     return $true
 }
-Function Invoke-VcfEdgeAtScaleModuleInitialize {
+function Invoke-VcfEdgeAtScaleModuleInitialize {
 
     <#
         .SYNOPSIS
@@ -563,7 +563,7 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
 
     return $resolvedBaseDirectory
 }
-Function Invoke-VcfEdgeAtScaleCollectLogs {
+function Invoke-VcfEdgeAtScaleCollectLogs {
 
     <#
         .SYNOPSIS
@@ -710,8 +710,7 @@ Function Invoke-VcfEdgeAtScaleCollectLogs {
 
     return $zipDestinationPath
 }
-
-Function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
+function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
 
     <#
         .SYNOPSIS
@@ -750,8 +749,7 @@ Function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
         )
     }
 }
-
-Function Write-VcfDeploymentFailureFooter {
+function Write-VcfDeploymentFailureFooter {
 
     [CmdletBinding()]
     Param ()
@@ -766,8 +764,7 @@ Function Write-VcfDeploymentFailureFooter {
     }
     Write-Host ""
 }
-
-Function Start-VcfEdgeAtScale {
+function Start-VcfEdgeAtScale {
 
     <#
     .SYNOPSIS
@@ -1493,7 +1490,7 @@ Function Start-VcfEdgeAtScale {
         $Global:ProgressPreference = $savedProgressPreference
     }
 }
-Function Show-VcfEdgeAtScaleVersion {
+function Show-VcfEdgeAtScaleVersion {
 
     <#
     .SYNOPSIS
@@ -1513,7 +1510,7 @@ Function Show-VcfEdgeAtScaleVersion {
 
     Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $Script:ModuleVersion"
 }
-Function Get-ModuleTemplatesPath {
+function Get-ModuleTemplatesPath {
 
     <#
         .SYNOPSIS
@@ -1572,7 +1569,7 @@ Function Get-ModuleTemplatesPath {
 
     return $templatesPath
 }
-Function Format-ConfigurationTable {
+function Format-ConfigurationTable {
 
     <#
         .SYNOPSIS
@@ -1631,7 +1628,7 @@ Function Format-ConfigurationTable {
         $allItems | Format-Table -Property 'Key', 'Required', 'Notes' -AutoSize -Wrap
     }
 }
-Function Get-ModulePublicVersion {
+function Get-ModulePublicVersion {
 
     <#
         .SYNOPSIS
@@ -1660,7 +1657,7 @@ Function Get-ModulePublicVersion {
     }
     return $Script:ModuleVersion
 }
-Function Update-HelpJsonIfStale {
+function Update-HelpJsonIfStale {
     <#
         .SYNOPSIS
         Silently copies a help JSON file from the module Templates directory to the user's Docs directory when the version differs or the file is missing.
@@ -1745,7 +1742,7 @@ Function Update-HelpJsonIfStale {
         return $false
     }
 }
-Function Get-ConfigurationHelpData {
+function Get-ConfigurationHelpData {
     <#
         .SYNOPSIS
         Loads and validates a configuration help JSON file from the deployment Docs directory or module Templates directory.
@@ -1880,7 +1877,7 @@ Function Get-ConfigurationHelpData {
 
     return $config
 }
-Function Show-ConfigurationHelpTable {
+function Show-ConfigurationHelpTable {
 
     <#
         .SYNOPSIS
@@ -1959,7 +1956,7 @@ Function Show-ConfigurationHelpTable {
 
     Write-Output "`n"
 }
-Function Show-InfrastructureJsonConfigurationHelp {
+function Show-InfrastructureJsonConfigurationHelp {
 
     <#
         .SYNOPSIS
@@ -2027,7 +2024,7 @@ Function Show-InfrastructureJsonConfigurationHelp {
         Show-ConfigurationHelpTable -Config $config -Format $Format -Title "Infrastructure.json Configuration Reference" -WidthThreshold $WidthThreshold
     }
 }
-Function Show-SupervisorJsonConfigurationHelp {
+function Show-SupervisorJsonConfigurationHelp {
 
     <#
         .SYNOPSIS

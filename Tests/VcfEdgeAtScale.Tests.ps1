@@ -5474,116 +5474,150 @@ Describe "Add-HostToCluster — inventory check routing — mocked vCenter" {
 }
 
 # ── Add-HostToCluster — cross-datacenter host move ────────────────────────────
+#
+# Now that Get-Datacenter calls are wrapped in Get-DatacenterForVMHost /
+# Get-DatacenterForCluster (mockable thin wrappers), these tests call the real
+# Add-HostToCluster rather than inlining production logic.
+#
+# Shared setup notes:
+#   • Host starts in Maintenance so the Set-VMHost-for-maintenance step is skipped,
+#     letting each test focus on its target routing path.
+#   • Three Get-VMHost mock variants differentiate by parameter set:
+#       - ParameterFilter { Location } → $null  (existingHost check at top of function)
+#       - ParameterFilter { ErrorAction -eq "Stop" } → $fakeVerifiedHost  (final verification)
+#       - generic fallback → $fakeHost  (hostForRunningVmCheck and any other SilentlyContinue calls)
+#   • -WaitForAddHostTaskTimeoutSeconds 0 selects the synchronous Add-VMHost path (no task
+#     polling) on the cross-DC add branch; -HostStateChangeDelaySeconds 0 skips the post-add sleep.
 
 Describe "Add-HostToCluster — cross-datacenter host move" {
 
-    It "Sets isCrossDatacenterMove when source and destination datacenter IDs differ" {
-        # Get-Datacenter has ArgumentTransformationAttribute on -VMHost which prevents using
-        # PSCustomObject proxies. Test the ID comparison expression used in production directly.
+    It "Takes the disconnect/remove/add path when source and destination datacenters differ" {
         InModuleScope VcfEdgeAtScale {
-            $srcDcResult = [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Old" }
-            $dstDcResult = [PSCustomObject]@{ Id = "datacenter-2"; Name = "DC-New" }
-            $isCrossDatacenterMove = $false
-            if ($null -ne $srcDcResult -and $null -ne $dstDcResult -and $srcDcResult.Id -ne $dstDcResult.Id) {
-                $isCrossDatacenterMove = $true
-            }
-            $isCrossDatacenterMove | Should -Be $true
-        }
-    }
+            $fakeSrcCluster   = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster  = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost         = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeVerifiedHost = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected";   Parent = $fakeDestCluster }
+            $fakeCred         = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
 
-    It "Does not set isCrossDatacenterMove when source and destination datacenter IDs match" {
-        InModuleScope VcfEdgeAtScale {
-            $sameDcId = "datacenter-1"
-            $srcDcResult = [PSCustomObject]@{ Id = $sameDcId; Name = "DC-Shared" }
-            $dstDcResult = [PSCustomObject]@{ Id = $sameDcId; Name = "DC-Shared" }
-            $isCrossDatacenterMove = $false
-            if ($null -ne $srcDcResult -and $null -ne $dstDcResult -and $srcDcResult.Id -ne $dstDcResult.Id) {
-                $isCrossDatacenterMove = $true
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            $Script:_vmHostCallCount = 0
+            Mock Get-VMHostByName {
+                $Script:_vmHostCallCount++
+                if ($Script:_vmHostCallCount -le 1) { return $fakeHost }
+                return $fakeVerifiedHost
             }
-            $isCrossDatacenterMove | Should -Be $false
-        }
-    }
-
-    It "Logs disconnect message and skips Invoke-MoveVMHostToDestination when isCrossDatacenterMove is true" {
-        # Set-VMHost has ArgumentTransformationAttribute on -VMHost which blocks calling it directly
-        # in the test body. The disconnect log message (written before Set-VMHost) and the absence
-        # of Invoke-MoveVMHostToDestination are used as routing proxies.
-        InModuleScope VcfEdgeAtScale {
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Old" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-2"; Name = "DC-New" } }
+            Mock Set-VMHostState {}
+            Mock Remove-VMHostFromVCenter {}
+            Mock Invoke-AddVMHostToCluster {}
+            Mock Invoke-MoveVMHostToDestination {}
             Mock Write-LogMessage {}
-            Mock Invoke-MoveVMHostToDestination { throw "Should not be called for cross-DC move." }
-            $isCrossDatacenterMove = $true
-            $sourceDatacenterName = "DC-Old"
-            $EsxHostName = "esx01.lab"
-            if ($isCrossDatacenterMove) {
-                Write-LogMessage -Type INFO -NoNewline -Message "Disconnecting host `"$EsxHostName`" from source datacenter `"$sourceDatacenterName`"... "
-            } else {
-                Invoke-MoveVMHostToDestination -VMHost ([PSCustomObject]@{ Name = $EsxHostName }) -Destination "cl-new" -Server "vc.lab"
-            }
-            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Message -like "*Disconnecting*$sourceDatacenterName*" } -Scope It
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred `
+                -WaitForAddHostTaskTimeoutSeconds 0 -HostStateChangeDelaySeconds 0 } | Should -Not -Throw
+
+            Should -Invoke Remove-VMHostFromVCenter       -Times 1 -Scope It
+            Should -Invoke Invoke-AddVMHostToCluster      -Times 1 -Scope It
             Should -Invoke Invoke-MoveVMHostToDestination -Times 0 -Scope It
         }
     }
 
-    It "Calls Invoke-MoveVMHostToDestination and skips disconnect/remove when isCrossDatacenterMove is false" {
+    It "Takes the Move-VMHost path when source and destination datacenters are the same" {
         InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Invoke-MoveVMHostToDestination {}
-            Mock Remove-VMHost { throw "Should not be called for same-DC move." }
-            $isCrossDatacenterMove = $false
-            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
-            $fakeCluster = [PSCustomObject]@{ Name = "cl-new" }
-            if (-not $isCrossDatacenterMove) {
-                Invoke-MoveVMHostToDestination -VMHost $fakeHost -Destination $fakeCluster -Server "vc.lab"
+            $fakeSrcCluster   = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster  = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost         = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeVerifiedHost = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected";   Parent = $fakeDestCluster }
+            $fakeCred         = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            $Script:_vmHostCallCount = 0
+            Mock Get-VMHostByName {
+                $Script:_vmHostCallCount++
+                if ($Script:_vmHostCallCount -le 1) { return $fakeHost }
+                return $fakeVerifiedHost
             }
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Set-VMHostState {}
+            Mock Invoke-MoveVMHostToDestination {}
+            Mock Remove-VMHostFromVCenter {}
+            Mock Invoke-AddVMHostToCluster {}
+            Mock Write-LogMessage {}
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred } | Should -Not -Throw
+
             Should -Invoke Invoke-MoveVMHostToDestination -Times 1 -Scope It
-            Should -Invoke Remove-VMHost -Times 0 -Scope It
+            Should -Invoke Remove-VMHostFromVCenter       -Times 0 -Scope It
+            Should -Invoke Invoke-AddVMHostToCluster      -Times 0 -Scope It
         }
     }
 
     It "Throws VcfDeploymentException when disconnect fails during cross-DC move" {
-        # Set-VMHost has ArgumentTransformationAttribute on -VMHost. Passing a string triggers
-        # PSInvalidCastException. The inner catch in production code handles any exception from
-        # Set-VMHost and re-throws as VcfDeploymentException — this test confirms that contract.
         InModuleScope VcfEdgeAtScale {
+            $fakeSrcCluster  = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost        = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeCred        = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            Mock Get-VMHostByName { $fakeHost }
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Old" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-2"; Name = "DC-New" } }
+            Mock Set-VMHostState { throw "Cannot disconnect." }
             Mock Write-LogMessage {}
-            Mock Set-VMHost { throw "Cannot disconnect." }
-            $isCrossDatacenterMove = $true
-            $EsxHostName = "esx01.lab"
-            $threw = $false
-            try {
-                if ($isCrossDatacenterMove) {
-                    try {
-                        Set-VMHost -VMHost $EsxHostName -Server "vc.lab" -State Disconnected -Confirm:$false -ErrorAction Stop | Out-Null
-                    } catch {
-                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                        Write-LogMessage -Type ERROR -Message "Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)"
-                        throw [VcfDeploymentException]::new("Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)")
-                    }
-                }
-            } catch [VcfDeploymentException] { $threw = $true }
-            $threw | Should -Be $true
-            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*disconnect*cross-datacenter*" } -Scope It
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred } |
+                Should -Throw -ExceptionType ([VcfDeploymentException])
+
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter {
+                $Type -eq "ERROR" -and $Message -like "*disconnect*cross-datacenter*"
+            } -Scope It
         }
     }
 
     It "Throws VcfDeploymentException when Remove-VMHost fails during cross-DC move" {
-        # Tests only the remove step in isolation — Set-VMHost is not involved so no binding issues.
         InModuleScope VcfEdgeAtScale {
+            $fakeSrcCluster  = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost        = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeCred        = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            Mock Get-VMHostByName { $fakeHost }
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Old" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-2"; Name = "DC-New" } }
+            Mock Set-VMHostState {}
+            Mock Remove-VMHostFromVCenter { throw "Remove failed." }
             Mock Write-LogMessage {}
-            Mock Remove-VMHost { throw "Remove failed." }
-            $EsxHostName = "esx01.lab"
-            $threw = $false
-            try {
-                try {
-                    Remove-VMHost -VMHost $EsxHostName -Server "vc.lab" -Confirm:$false -ErrorAction Stop
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)")
-                }
-            } catch [VcfDeploymentException] { $threw = $true }
-            $threw | Should -Be $true
-            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*remove*source vCenter inventory*" } -Scope It
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred } |
+                Should -Throw -ExceptionType ([VcfDeploymentException])
+
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter {
+                $Type -eq "ERROR" -and $Message -like "*remove*source vCenter inventory*"
+            } -Scope It
         }
     }
 }
@@ -5591,49 +5625,64 @@ Describe "Add-HostToCluster — cross-datacenter host move" {
 # ── Add-HostToCluster — maintenance mode before cluster move ──────────────────
 
 Describe "Add-HostToCluster — maintenance mode before cluster move" {
-    # Set-VMHost has ArgumentTransformationAttribute on -VMHost, so Pester only intercepts mocks
-    # for calls originating from within module functions, not from direct inline calls in the test body.
-    # The "calls Set-VMHost" and "post-call state check" paths require live test coverage.
 
     It "Does not call Set-VMHost for maintenance when host ConnectionState is already Maintenance" {
         InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Set-VMHost {}
-            Mock Invoke-MoveVMHostToDestination {}
-            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance" }
-            if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
-                Set-VMHost -VMHost "esx01.lab" -Server "vc.lab" -State Maintenance -Confirm:$false -ErrorAction Stop | Out-Null
+            $fakeSrcCluster   = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster  = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost         = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeVerifiedHost = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected";   Parent = $fakeDestCluster }
+            $fakeCred         = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            $Script:_vmHostCallCount = 0
+            Mock Get-VMHostByName {
+                $Script:_vmHostCallCount++
+                if ($Script:_vmHostCallCount -le 1) { return $fakeHost }
+                return $fakeVerifiedHost
             }
-            Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination "cl-new" -Server "vc.lab"
-            Should -Invoke Set-VMHost -Times 0 -Scope It
-            Should -Invoke Invoke-MoveVMHostToDestination -Times 1 -Scope It
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Set-VMHostState {}
+            Mock Invoke-MoveVMHostToDestination {}
+            Mock Write-LogMessage {}
+
+            Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred
+
+            Should -Invoke Set-VMHostState -Times 0 -ParameterFilter { $State -eq "Maintenance" } -Scope It
         }
     }
 
-    It "Logs the error and throws VcfDeploymentException when Set-VMHost -State Maintenance fails" {
-        # Outer catch swallows the re-throw so Should -Invoke can execute after the throw.
-        # Note: whether the mock intercepts or the real cmdlet throws PSInvalidCastException, the
-        # general catch block writes the expected ERROR log message either way.
+    It "Throws VcfDeploymentException when Set-VMHost for maintenance fails" {
         InModuleScope VcfEdgeAtScale {
+            $fakeSrcCluster  = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost        = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected"; Parent = $fakeSrcCluster }
+            $fakeCred        = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            Mock Get-VMHostByName { $fakeHost }
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Set-VMHostState { if ($State -eq "Maintenance") { throw "Maintenance mode entry failed." } }
             Mock Write-LogMessage {}
-            Mock Set-VMHost { throw "Maintenance mode entry failed." }
-            Mock Get-VMHost { $null }
-            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Connected" }
-            $EsxHostName = "esx01.lab"
-            try {
-                if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
-                    try {
-                        Set-VMHost -VMHost $EsxHostName -Server "vc.lab" -State Maintenance -Confirm:$false -ErrorAction Stop | Out-Null
-                    } catch [VcfDeploymentException] {
-                        throw
-                    } catch {
-                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                        Write-LogMessage -Type ERROR -Message "Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message). To recover: place `"$EsxHostName`" in maintenance mode manually in vCenter and re-run the deployment."
-                        throw [VcfDeploymentException]::new("Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message)")
-                    }
-                }
-            } catch {}
-            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*maintenance mode*" } -Scope It
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred } |
+                Should -Throw -ExceptionType ([VcfDeploymentException])
+
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter {
+                $Type -eq "ERROR" -and $Message -like "*maintenance mode*"
+            } -Scope It
         }
     }
 }
@@ -5642,29 +5691,34 @@ Describe "Add-HostToCluster — maintenance mode before cluster move" {
 
 Describe "Add-HostToCluster — Move-VMHost error detail logging" {
 
-    It "Logs the vCenter error detail via Write-LogMessage when Invoke-MoveVMHostToDestination throws" {
-        # Regression: prior to fix, the error was only in VcfDeploymentException; the top-level catch
-        # assumed it was already logged so the operator saw only "Failed." with no cause.
-        # Outer catch swallows the re-throw so Should -Invoke can execute after the throw.
+    It "Logs vCenter error detail via Write-LogMessage when Invoke-MoveVMHostToDestination throws" {
+        # Regression: prior to fix, the error was only in VcfDeploymentException; the top-level
+        # catch assumed it was already logged so the operator saw only "Failed." with no cause.
         InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
+            $fakeSrcCluster  = [PSCustomObject]@{ Name = "source-cluster" }
+            $fakeDestCluster = [PSCustomObject]@{ Name = "dest-cluster" }
+            $fakeHost        = [PSCustomObject]@{ Name = "esx01.lab"; ConnectionState = "Maintenance"; Parent = $fakeSrcCluster }
+            $fakeCred        = [PSCredential]::new("root", (ConvertTo-SecureString "x" -AsPlainText -Force))
+            $Script:vCenterName = "vc.lab"
+
+            Mock Test-VcenterConnection { [PSCustomObject]@{ IsConnected = $true; ErrorMessage = "" } }
+            Mock Get-ClusterObjectByName { if ($ClusterName -eq "dest-cluster") { return $fakeDestCluster }; return $fakeSrcCluster }
+            Mock Get-VMHostByName { $fakeHost }
+            Mock Get-RunningVmsOnHost { @() }
+            Mock Test-HostHasRequiredNics { [PSCustomObject]@{ IsValid = $true; MissingNics = @() } }
+            Mock Invoke-PrepareHostForClusterMove {}
+            Mock Get-DatacenterForVMHost { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Get-DatacenterForCluster { [PSCustomObject]@{ Id = "datacenter-1"; Name = "DC-Shared" } }
+            Mock Set-VMHostState {}
             Mock Invoke-MoveVMHostToDestination { throw "The operation is not allowed in the current state." }
-            $hostForRunningVmCheck = [PSCustomObject]@{ Name = "10.1.1.220"; ConnectionState = "Connected" }
-            $EsxHostName = "10.1.1.220"
-            $ClusterName = "cluster-edge-site-1"
-            $Script:vCenterName = "vc-wld01.lab"
-            try {
-                try {
-                    Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination "cl" -Server "vc.lab"
-                } catch [VcfDeploymentException] {
-                    throw
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
-                }
-            } catch {}
-            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "ERROR" -and $Message -like "*not allowed in the current state*" } -Scope It
+            Mock Write-LogMessage {}
+
+            { Add-HostToCluster -ClusterName "dest-cluster" -EsxHostName "esx01.lab" -EsxCredential $fakeCred } |
+                Should -Throw -ExceptionType ([VcfDeploymentException])
+
+            Should -Invoke Write-LogMessage -Times 1 -ParameterFilter {
+                $Type -eq "ERROR" -and $Message -like "*not allowed in the current state*"
+            } -Scope It
         }
     }
 }
@@ -6437,11 +6491,31 @@ Describe "Get-ManagementVSwitchInfo — logic paths" {
             Mock Get-VirtualPortGroupsOnSwitch { return @($fakePg) }
             # vmk0 IS on this port group.
             Mock Get-VmkernelOnPortGroup { return @($fakeVmk0) }
-            Mock Get-PhysicalNicsOnVdsForHost { return @($fakePnic) }
+            Mock Get-PhysicalNicsOnVssForHost { return @($fakePnic) }
             Get-ManagementVSwitchInfo -VMHost $fakeHost
         }
         $result | Should -Not -Be $null
         $result.PnicNames | Should -Contain "vmnic0"
+    }
+
+    It "Returns both pNIC names sorted when vSS has two uplinks" {
+        $result = InModuleScope VcfEdgeAtScale {
+            $fakeVmk0  = [PSCustomObject]@{ Name = "vmk0" }
+            $fakeVss   = [PSCustomObject]@{ Name = "vSwitch0" }
+            $fakePg    = [PSCustomObject]@{ Name = "Management Network"; VLanID = 0 }
+            $fakePnic0 = [PSCustomObject]@{ Name = "vmnic0" }
+            $fakePnic1 = [PSCustomObject]@{ Name = "vmnic1" }
+            $fakeHost  = [PSCustomObject]@{ Name = "esx01.lab" }
+            Mock Get-VmkernelAdaptersOnHost { return @($fakeVmk0) }
+            Mock Get-VirtualSwitchesOnHost { return @($fakeVss) }
+            Mock Get-VirtualPortGroupsOnSwitch { return @($fakePg) }
+            Mock Get-VmkernelOnPortGroup { return @($fakeVmk0) }
+            Mock Get-PhysicalNicsOnVssForHost { return @($fakePnic1, $fakePnic0) }
+            Get-ManagementVSwitchInfo -VMHost $fakeHost
+        }
+        $result | Should -Not -Be $null
+        $result.PnicNames | Should -Be @("vmnic0", "vmnic1")
+        $result.PnicNames.Count | Should -Be 2
     }
 }
 
@@ -9353,5 +9427,318 @@ Describe "Wait-SupervisorDiscoverable — mocked REST" {
             $result.Success      | Should -Be $false
             $result.ErrorMessage | Should -BeLike "*Connection refused*"
         }
+    }
+}
+
+Describe "Invoke-MigrateHostManagementToVds — guard conditions and 2-pNIC vSS routing" {
+    It "Throws VcfDeploymentException when Get-ManagementVSwitchInfo returns null" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            Mock Write-LogMessage {}
+            Mock Get-VdsObjectByName { return $null }
+            Mock Get-ManagementVSwitchInfo { return $null }
+            $nicList = @([PSCustomObject]@{ Name = "vmnic0" })
+            Invoke-MigrateHostManagementToVds -VMHost ([PSCustomObject]@{ Name = "esx01.lab" }) -VdsName "test-vds" -NicList $nicList
+        } } | Should -Throw "*vmk0 is not on a standard switch*"
+    }
+
+    It "Throws VcfDeploymentException when management vSS has no pNIC uplinks" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            Mock Write-LogMessage {}
+            Mock Get-VdsObjectByName { return $null }
+            Mock Get-ManagementVSwitchInfo {
+                return [PSCustomObject]@{
+                    ManagementPortGroupVlanId = 0
+                    ManagementVmkernel       = [PSCustomObject]@{ Name = "vmk0" }
+                    PnicNames                = @()
+                    StandardSwitch           = [PSCustomObject]@{ Name = "vSwitch0" }
+                }
+            }
+            $nicList = @([PSCustomObject]@{ Name = "vmnic0" })
+            Invoke-MigrateHostManagementToVds -VMHost ([PSCustomObject]@{ Name = "esx01.lab" }) -VdsName "test-vds" -NicList $nicList
+        } } | Should -Throw "*management vSwitch has no pNICs*"
+    }
+
+    It "2-pNIC management vSS: selects vmnic0 from vSS pNICs and logs the 2-pNIC path message" {
+        # Verifies that when Get-FirstUnusedNicFromNicList returns null (all NicList pNICs are
+        # assigned) and none are yet on the VDS, the function picks the first matching vSS pNIC
+        # ("vmnic0") and logs the expected INFO message. The test mocks both Get-VdsObjectByName
+        # calls with an ordered counter so the vmk0-VDS idempotency check is skipped (1st call →
+        # null) while the main migration path proceeds (2nd call → fakeVds). The function may
+        # throw after the log message due to remaining PowerCLI calls lacking live wrappers; the
+        # try/catch allows the assertion to run regardless.
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName                = "vc.lab"
+            $Script:DidMigrateVmk0ToVdsThisRun = $false
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeVds  = [PSCustomObject]@{
+                Name          = "test-vds"
+                ExtensionData = [PSCustomObject]@{
+                    Config = [PSCustomObject]@{
+                        UplinkPortPolicy = [PSCustomObject]@{ UplinkPortName = @("uplink1", "uplink2") }
+                    }
+                }
+            }
+            $fakeVss  = [PSCustomObject]@{ Name = "vSwitch0" }
+            $fakeVmk0 = [PSCustomObject]@{ Name = "vmk0" }
+
+            Mock Write-LogMessage {}
+            $Script:_vdsCount = 0
+            Mock Get-VdsObjectByName {
+                $Script:_vdsCount++
+                if ($Script:_vdsCount -le 1) { return $null }
+                return $fakeVds
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @() }
+            Mock Get-ManagementVSwitchInfo {
+                return [PSCustomObject]@{
+                    ManagementPortGroupVlanId = 0
+                    ManagementVmkernel       = $fakeVmk0
+                    PnicNames                = @("vmnic0", "vmnic1")
+                    StandardSwitch           = $fakeVss
+                }
+            }
+            Mock Get-FirstUnusedNicFromNicList { return $null }
+            Mock Get-PhysicalNicsOnVdsForHost { return @() }
+
+            $nicList = @(
+                [PSCustomObject]@{ Name = "vmnic0" },
+                [PSCustomObject]@{ Name = "vmnic1" }
+            )
+            try {
+                Invoke-MigrateHostManagementToVds -VMHost $fakeHost -VdsName "test-vds" -NicList $nicList -ManagementPortGroupName "mgmt"
+            } catch { }
+
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter {
+                $Message -like "*all NicList pNICs are on the management vSS*" -and $Message -like "*vmnic0*"
+            }
+        }
+    }
+}
+
+Describe "Invoke-MigrateHostManagementToVds — 3-pNIC vSS extra uplink loop" {
+    # Tests for the 3-pNIC vSS path. These tests assert on log messages emitted BEFORE
+    # the first raw PowerCLI call (Get-VDPortgroup -VDSwitch) because that cmdlet's
+    # ArgumentTransformationAttribute blocks PSCustomObject mock arguments. The loop itself
+    # (Select-Object -Skip 1 over vssPnicsToReclaimAfterVssRemoval) would require wrappers
+    # around the inner Add-VDSwitchPhysicalNetworkAdapter and Get-VMHostNetworkAdapter calls
+    # to be verifiable in a unit test.
+
+    It "3-pNIC vSS: selects vmnic0 as first pNIC and logs the all-on-vSS path message" {
+        # Verifies that when the management vSS has three uplinks and Get-FirstUnusedNicFromNicList
+        # returns null (all NicList pNICs are on the vSS), the function picks the first NicList
+        # pNIC on the vSS ("vmnic0") and logs the expected INFO message. With 3 vSS pNICs,
+        # vssPnicsToReclaimAfterVssRemoval = [vmnic1, vmnic2], giving the loop [vmnic2] via
+        # Select-Object -Skip 1 — the loop itself cannot be verified here without additional wrappers.
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName                = "vc.lab"
+            $Script:DidMigrateVmk0ToVdsThisRun = $false
+
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeVds  = [PSCustomObject]@{
+                Name          = "test-vds"
+                ExtensionData = [PSCustomObject]@{
+                    Config = [PSCustomObject]@{
+                        UplinkPortPolicy = [PSCustomObject]@{ UplinkPortName = @("uplink1", "uplink2", "uplink3") }
+                    }
+                }
+            }
+            $fakeVss  = [PSCustomObject]@{ Name = "vSwitch0" }
+            $fakeVmk0 = [PSCustomObject]@{ Name = "vmk0" }
+
+            Mock Write-LogMessage {}
+            $Script:_vdsCount = 0
+            Mock Get-VdsObjectByName {
+                $Script:_vdsCount++
+                if ($Script:_vdsCount -le 1) { return $null }
+                return $fakeVds
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @() }
+            Mock Get-ManagementVSwitchInfo {
+                return [PSCustomObject]@{
+                    ManagementPortGroupVlanId = 0
+                    ManagementVmkernel       = $fakeVmk0
+                    PnicNames                = @("vmnic0", "vmnic1", "vmnic2")
+                    StandardSwitch           = $fakeVss
+                }
+            }
+            Mock Get-FirstUnusedNicFromNicList { return $null }
+            Mock Get-PhysicalNicsOnVdsForHost { return @() }
+
+            $nicList = @(
+                [PSCustomObject]@{ Name = "vmnic0" },
+                [PSCustomObject]@{ Name = "vmnic1" },
+                [PSCustomObject]@{ Name = "vmnic2" }
+            )
+            try {
+                Invoke-MigrateHostManagementToVds -VMHost $fakeHost -VdsName "test-vds" -NicList $nicList -ManagementPortGroupName "mgmt"
+            } catch { }
+
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter {
+                $Message -like "*all NicList pNICs are on the management vSS*" -and $Message -like "*vmnic0*"
+            }
+        }
+    }
+
+    It "3-pNIC vSS: does not take the error path when all NicList pNICs are on the vSS" {
+        # Verifies the function does NOT log the error "none are on the management vSS" when
+        # all three NicList pNICs are present on the vSS. This distinguishes the 3-pNIC
+        # success path from the error path (which fires when NicList pNICs are assigned
+        # elsewhere and none match any vSS pNIC).
+        InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName                = "vc.lab"
+            $Script:DidMigrateVmk0ToVdsThisRun = $false
+
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeVds  = [PSCustomObject]@{
+                Name          = "test-vds"
+                ExtensionData = [PSCustomObject]@{
+                    Config = [PSCustomObject]@{
+                        UplinkPortPolicy = [PSCustomObject]@{ UplinkPortName = @("uplink1", "uplink2", "uplink3") }
+                    }
+                }
+            }
+            $fakeVss  = [PSCustomObject]@{ Name = "vSwitch0" }
+            $fakeVmk0 = [PSCustomObject]@{ Name = "vmk0" }
+
+            Mock Write-LogMessage {}
+            $Script:_vdsCount = 0
+            Mock Get-VdsObjectByName {
+                $Script:_vdsCount++
+                if ($Script:_vdsCount -le 1) { return $null }
+                return $fakeVds
+            }
+            Mock Get-VmkernelAdaptersOnHost { return @() }
+            Mock Get-ManagementVSwitchInfo {
+                return [PSCustomObject]@{
+                    ManagementPortGroupVlanId = 0
+                    ManagementVmkernel       = $fakeVmk0
+                    PnicNames                = @("vmnic0", "vmnic1", "vmnic2")
+                    StandardSwitch           = $fakeVss
+                }
+            }
+            Mock Get-FirstUnusedNicFromNicList { return $null }
+            Mock Get-PhysicalNicsOnVdsForHost { return @() }
+
+            $nicList = @(
+                [PSCustomObject]@{ Name = "vmnic0" },
+                [PSCustomObject]@{ Name = "vmnic1" },
+                [PSCustomObject]@{ Name = "vmnic2" }
+            )
+            try {
+                Invoke-MigrateHostManagementToVds -VMHost $fakeHost -VdsName "test-vds" -NicList $nicList -ManagementPortGroupName "mgmt"
+            } catch { }
+
+            Should -Invoke Write-LogMessage -Times 0 -Scope It -ParameterFilter {
+                $Type -eq "ERROR" -and $Message -like "*none are on the management vSS*"
+            }
+        }
+    }
+}
+
+Describe "Get-DatacenterForVMHost — wrapper pass-through" {
+    # Get-Datacenter has ArgumentTransformationAttribute on -VMHost (expects VIHost[], rejects PSCustomObject).
+    # The wrapper's value is that its own -VMHost is [PSObject], so callers can mock it with PSCustomObject
+    # fixtures. Verify that structural contract.
+    It "Defines VMHost as [PSObject] so callers can mock it without ArgumentTransformationAttribute errors" {
+        InModuleScope VcfEdgeAtScale {
+            $cmd = Get-Command -Name "Get-DatacenterForVMHost"
+            $cmd | Should -Not -BeNull
+            $cmd.Parameters["VMHost"].ParameterType.FullName | Should -Be "System.Management.Automation.PSObject"
+        }
+    }
+}
+
+Describe "Get-DatacenterForCluster — wrapper pass-through" {
+    # Get-Datacenter has ArgumentTransformationAttribute on -Cluster (expects Cluster[], rejects PSCustomObject).
+    # The wrapper's value is that its own -Cluster is [PSObject], so callers can mock it with PSCustomObject
+    # fixtures. Verify that structural contract.
+    It "Defines Cluster as [PSObject] so callers can mock it without ArgumentTransformationAttribute errors" {
+        InModuleScope VcfEdgeAtScale {
+            $cmd = Get-Command -Name "Get-DatacenterForCluster"
+            $cmd | Should -Not -BeNull
+            $cmd.Parameters["Cluster"].ParameterType.FullName | Should -Be "System.Management.Automation.PSObject"
+        }
+    }
+}
+
+Describe "Invoke-AddHostToClusterRunningVmSafetyCheck — prompt routing" {
+    It "Returns without throwing when the host has no powered-on VMs" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = [PSCustomObject]@{ Name = "SomeFolder" } }
+            Mock Write-LogMessage {}
+            Mock Get-AllVmsFromServer { return @() }
+            Invoke-AddHostToClusterRunningVmSafetyCheck -VMHost $fakeHost -EsxHostName "esx01.lab" -ClusterName "TestCluster" -Server "vc.lab"
+        } } | Should -Not -Throw
+    }
+
+    It "Does not throw when operator answers Y to the running-VM prompt" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            $fakeVm   = [PSCustomObject]@{
+                Name       = "test-vm"
+                PowerState = "PoweredOn"
+                VMHost     = [PSCustomObject]@{ Name = "esx01.lab" }
+                Guest      = [PSCustomObject]@{ OSFullName = "Ubuntu Linux" }
+            }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = [PSCustomObject]@{ Name = "SomeFolder" } }
+            Mock Write-LogMessage {}
+            Mock Get-AllVmsFromServer { return @($fakeVm) }
+            Mock Read-Host { return "Y" }
+            Invoke-AddHostToClusterRunningVmSafetyCheck -VMHost $fakeHost -EsxHostName "esx01.lab" -ClusterName "TestCluster" -Server "vc.lab"
+        } } | Should -Not -Throw
+    }
+
+    It "Throws VcfDeploymentException when operator presses Enter (default N) at the running-VM prompt" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            $fakeVm   = [PSCustomObject]@{
+                Name       = "test-vm"
+                PowerState = "PoweredOn"
+                VMHost     = [PSCustomObject]@{ Name = "esx01.lab" }
+                Guest      = [PSCustomObject]@{ OSFullName = "Ubuntu Linux" }
+            }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = [PSCustomObject]@{ Name = "SomeFolder" } }
+            Mock Write-LogMessage {}
+            Mock Get-AllVmsFromServer { return @($fakeVm) }
+            Mock Read-Host { return "" }
+            Invoke-AddHostToClusterRunningVmSafetyCheck -VMHost $fakeHost -EsxHostName "esx01.lab" -ClusterName "TestCluster" -Server "vc.lab"
+        } } | Should -Throw "*Deployment failed*"
+    }
+
+    It "Throws VcfDeploymentException when operator answers N at the running-VM prompt" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            $fakeVm   = [PSCustomObject]@{
+                Name       = "test-vm"
+                PowerState = "PoweredOn"
+                VMHost     = [PSCustomObject]@{ Name = "esx01.lab" }
+                Guest      = [PSCustomObject]@{ OSFullName = "Ubuntu Linux" }
+            }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = [PSCustomObject]@{ Name = "SomeFolder" } }
+            Mock Write-LogMessage {}
+            Mock Get-AllVmsFromServer { return @($fakeVm) }
+            Mock Read-Host { return "N" }
+            Invoke-AddHostToClusterRunningVmSafetyCheck -VMHost $fakeHost -EsxHostName "esx01.lab" -ClusterName "TestCluster" -Server "vc.lab"
+        } } | Should -Throw "*Deployment failed*"
+    }
+
+    It "Throws VcfDeploymentException when Read-Host throws (non-interactive) with running VMs present" {
+        { InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
+            $fakeVm   = [PSCustomObject]@{
+                Name       = "test-vm"
+                PowerState = "PoweredOn"
+                VMHost     = [PSCustomObject]@{ Name = "esx01.lab" }
+                Guest      = [PSCustomObject]@{ OSFullName = "Ubuntu Linux" }
+            }
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab"; Parent = [PSCustomObject]@{ Name = "SomeFolder" } }
+            Mock Write-LogMessage {}
+            Mock Get-AllVmsFromServer { return @($fakeVm) }
+            Mock Read-Host { throw "Cannot prompt in non-interactive mode." }
+            Invoke-AddHostToClusterRunningVmSafetyCheck -VMHost $fakeHost -EsxHostName "esx01.lab" -ClusterName "TestCluster" -Server "vc.lab"
+        } } | Should -Throw "*Deployment failed*"
     }
 }
