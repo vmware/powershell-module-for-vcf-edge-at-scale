@@ -172,6 +172,11 @@
     "Notes": "Unique site ID; must match one siteSpec[].edgeSite in supervisor.json."
   },
   {
+    "Key": "clusters[].overrideClusterName",
+    "Required": "No",
+    "Notes": "Overrides the auto-generated vSphere cluster name for this site. When set, replaces the {clusterNamePrefix}-{edgeSite} formula entirely for this cluster only. Must be 1-80 characters; allowed characters: alphanumeric, spaces, _, +, -, (), . Omit to use the generated name."
+  },
+  {
     "Key": "clusters[].esxHosts",
     "Required": "Yes",
     "Notes": "Array of ESX FQDNs or IPs; script needs HTTPS access to each host."

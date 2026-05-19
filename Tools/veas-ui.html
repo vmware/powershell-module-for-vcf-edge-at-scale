@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1015 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1016 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
@@ -1626,6 +1626,7 @@ function _createSite(id, name) {
     esxHosts:           [],
     nicList:            [],
     storageType:        _DEFAULT_STORAGE_TYPE,
+    overrideClusterName: '',
     vSanWitnessVmName:  '',
     haPolicy:           '',
     segments:           [],       // networkSegments: [{ name, vlanId, gateway }]
@@ -2368,6 +2369,15 @@ function _renderSiteHeaderFields(site) {
           <option value="slotBased" ${site.haPolicy==='slotBased'?'selected':''}>slotBased</option>
           <option value="disabled" ${site.haPolicy==='disabled'?'selected':''}>disabled</option>
         </select>
+      </div>
+      <div class="field">
+        <label>Cluster Name Override <span class="tip">optional</span>${tt('Override the vSphere cluster name for this site. When set, replaces the generated {prefix}-{edgeSite} name entirely. Allowed: 1–80 chars, alphanumeric with spaces, _, +, -, (), . Leave blank to use the generated name.')}</label>
+        <input type="text" value="${esc(site.overrideClusterName)}" placeholder="Leave blank to use generated name"
+          data-err-id="overrideClusterNameErr_${site.id}"
+          oninput="updateSiteField(${site.id},'overrideClusterName',this.value)"
+          onblur="validateSegField(this,'vsphereObjectName',null,true)">
+        <span class="field-inline-err" id="overrideClusterNameErr_${site.id}"></span>
+        <span class="field-hint">Optional. Overrides the auto-generated cluster name for this site only.</span>
       </div>
     </div>`;
 }
@@ -3245,6 +3255,7 @@ function buildPayload() {
     edgeSite: site.edgeSite,
     esxHosts: Array.isArray(site.esxHosts) ? site.esxHosts : (site.esxHosts || '').split(',').map(h => h.trim()).filter(Boolean),
     nicList: (site.nicList || []).map(name => ({ name })),
+    overrideClusterName: site.overrideClusterName || '',
     vSanWitnessVmName: site.vSanWitnessVmName || '',
     haPolicy: site.haPolicy || '',
     storagePolicy: { storageType: site.storageType },
@@ -4637,6 +4648,7 @@ function _diffClusters(origInfra, infra, chg) {
     const sec = `Site: ${site}`;
     chg(sec, 'storageType', (oC.storagePolicy||{}).storageType||'', (nC.storagePolicy||{}).storageType||'');
     chg(sec, 'esxHosts', (oC.esxHosts||[]).join(', '), (nC.esxHosts||[]).join(', '));
+    chg(sec, 'overrideClusterName', oC.overrideClusterName, nC.overrideClusterName);
     chg(sec, 'vSanWitnessVmName', oC.vSanWitnessVmName, nC.vSanWitnessVmName);
     chg(sec, 'haPolicy', oC.haPolicy, nC.haPolicy);
     chg(sec, 'nicList', (oC.nicList||[]).map(_nicName).join(', '), (nC.nicList||[]).map(_nicName).join(', '));
@@ -5092,6 +5104,7 @@ function _buildSiteFromCluster(cluster, supSite, id) {
     esxHosts: cluster.esxHosts || [],
     nicList: (cluster.nicList || []).map(n => typeof n === 'string' ? n : (n.name || '')).filter(Boolean),
     storageType: (cluster.storagePolicy || {}).storageType || 'VMFS',
+    overrideClusterName: cluster.overrideClusterName || '',
     vSanWitnessVmName: cluster.vSanWitnessVmName || '',
     haPolicy: cluster.haPolicy || '',
     segments: ((cluster.networking || {}).networkSegments || []).map(seg => ({

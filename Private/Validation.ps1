@@ -160,7 +160,7 @@ function Invoke-VcfEdgeAtScaleCleanup {
     Write-LogMessage -Type INFO -Message "CleanUp is set to `"$cleanupScope`". Cleaning up per scope, then exiting without deploying."
     foreach ($cluster in $ClustersToProcess) {
         $currentEdgeSite = $cluster.edgeSite
-        $clusterName = Get-ClusterNameFromPrefix -ClusterNamePrefix $ClusterNamePrefix -EdgeSite $currentEdgeSite
+        $clusterName = Get-EffectiveClusterName -Cluster $cluster -ClusterNamePrefix $ClusterNamePrefix -EdgeSite $currentEdgeSite
         $storagePolicyType = $null
         $storagePolicyTagCatalog = $null
         if ($cluster.storagePolicy) {
@@ -617,6 +617,53 @@ function Get-EffectiveHaPolicyForCluster {
         }
     }
     return "reservationBased"
+}
+function Get-EffectiveClusterName {
+
+    <#
+        .SYNOPSIS
+        Resolves the vSphere cluster name for an edge site.
+
+        .DESCRIPTION
+        Returns clusters[].overrideClusterName when it is present and non-empty, after validating that the
+        value conforms to vSphere object name constraints (1-80 characters; alphanumeric, spaces, _, +, -, (), .).
+        Falls back to the generated name when the key is absent or empty.
+
+        .PARAMETER Cluster
+        Cluster object from infrastructure JSON (may have overrideClusterName).
+
+        .PARAMETER ClusterNamePrefix
+        Common cluster name prefix used when generating the default name.
+
+        .PARAMETER EdgeSite
+        Edge site identifier used when generating the default name.
+
+        .OUTPUTS
+        String: the effective vSphere cluster name for this edge site.
+
+        .EXAMPLE
+        $clusterName = Get-EffectiveClusterName -Cluster $cluster -ClusterNamePrefix "cl0" -EdgeSite "site1"
+        # Returns "cl0-site1" when overrideClusterName is absent, or the override value when set.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterNamePrefix,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite
+    )
+
+    if ($Cluster.PSObject.Properties["overrideClusterName"] -and -not [String]::IsNullOrWhiteSpace($Cluster.overrideClusterName)) {
+        $overrideName = ([String]$Cluster.overrideClusterName).Trim()
+        if ($overrideName -notmatch '^[a-zA-Z0-9 _+\-().]{1,80}$') {
+            Write-LogMessage -Type ERROR -Message "clusters[$EdgeSite].overrideClusterName `"$overrideName`": must be 1-80 characters, alphanumeric with spaces, _, +, -, (), ."
+            throw [VcfDeploymentException]::new("clusters[$EdgeSite].overrideClusterName failed validation. See log for details.")
+        }
+        Write-LogMessage -Type DEBUG -Message "Using overrideClusterName `"$overrideName`" for edgeSite `"$EdgeSite`" (overrides prefix+site formula)."
+        return $overrideName
+    }
+    return Get-ClusterNameFromPrefix -ClusterNamePrefix $ClusterNamePrefix -EdgeSite $EdgeSite
 }
 function Get-EffectiveSupervisorServicesYamlPath {
 
@@ -1740,7 +1787,7 @@ function Initialize-VcfEdgeAtScale {
                 Write-Host ""
             }
 
-            $clusterName = Get-ClusterNameFromPrefix -ClusterNamePrefix $clusterNamePrefix -EdgeSite $currentEdgeSite
+            $clusterName = Get-EffectiveClusterName -Cluster $cluster -ClusterNamePrefix $clusterNamePrefix -EdgeSite $currentEdgeSite
             $datastoreName = Get-DatastoreNameFromPrefix -DatastoreNamePrefix $datastoreNamePrefix -EdgeSite $currentEdgeSite
             $vdsName = Get-VdsNameFromPrefix -VdsNamePrefix $vdsNamePrefix -EdgeSite $currentEdgeSite
             $Script:SupervisorName = Get-SupervisorNameFromPrefix -SupervisorNamePrefix $supervisorNamePrefix -EdgeSite $currentEdgeSite

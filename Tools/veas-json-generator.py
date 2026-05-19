@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1015"
+UI_VERSION = "1.0.3.1016"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -567,6 +567,13 @@ def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: 
 
     if not edge_site:
         errors.append(f"{prefix}.edgeSite: required field is missing or empty.")
+
+    override_cluster_name = cluster.get("overrideClusterName", "")
+    if override_cluster_name and not VSPHERE_NAME_RE.match(override_cluster_name):
+        errors.append(
+            f"{prefix}.overrideClusterName: must be 1–80 chars, "
+            "alphanumeric with spaces, _, +, -, (), ."
+        )
 
     esx_hosts = cluster.get("esxHosts")
     if cluster.get("esxHost"):
@@ -1432,6 +1439,7 @@ def _build_cluster_obj(cluster: dict) -> dict:
     elif isinstance(cluster_nic_raw, str) and cluster_nic_raw.strip():
         cluster_obj["nicList"] = [{"name": n.strip()} for n in cluster_nic_raw.split(",") if n.strip()]
 
+    _add_optional_str(cluster_obj, cluster, "overrideClusterName")
     _add_optional_str(cluster_obj, cluster, "vSanWitnessVmName")
     _add_optional_str(cluster_obj, cluster, "haPolicy")
 

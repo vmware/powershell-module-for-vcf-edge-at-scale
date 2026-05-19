@@ -221,6 +221,25 @@ $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames = @(
     "legacy-harbor-svs-v2.14.2+vmware.2-vks.1-25220498.yml"
 )
 
+# Deployment layout directory names — single source of truth used by Initialize, CollectLogs, and tests.
+$Script:DOCS_DIR_NAME                = "Docs"
+$Script:LOGS_DIR_NAME                = "Logs"
+$Script:SERVICES_YAML_DIR_NAME       = "ServicesYaml"
+$Script:TOOLS_DIR_NAME               = "Tools"
+$Script:DEPLOY_LAYOUT_SUBDIRECTORIES = @($Script:DOCS_DIR_NAME, $Script:LOGS_DIR_NAME, $Script:SERVICES_YAML_DIR_NAME, $Script:TOOLS_DIR_NAME)
+
+# Configuration file names used by Initialize, CollectLogs, and help commands.
+$Script:INFRA_JSON_FILENAME          = "infrastructure.json"
+$Script:SUPERVISOR_JSON_FILENAME     = "supervisor.json"
+$Script:INFRA_HELP_FILENAME          = "infrastructure-config-help.json"
+$Script:SUPERVISOR_HELP_FILENAME     = "supervisor-config-help.json"
+
+# Default deployment directory name under $HOME (Initialize default when no path is supplied).
+$Script:DEFAULT_DEPLOY_DIR_NAME      = "VcfEdgeAtScale"
+
+# Environment variable name that stores the active deployment root.
+$Script:ENV_VAR_NAME                 = "VcfEdgeAtScaleRootDirectory"
+
 # Enforce minimum engine version (must match PowerShellVersion in VcfEdgeAtScale.psd1).
 if ($PSVersionTable.PSVersion -lt [Version]"7.4") {
     throw "VcfEdgeAtScale requires PowerShell 7.4 or later. Current version is $($PSVersionTable.PSVersion). Install a newer pwsh and retry."

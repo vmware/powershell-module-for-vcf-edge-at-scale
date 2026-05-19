@@ -114,12 +114,48 @@ if ($pathsToRun.Count -eq 0) {
     throw "No test paths to run. Provide -TestPath or -Live."
 }
 
+$totalEstimate = ($pathsToRun | ForEach-Object {
+    Select-String -LiteralPath $_ -Pattern '^\s+It\s+[''"]' -AllMatches
+} | Measure-Object).Count
+
+$fileLabel = if ($pathsToRun.Count -eq 1) { "1 file" } else { "$($pathsToRun.Count) files" }
+Write-Host ""
+Write-Host "  Discovered ~$totalEstimate tests across $fileLabel." -ForegroundColor Cyan
+Write-Host ""
+
 $config = New-PesterConfiguration
 $config.Run.Path = $pathsToRun.ToArray()
+$config.Run.PassThru = $true
 $config.Output.Verbosity = "Detailed"
 
 if (-not [String]::IsNullOrWhiteSpace($Filter)) {
     $config.Filter.FullName = $Filter
 }
 
-Invoke-Pester -Configuration $config
+$result = Invoke-Pester -Configuration $config
+
+if ($null -ne $result -and $result.FailedCount -gt 0) {
+    $sep = "=" * 64
+    Write-Host ""
+    Write-Host $sep -ForegroundColor Red
+    Write-Host "  FAILURES  ($($result.FailedCount) of $($result.TotalCount) tests)" -ForegroundColor Red
+    Write-Host $sep -ForegroundColor Red
+    $i = 1
+    foreach ($failure in $result.Failed) {
+        Write-Host ""
+        Write-Host "  [$i]  $($failure.ExpandedPath)" -ForegroundColor Red
+        $errMsg = if ($failure.ErrorRecord.Count -gt 0) { $failure.ErrorRecord[0].Exception.Message } else { "(no message)" }
+        foreach ($line in ($errMsg -split "`n")) {
+            $trimmed = $line.TrimEnd()
+            if ($trimmed) { Write-Host "       $trimmed" -ForegroundColor Yellow }
+        }
+        if ($failure.ErrorRecord.Count -gt 0 -and $failure.ErrorRecord[0].ScriptStackTrace) {
+            $firstStackLine = ($failure.ErrorRecord[0].ScriptStackTrace -split "`n" | Select-Object -First 1).Trim()
+            Write-Host "       at $firstStackLine" -ForegroundColor DarkGray
+        }
+        $i++
+    }
+    Write-Host ""
+    Write-Host $sep -ForegroundColor Red
+    Write-Host ""
+}
