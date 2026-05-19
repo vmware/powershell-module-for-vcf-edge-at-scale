@@ -983,7 +983,54 @@ Function Get-VmHostsInCluster {
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
     )
 
-    Get-VMHost -Location $ClusterObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    Get-VMHost -Location $ClusterObject -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+}
+
+Function Get-VmsFromCluster {
+
+    <#
+        .SYNOPSIS
+        Returns all VMs in a cluster. Thin wrapper over Get-VM enabling unit tests to mock this call without fighting PowerCLI pipeline-input binding constraints.
+
+        .PARAMETER ClusterObject
+        The cluster object whose VMs are returned.
+
+        .PARAMETER Server
+        vCenter server name or connection object.
+
+        .EXAMPLE
+        Get-VmsFromCluster -ClusterObject $clusterObj -Server "vc.lab"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VM -Location $ClusterObject -Server $Server -ErrorAction SilentlyContinue
+}
+
+Function Get-VmViewForVm {
+
+    <#
+        .SYNOPSIS
+        Returns the View object for a VM. Thin wrapper over Get-View enabling unit tests to mock this call without fighting PowerCLI ArgumentTransformationAttribute constraints on the -VIObject parameter.
+
+        .PARAMETER VmObject
+        The VM object whose View is returned.
+
+        .EXAMPLE
+        Get-VmViewForVm -VmObject $vm
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VmObject
+    )
+
+    Get-View -VIObject $VmObject -ErrorAction SilentlyContinue
 }
 
 Function Get-VirtualSwitchesOnHost {

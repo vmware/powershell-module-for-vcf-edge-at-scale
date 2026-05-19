@@ -9251,7 +9251,7 @@ Describe "Get-SupervisorControlPlaneIp — mocked vCenter" {
             Mock Write-LogMessage {}
             Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
             Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            Mock Get-VM { return @() }
+            Mock Get-VmsFromCluster { return @() }
             { Get-SupervisorControlPlaneIp -ClusterName "cl0" } | Should -Throw -ExceptionType ([VcfDeploymentException])
         }
     }
@@ -9261,8 +9261,8 @@ Describe "Get-SupervisorControlPlaneIp — mocked vCenter" {
             Mock Write-LogMessage {}
             Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
             Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
-            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("fe80::1") } } }
+            Mock Get-VmsFromCluster { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-VmViewForVm { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("fe80::1") } } }
             { Get-SupervisorControlPlaneIp -ClusterName "cl0" } | Should -Throw -ExceptionType ([VcfDeploymentException])
         }
     }
@@ -9272,8 +9272,8 @@ Describe "Get-SupervisorControlPlaneIp — mocked vCenter" {
             Mock Write-LogMessage {}
             Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
             Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
-            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50") } } }
+            Mock Get-VmsFromCluster { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-VmViewForVm { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50") } } }
             $result = Get-SupervisorControlPlaneIp -ClusterName "cl0"
             $result | Should -Be "10.0.0.50"
         }
@@ -9284,8 +9284,8 @@ Describe "Get-SupervisorControlPlaneIp — mocked vCenter" {
             Mock Write-LogMessage {}
             Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
             Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            Mock Get-VM { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
-            Mock Get-View { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50", "10.0.0.51") } } }
+            Mock Get-VmsFromCluster { return @([PSCustomObject]@{ Name = "SupervisorControlPlane-x"; Id = "vm-1" }) }
+            Mock Get-VmViewForVm { return [PSCustomObject]@{ Guest = [PSCustomObject]@{ IPAddress = @("10.0.0.50", "10.0.0.51") } } }
             $result = Get-SupervisorControlPlaneIp -ClusterName "cl0"
             $result | Should -Be "10.0.0.50"
             Should -Invoke Write-LogMessage -Times 1 -ParameterFilter { $Type -eq "WARNING" } -Scope It
@@ -9299,6 +9299,7 @@ Describe "Wait-SupervisorDiscoverable — mocked REST" {
 
     It "Returns Success=true with the supervisor ID when supervisor is immediately READY" {
         InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
             Mock Write-LogMessage {}
             Mock Write-Progress {}
             Mock Invoke-RestMethod {
@@ -9324,6 +9325,7 @@ Describe "Wait-SupervisorDiscoverable — mocked REST" {
 
     It "Returns Success=false with ErrorMessage containing 'disappeared' when supervisor vanishes from the list" {
         InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
             Mock Write-LogMessage {}
             Mock Write-Progress {}
             Mock Invoke-RestMethod { return [PSCustomObject]@{ items = @() } }
@@ -9339,6 +9341,7 @@ Describe "Wait-SupervisorDiscoverable — mocked REST" {
 
     It "Returns Success=false with the exception message when the REST call throws" {
         InModuleScope VcfEdgeAtScale {
+            $Script:vCenterName = "vc.lab"
             Mock Write-LogMessage {}
             Mock Write-Progress {}
             Mock Invoke-RestMethod { throw "Connection refused." }

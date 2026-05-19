@@ -420,9 +420,13 @@ Function Update-Cluster {
             $prevWarningPreference = $WarningPreference
             $WarningPreference = "SilentlyContinue"
             try {
-            $hostCount = (Get-VMHost -Location $cluster -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction Stop).Count
+            $hostCount = (Get-VMHost -Location $cluster -WarningAction SilentlyContinue -ErrorAction Stop).Count
             Write-LogMessage -Type DEBUG -Message "Update-Cluster: cluster `"$ClusterName`" has $hostCount host(s)."
 
+            if ($hostCount -eq 0) {
+                Write-LogMessage -Type ERROR -Message "Update-Cluster: No hosts found in cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`". Cannot compute HA admission control."
+                throw [VcfDeploymentException]::new("No hosts found in cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`".")
+            }
             if ($hostCount -eq 1) {
                 # Single-host cluster: enable HA with admission control disabled (no failover capacity). Supervisor requires HA enabled.
                 $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -HAAdmissionControlEnabled $false -DrsAutomationLevel FullyAutomated -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
