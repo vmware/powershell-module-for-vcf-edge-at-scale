@@ -1090,7 +1090,6 @@ function Disable-SupervisorOnCluster {
             }
         }
 
-        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         $confirmFlag = -not $SuppressConfirm.IsPresent
         Write-LogMessage -Type INFO -NoNewline -Message "Deactivating supervisor on cluster `"$ClusterName`" (ID: $ClusterId)... "
         try {
@@ -1106,7 +1105,12 @@ function Disable-SupervisorOnCluster {
 
         $elapsedTime = 0
         do {
-            $wcpList = @(Invoke-ListNamespaceManagementClusters -ErrorAction SilentlyContinue | Where-Object { $_.clusterName -eq $clusterObject })
+            $wcpList = @(Invoke-ListNamespaceManagementClusters -ErrorAction SilentlyContinue | Where-Object {
+                $_.clusterName -and (
+                    $_.clusterName -eq $ClusterName -or
+                    $_.clusterName.Id -eq $ClusterId
+                )
+            })
             $wcpEntry = $wcpList | Select-Object -First 1
             $configStatus = if ($wcpEntry) { $wcpEntry.ConfigStatus } else { $null }
             $kubeStatus = if ($wcpEntry) { $wcpEntry.KubernetesStatus } else { $null }
