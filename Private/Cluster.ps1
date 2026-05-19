@@ -581,14 +581,14 @@ Function Test-VmkernelVsanAndWitnessTraffic {
     [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $false)] [bool]$RequireWitnessTraffic = $true,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
 
     $hostName = $VMHost.Name
     $trafficDesc = if ($RequireWitnessTraffic) { "vSAN and vSAN witness traffic" } else { "vSAN traffic only (witness host)" }
     Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanAndWitnessTraffic: Checking VMkernel interfaces on host `"$hostName`" for $trafficDesc."
 
-    $vmkernelAdapters = Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -ErrorAction SilentlyContinue
+    $vmkernelAdapters = Get-VmkernelAdaptersOnHost -VMHost $VMHost
     $adapterCount = if ($vmkernelAdapters) { @($vmkernelAdapters).Count } else { 0 }
     Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanAndWitnessTraffic: Host `"$hostName`" has $adapterCount VMkernel adapter(s)."
 
@@ -599,8 +599,8 @@ Function Test-VmkernelVsanAndWitnessTraffic {
 
     if ($vmkernelAdapters -and $vmkernelAdapters.Count -gt 0) {
         $firstAdapter = $vmkernelAdapters | Select-Object -First 1
-        $hasVsanProperty = $null -ne (Get-Member -InputObject $firstAdapter -Name "VsanTrafficEnabled" -MemberType Property -ErrorAction SilentlyContinue)
-        $hasWitnessProperty = $null -ne (Get-Member -InputObject $firstAdapter -Name "VsanWitnessTrafficEnabled" -MemberType Property -ErrorAction SilentlyContinue)
+        $hasVsanProperty = $null -ne $firstAdapter.PSObject.Properties["VsanTrafficEnabled"]
+        $hasWitnessProperty = $null -ne $firstAdapter.PSObject.Properties["VsanWitnessTrafficEnabled"]
         Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanAndWitnessTraffic: VsanTrafficEnabled property available on API: $hasVsanProperty; VsanWitnessTrafficEnabled: $hasWitnessProperty."
     }
 
@@ -689,7 +689,7 @@ Function Test-VmkernelVsanTrafficViaEsxcli {
     [CmdletBinding()]
     [OutputType([System.Boolean])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
         [Parameter(Mandatory = $false)] [bool]$RequireWitnessTraffic = $true
     )
 
@@ -829,11 +829,11 @@ Function Test-VsanTrafficVmkernelHasValidIp {
     #>
     [OutputType([System.Boolean])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
-    $vmkernelAdapters = Get-VMHostNetworkAdapter -VMHost $VMHost -VMKernel -ErrorAction SilentlyContinue
+    $vmkernelAdapters = Get-VmkernelAdaptersOnHost -VMHost $VMHost
     if (-not $vmkernelAdapters) { return $false }
-    $hasVsanProperty = $null -ne (Get-Member -InputObject ($vmkernelAdapters | Select-Object -First 1) -Name "VsanTrafficEnabled" -MemberType Property -ErrorAction SilentlyContinue)
+    $hasVsanProperty = $null -ne ($vmkernelAdapters | Select-Object -First 1).PSObject.Properties["VsanTrafficEnabled"]
     if (-not $hasVsanProperty) { return $false }
     foreach ($adapter in $vmkernelAdapters) {
         if ($adapter.VsanTrafficEnabled -ne $true) { continue }
@@ -1241,7 +1241,7 @@ Function Invoke-PrepareHostForClusterMove {
         Prepares a host in one cluster for migration to another cluster within the same vCenter.
 
         .DESCRIPTION
-        When a host with no powered-on VMs is found in vCenter inventory under a different cluster than the deployment target, this function: (1) checks whether vmk0 is already on a standard switch or on a VDS; (2) prompts the operator to confirm the cluster move in both cases; (3) if vmk0 is on a VDS, verifies that VDS has at least two physical NIC uplinks (prerequisite for automated restore), then removes all non-management VMkernel interfaces, migrates vmk0 to a standard switch (vSwitch0-restore) via Restore-ManagementToVssBeforeVdsRemoval, and detaches the host from all Distributed Virtual Switches; (4) if vmk0 is already on a standard switch, skips the VDS cleanup steps entirely. After this function returns, Add-HostToCluster proceeds with the normal Add-VMHost call.
+        When a host with no powered-on VMs is found in vCenter inventory under a different cluster than the deployment target, this function: (1) checks whether vmk0 is already on a standard switch or on a VDS; (2) prompts the operator to confirm the cluster move in both cases; (3) if vmk0 is on a VDS, verifies that VDS has at least two physical NIC uplinks (prerequisite for automated restore), then removes all non-management VMkernel interfaces, migrates vmk0 to a standard switch (vSwitch0-restore) via Restore-ManagementToVssBeforeVdsRemoval, and detaches the host from all Distributed Virtual Switches; (4) if vmk0 is already on a standard switch, skips the VDS cleanup steps entirely. After this function returns, Add-HostToCluster uses Move-VMHost to relocate the host within the vCenter hierarchy.
 
         .PARAMETER DestinationClusterName
         Name of the cluster the host will be added to.
@@ -1496,6 +1496,48 @@ Function Invoke-AddHostToClusterRunningVmSafetyCheck {
         throw [VcfDeploymentException]::new()
     }
 }
+# ── Thin testability wrapper ──────────────────────────────────────────────────
+# Move-VMHost has an ArgumentTransformationAttribute on -VMHost that blocks Pester
+# mocking. This wrapper must live before Add-HostToCluster (its only caller).
+# Additional thin wrappers (Get-ClusterObjectByName, Get-VsanClusterConfigurationForCluster)
+# are placed immediately before their respective callers later in this file.
+Function Invoke-MoveVMHostToDestination {
+
+    <#
+        .SYNOPSIS
+        Thin wrapper around Move-VMHost to support mocking in unit tests.
+
+        .DESCRIPTION
+        Move-VMHost has an ArgumentTransformationAttribute on its -VMHost parameter that blocks
+        direct mocking. This wrapper accepts [PSObject] so tests can mock it with a PSCustomObject,
+        following the same pattern as Get-ClusterObjectByName and Get-VsanClusterConfigurationForCluster.
+
+        .PARAMETER Destination
+        The target cluster or folder object to move the host into.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .PARAMETER VMHost
+        The VMHost object to move.
+
+        .EXAMPLE
+        Invoke-MoveVMHostToDestination -VMHost $vmhostObj -Destination $clusterObj -Server "vc.lab"
+
+        .OUTPUTS
+        None. Throws [VcfDeploymentException] on failure.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$Destination,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    Move-VMHost -VMHost $VMHost -Destination $Destination -Server $Server -Confirm:$false -ErrorAction Stop | Out-Null
+}
+
 Function Add-HostToCluster {
 
     <#
@@ -1503,15 +1545,14 @@ Function Add-HostToCluster {
         Adds an ESX host to an existing vSphere cluster and verifies successful integration.
 
         .DESCRIPTION
-        This function adds an ESX host to a specified vSphere cluster within a vCenter environment.
+        This function adds or moves an ESX host into a specified vSphere cluster.
         It performs the following operations:
         1. Retrieves the target cluster object from vCenter
-        2. If the host is already in vCenter inventory, checks for powered-on VMs; if any exist, logs them and the managing vCenter, then prompts Y/N (default N) before continuing
-        3. Adds the ESX host to the cluster using the provided credentials
-        4. Verifies that the host was successfully added by checking cluster membership
+        2. If the host is already in vCenter inventory, checks for powered-on VMs; if any exist, logs them and prompts Y/N (default N) before continuing
+        3a. If the host is already in vCenter inventory (different cluster): uses Move-VMHost to relocate it
+        3b. If the host is not yet in vCenter inventory: uses Add-VMHost with the provided credentials
+        4. Verifies that the host is in the correct cluster after the operation
         5. Provides appropriate logging for success or failure scenarios
-
-        The function uses the Force parameter to bypass confirmation prompts during host addition.
 
         .EXAMPLE
         Add-HostToCluster -ClusterName "cl02" -EsxHostName "esx01.example.com" -EsxCredential $EsxCredential
@@ -1558,6 +1599,7 @@ Function Add-HostToCluster {
         When waiting for the Add-VMHost task (RunAsync), seconds between Get-Task polls. Default is 5.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$AddHostRetryCount = 3,
@@ -1646,14 +1688,41 @@ Function Add-HostToCluster {
         Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" not in vCenter inventory before add; skipping powered-on VM check (VMs are not enumerable until the host is managed by this vCenter)."
     }
 
-    # Attempt to add the ESX host to the specified cluster. When WaitForAddHostTaskTimeoutSeconds > 0, use RunAsync and poll for task completion so the next host can be added without a fixed delay.
-    Write-LogMessage -Type INFO -NoNewline -Message "Adding ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
-    $addHostAttempt = 1
-    $addHostSucceeded = $false
+    # When the host is already managed by this vCenter, use Move-VMHost to relocate it within
+    # the vCenter hierarchy. Add-VMHost only works for externally unmanaged hosts; calling it
+    # against an already-managed host fails with "already being managed by this vSphere server".
     $savedProgress = $ProgressPreference
     $ProgressPreference = 'SilentlyContinue'
     try {
-        do {
+        if ($null -ne $hostForRunningVmCheck) {
+            Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
+            try {
+                Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $clusterObject -Server $Script:vCenterName
+                Write-LogMessage -Type INFO -CompletePending -Message "Done."
+            } catch [System.UnauthorizedAccessException] {
+                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+            } catch [System.TimeoutException] {
+                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+            } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                throw [VcfDeploymentException]::new("vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry.")
+            } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                throw [VcfDeploymentException]::new("vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
+            } catch [VcfDeploymentException] {
+                throw
+            } catch {
+                Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+            }
+        } else {
+            # Host is not yet managed by this vCenter; use Add-VMHost to add it from scratch.
+            Write-LogMessage -Type INFO -NoNewline -Message "Adding ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
+            $addHostSucceeded = $false
+            $addHostAttempt = 1
+            do {
             $errorMessage = $null
             $task = $null
             if ($WaitForAddHostTaskTimeoutSeconds -gt 0) {
@@ -1783,21 +1852,21 @@ Function Add-HostToCluster {
             Write-LogMessage -Type ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage"
             throw [VcfDeploymentException]::new("Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage")
         } while ($addHostAttempt -le $AddHostRetryCount -and -not $addHostSucceeded)
+        }
     } finally {
         $ProgressPreference = $savedProgress
     }
 
-    if (-not $addHostSucceeded) {
-        Write-LogMessage -Type ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" after $AddHostRetryCount attempt(s). Workflow will fail."
-        throw [VcfDeploymentException]::new("Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" after $AddHostRetryCount attempt(s). Workflow will fail.")
+    # Verify that the host was successfully added or moved to the target cluster.
+    # Move-VMHost is a synchronous inventory operation; Add-VMHost is async and may need a
+    # settling period before the host state stabilises. Only sleep for the Add path.
+    if ($null -eq $hostForRunningVmCheck) {
+        Start-Sleep $HostStateChangeDelaySeconds
     }
-
-    # Verify that the host was successfully added.
-    Start-Sleep $HostStateChangeDelaySeconds
     $connectionAfterAdd = Test-VcenterConnection
     if (-not $connectionAfterAdd.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "vCenter session is no longer valid after Add-VMHost (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
-        throw [VcfDeploymentException]::new("vCenter session is no longer valid after Add-VMHost (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added.")
+        Write-LogMessage -Type ERROR -Message "vCenter session is no longer valid after host add/move (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
+        throw [VcfDeploymentException]::new("vCenter session is no longer valid after host add/move (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added.")
     }
     try {
         $verifyHost = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction Stop
@@ -4928,6 +4997,70 @@ Function Enable-VsanAutomaticRebalance {
         return $false
     }
 }
+# ── Thin testability wrappers ─────────────────────────────────────────────────
+# Get-Cluster and Get-VsanClusterConfiguration have ArgumentTransformationAttributes
+# that block Pester mocking. These wrappers are placed immediately before their
+# caller (Test-VsanAutomaticRebalanceAtThreshold).
+Function Get-ClusterObjectByName {
+
+    <#
+        .SYNOPSIS
+        Thin wrapper around Get-Cluster to support mocking in unit tests.
+
+        .DESCRIPTION
+        Get-Cluster has an ArgumentTransformationAttribute on its -Server parameter that blocks
+        direct mocking. This wrapper accepts plain [String] parameters so tests can mock it with
+        a PSCustomObject cluster, following the same pattern as Get-VmkernelAdaptersOnHost.
+
+        .PARAMETER ClusterName
+        Name of the cluster to retrieve.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .OUTPUTS
+        Cluster object, or throws on error.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-Cluster -Name $ClusterName -Server $Server -ErrorAction Stop
+}
+
+Function Get-VsanClusterConfigurationForCluster {
+
+    <#
+        .SYNOPSIS
+        Thin wrapper around Get-VsanClusterConfiguration to support mocking in unit tests.
+
+        .DESCRIPTION
+        Get-VsanClusterConfiguration has an ArgumentTransformationAttribute on its -Cluster parameter
+        that blocks direct mocking. This wrapper accepts [PSObject] so tests can mock this function
+        with a PSCustomObject cluster, following the same pattern as Get-VmkernelAdaptersOnHost.
+
+        .PARAMETER Cluster
+        Cluster object (e.g. from Get-Cluster) to retrieve the vSAN configuration for.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .OUTPUTS
+        VsanClusterConfiguration object, or $null on error.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
+    )
+
+    Get-VsanClusterConfiguration -Cluster $Cluster -Server $Server -ErrorAction SilentlyContinue
+}
+
 Function Test-VsanAutomaticRebalanceAtThreshold {
 
     <#
@@ -4960,8 +5093,8 @@ Function Test-VsanAutomaticRebalanceAtThreshold {
     )
 
     try {
-        $cluster = Get-Cluster -Name $ClusterName -Server $Server -ErrorAction Stop
-        $config = Get-VsanClusterConfiguration -Cluster $cluster -Server $Server -ErrorAction Stop
+        $cluster = Get-ClusterObjectByName -ClusterName $ClusterName -Server $Server
+        $config = Get-VsanClusterConfigurationForCluster -Cluster $cluster -Server $Server
         if (-not $config) { return $false }
         $enabled = $config.PSObject.Properties['ProactiveRebalanceEnabled']
         if (-not $enabled -or $enabled.Value -ne $true) {

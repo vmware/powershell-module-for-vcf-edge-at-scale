@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1010"
+UI_VERSION = "1.0.3.1011"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -104,6 +104,29 @@ _MAX_VMK_MTU = 9190
 # not designed for network exposure. Use SSH port-forwarding for remote access.
 _BIND_HOST = "127.0.0.1"
 
+# Resolved once at import time so every path-safety check uses the same anchor
+# and avoids repeated syscalls.
+_HOME_DIR = Path.home().resolve()
+
+
+def _safe_resolve_path(path_str: str) -> "Path | None":
+    """Resolves *path_str* and returns it only when the result lies within the
+    current user's home directory.
+
+    Returns None for empty strings, unresolvable values, or paths that escape
+    the home tree.  Callers must treat a None return as an untrusted path and
+    reject it with an appropriate error message rather than using it for any
+    filesystem operation.
+    """
+    if not path_str:
+        return None
+    try:
+        resolved = Path(path_str).expanduser().resolve()
+    except (TypeError, ValueError, RuntimeError):
+        return None
+    return resolved if resolved.is_relative_to(_HOME_DIR) else None
+
+
 # ---------------------------------------------------------------------------
 # Validation helpers
 # ---------------------------------------------------------------------------
@@ -122,11 +145,15 @@ RFC1123_RE = re.compile(r"^(?=.{1,80}$)[a-z0-9]([-a-z0-9]*[a-z0-9])?$")
 VSPHERE_NAME_RE = re.compile(r"^[a-zA-Z0-9 _+\-().]{1,80}$")
 # vCenter user: alphanumeric + . _ @ -
 VCENTER_USER_RE = re.compile(r"^[a-zA-Z0-9._@\-]{1,256}$")
-# FQDN or IPv4
+# FQDN or IPv4.
+# Each FQDN label uses [a-zA-Z0-9\-_] (no dot) so that the dot can only ever
+# be consumed as the explicit label separator \. and never by the character
+# class.  Including dot in the class creates two competing ways to consume a
+# '.' which allows exponential backtracking on inputs like '0.0.0.0.0.0.'.
 FQDN_OR_IPV4_RE = re.compile(
     r"^(?:"
     r"(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)"
-    r"|[a-zA-Z0-9](?:[a-zA-Z0-9\-_.]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-_.]*[a-zA-Z0-9])?)*"
+    r"|[a-zA-Z0-9](?:[a-zA-Z0-9\-_]*[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9\-_]*[a-zA-Z0-9])?)*"
     r")$"
 )
 # Harbor volume size: positive integer followed by Gi
@@ -1105,14 +1132,27 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
     if base_dir is not None:
         svcs = common.get("supervisorServices", {}) or {}
         parent_dir_str = (svcs.get("parentDirectory") or "").strip()
-        parent_dir = Path(parent_dir_str) if parent_dir_str else Path(base_dir)
 
-        if parent_dir_str and not parent_dir.is_dir():
-            messages.append(
-                f"[ERROR] supervisorServices.parentDirectory: '{parent_dir}' does not exist or is not a directory. "
-                "Correct the path before specifying YAML filenames."
-            )
+        # Resolve the parent directory and confine it to the home tree so that
+        # a crafted JSON payload cannot probe arbitrary filesystem paths.
+        if parent_dir_str:
+            parent_dir = _safe_resolve_path(parent_dir_str)
+            if parent_dir is None:
+                messages.append(
+                    "[ERROR] supervisorServices.parentDirectory: the path must be within "
+                    "your home directory."
+                )
+                parent_dir = None
+            elif not parent_dir.is_dir():
+                messages.append(
+                    f"[ERROR] supervisorServices.parentDirectory: '{parent_dir}' does not "
+                    "exist or is not a directory. Correct the path before specifying YAML filenames."
+                )
+                parent_dir = None
         else:
+            parent_dir = Path(base_dir)
+
+        if parent_dir is not None:
             yaml_fields = (
                 ("argoCdOperatorYamlFileName",    "ArgoCD Operator YAML"),
                 ("argoCdDeploymentYamlFileName",   "ArgoCD Deployment YAML"),
@@ -1123,12 +1163,20 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
                 filename = (svcs.get(field) or "").strip()
                 if not filename:
                     continue
-                full_path = parent_dir / filename
+                # Use only the basename so a crafted filename such as
+                # '../../etc/shadow' cannot escape the parent directory.
+                safe_name = Path(filename).name
+                if safe_name != filename:
+                    messages.append(
+                        f"[ERROR] {label}: filename must not contain path separators."
+                    )
+                    continue
+                full_path = parent_dir / safe_name
                 if full_path.exists():
-                    messages.append(f"[INFO] {label}: '{filename}' found — OK.")
+                    messages.append(f"[INFO] {label}: '{safe_name}' found — OK.")
                 else:
                     messages.append(
-                        f"[ERROR] {label}: '{filename}' not found in '{parent_dir}'. "
+                        f"[ERROR] {label}: '{safe_name}' not found in '{parent_dir}'. "
                         "Verify the filename is correct."
                     )
 
@@ -1164,7 +1212,16 @@ def _validate_step2_harbor_files(infra: dict, base_dir: Path | None) -> list[str
         parent_dir_str = (harbor.get("parentDirectory") or "").strip()
         if not parent_dir_str:
             continue
-        parent_dir = Path(parent_dir_str)
+
+        # Resolve and confine to the home tree before any filesystem operation.
+        parent_dir = _safe_resolve_path(parent_dir_str)
+        if parent_dir is None:
+            messages.append(
+                f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.parentDirectory: "
+                "the path must be within your home directory."
+            )
+            continue
+
         tls_filenames_set = any((harbor.get(f) or "").strip() for f, _ in tls_fields)
         if not parent_dir.is_dir():
             if tls_filenames_set:
@@ -1178,15 +1235,23 @@ def _validate_step2_harbor_files(infra: dict, base_dir: Path | None) -> list[str
             filename = (harbor.get(field) or "").strip()
             if not filename:
                 continue
-            full_path = parent_dir / filename
+            # Use only the basename so a crafted filename cannot traverse outside parent_dir.
+            safe_name = Path(filename).name
+            if safe_name != filename:
+                messages.append(
+                    f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.{field}: "
+                    "filename must not contain path separators."
+                )
+                continue
+            full_path = parent_dir / safe_name
             if full_path.exists():
                 messages.append(
-                    f"[INFO] Site '{site}': {label} '{filename}' found in '{parent_dir}' — OK."
+                    f"[INFO] Site '{site}': {label} '{safe_name}' found in '{parent_dir}' — OK."
                 )
             else:
                 messages.append(
                     f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.{field}: "
-                    f"'{filename}' not found in '{parent_dir}'. "
+                    f"'{safe_name}' not found in '{parent_dir}'. "
                     "Verify the filename and parentDirectory are correct."
                 )
     return messages
@@ -1670,6 +1735,24 @@ class ConfigHandler(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
             pass
 
+    def _check_origin(self) -> bool:
+        """Returns True when the request is safe to process.
+
+        Non-browser clients (curl, PowerShell Invoke-RestMethod) send no Origin
+        header and are always allowed.  Browser-initiated cross-origin requests
+        include an Origin; we only permit origins whose host resolves to the
+        loopback interface so that a malicious page cannot CSRF-trigger /save,
+        /generate, or /connectivity-check against the locally running server.
+        """
+        origin = self.headers.get("Origin", "")
+        if not origin:
+            return True
+        try:
+            host = urlparse(origin).hostname or ""
+            return host in ("127.0.0.1", "localhost", "::1")
+        except Exception:
+            return False
+
     def _send_security_headers(self):
         """Sends common security headers on every response.
 
@@ -1678,10 +1761,10 @@ class ConfigHandler(BaseHTTPRequestHandler):
         cached by the browser. X-Frame-Options and CSP defend against
         clickjacking and injection attacks.
 
-        'unsafe-inline' in script-src and style-src is required because the
-        SPA uses inline scripts and styles in veas-ui.html; browsers only
-        enforce CSP on HTML documents, so this header is harmless on JSON
-        and ZIP responses.
+        NOTE: 'unsafe-inline' in script-src and style-src is required because
+        veas-ui.html is a self-contained single-file SPA with inline <script>
+        and <style> blocks — a deliberate trade-off for stdlib-only deployability.
+        Adding a nonce would require server-side templating on every request.
         """
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
@@ -1755,6 +1838,9 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": "Not found."})
 
     def do_POST(self):
+        if not self._check_origin():
+            self.send_json(403, {"error": "Cross-origin requests are not permitted."})
+            return
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/")
 
@@ -1860,15 +1946,11 @@ class ConfigHandler(BaseHTTPRequestHandler):
             self.send_json(400, {"error": f"Invalid JSON: {exc}"})
             return
 
-        custom_dir = Path(str(payload.get("path", "")).strip()).expanduser().resolve()
-
-        # Restrict traversal to within the user's home directory to prevent a
-        # browser tab from reading arbitrary paths on the local filesystem.
-        # is_relative_to() is used instead of a startswith() string comparison
-        # because startswith() has a prefix-collision bug on all platforms:
-        # e.g. /home/user would incorrectly match /home/userEvil.
-        home_dir = Path.home().resolve()
-        if not custom_dir.is_relative_to(home_dir):
+        # _safe_resolve_path resolves the path and enforces home-directory
+        # confinement in one step, consistent with how validation helpers
+        # sanitise parentDirectory values from the JSON payload.
+        custom_dir = _safe_resolve_path(str(payload.get("path", "")).strip())
+        if custom_dir is None:
             self.send_json(400, {"error": "Custom path must be within your home directory."})
             return
 

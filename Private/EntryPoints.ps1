@@ -47,6 +47,8 @@ Function Test-VcfEdgeAtScaleDeploymentRootInitialized {
         [Boolean]
     #>
 
+    [CmdletBinding()]
+    [OutputType([Boolean])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DeploymentRoot
     )
@@ -188,9 +190,10 @@ Function Invoke-VcfEdgeAtScaleModuleInitialize {
             throw "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
         }
 
-        switch ([String]::IsNullOrWhiteSpace($userBaseResponse)) {
-            $true { $baseDirectory = $defaultBaseDirectory }
-            default { $baseDirectory = $userBaseResponse.Trim() }
+        if ([String]::IsNullOrWhiteSpace($userBaseResponse)) {
+            $baseDirectory = $defaultBaseDirectory
+        } else {
+            $baseDirectory = $userBaseResponse.Trim()
         }
     }
 
@@ -727,6 +730,9 @@ Function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
         Called at the start of every Start-VcfEdgeAtScale run, after New-LogFile opens the log.
     #>
 
+    [CmdletBinding()]
+    Param ()
+
     $manifestPath = Join-Path -Path $Script:ModuleRoot -ChildPath "VcfEdgeAtScale.psd1"
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         return
@@ -746,6 +752,10 @@ Function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
 }
 
 Function Write-VcfDeploymentFailureFooter {
+
+    [CmdletBinding()]
+    Param ()
+
     Write-Host ""
     if (-not [String]::IsNullOrWhiteSpace($Script:LogFile) -and (Test-Path -LiteralPath $Script:LogFile -PathType Leaf)) {
         Write-Host "Deployment failed. Log file: $Script:LogFile" -ForegroundColor Red
@@ -991,7 +1001,7 @@ Function Start-VcfEdgeAtScale {
         Write-Host "  Option 1 — Direct JSON editing:" -ForegroundColor White
         Write-Host "    Open infrastructure.json and supervisor.json in any text editor." -ForegroundColor Gray
         Write-Host "    Run 'Start-VcfEdgeAtScale -ValidateOnly' to validate before deploying." -ForegroundColor Gray
-        $toolScript = Join-Path $initBaseDirectory "Tools" "veas-json-generator.py"
+        $toolScript = Join-Path -Path (Join-Path -Path $initBaseDirectory -ChildPath "Tools") -ChildPath "veas-json-generator.py"
         Write-Host "  Option 2 — Browser-based UI:" -ForegroundColor White
         if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $toolScript)) {
             Write-Host "    $pyExe `"$toolScript`"" -ForegroundColor Gray
@@ -1527,6 +1537,7 @@ Function Get-ModuleTemplatesPath {
         Used by Invoke-VcfEdgeAtScaleModuleInitialize. Requires Write-LogMessage for error logging.
     #>
 
+    [CmdletBinding()]
     Param ()
 
     $moduleBase = $null
@@ -1673,6 +1684,8 @@ Function Update-HelpJsonIfStale {
         .NOTES
         Help JSON files are not user-edited, so silent replacement is safe. Called from Invoke-VcfEdgeAtScaleModuleInitialize and Start-VcfEdgeAtScale.
     #>
+    [CmdletBinding()]
+    [OutputType([Boolean])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DocsPath,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplatePath
@@ -1752,6 +1765,7 @@ Function Get-ConfigurationHelpData {
         .NOTES
         Uses Get-ModuleTemplatesPath; on failure writes Warning and returns $null. Does not throw.
     #>
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HelpFileName,
         [Parameter(Mandatory = $false)] [AllowNull()] [String]$Filter
@@ -1893,6 +1907,7 @@ Function Show-ConfigurationHelpTable {
         Does not throw. On Table format failure, falls back to List.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Title,
         [Parameter(Mandatory = $true)] [AllowNull()] [Array]$Config,

@@ -1,5 +1,14 @@
 # Release Notes
 
+<a id="v1.0.3.1011"></a>
+## 1.0.3.1011
+
+### Release date: 2026-05-19
+
+### Details
+
+- Fix : Resolved a ZTP compatibility issue
+
 <a id="v1.0.3.1010"></a>
 ## 1.0.3.1010
 

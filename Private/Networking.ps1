@@ -228,7 +228,7 @@ Function Invoke-ManagementRestoreForCleanupWithTopologyFallback {
     }
 
     $seenKeys = @{}
-    $candidates = [System.Collections.ArrayList]::new()
+    $candidates = [System.Collections.Generic.List[String]]::new()
     foreach ($n in $orderedNames) {
         if ([string]::IsNullOrWhiteSpace($n)) {
             continue
@@ -294,6 +294,7 @@ Function Get-VdsByName {
         Get-VdsByName -Name "VDS-site1" -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Name,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
@@ -450,8 +451,8 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
                 $vdsPgId = if ($vdsPg.Id) { $vdsPg.Id.ToString().Trim() } else { "" }
                 $vdsPgMoRef = if ($vdsPg.ExtensionData -and $vdsPg.ExtensionData.MoRef -and $vdsPg.ExtensionData.MoRef.Value) { $vdsPg.ExtensionData.MoRef.Value.ToString().Trim() } else { "" }
                 $match = $false
-                if ($pgIdValueForMatch -and $vdsPgId -and ($pgIdValueForMatch -eq $vdsPgId -or $pgIdValueForMatch -like "*$vdsPgId*" -or $vdsPgId -like "*$pgIdValueForMatch*")) { $match = $true }
-                if (-not $match -and $pgIdValueForMatch -and $vdsPgMoRef -and ($pgIdValueForMatch -eq $vdsPgMoRef -or $pgIdValueForMatch -like "*$vdsPgMoRef*" -or $vdsPgMoRef -like "*$pgIdValueForMatch*")) { $match = $true }
+                if ($pgIdValueForMatch -and $vdsPgId -and $pgIdValueForMatch -eq $vdsPgId) { $match = $true }
+                if (-not $match -and $pgIdValueForMatch -and $vdsPgMoRef -and $pgIdValueForMatch -eq $vdsPgMoRef) { $match = $true }
                 if ($match) {
                     $vmk0OnThisVds = $true
                     Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" vmk0 found on VDS `"$VdsNameWithMgmt`" via MoRef/Id match when Get-VDPortgroup -Id returned null (vmk0 pg ref: $pgIdValueForMatch)."
@@ -462,8 +463,8 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
         if (-not $vmk0OnThisVds) {
             # -WarningAction SilentlyContinue suppresses PowerCLI deprecation for VmwareVDPortgroup.VirtualSwitch (cmdlet uses .VirtualSwitch internally).
             $vdPgs = Get-VDPortgroup -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-            foreach ($dpg in $vdPgs) {
-                $vmkernelsOnDpg = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -PortGroup $dpg -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+            foreach ($vdPg in $vdPgs) {
+                $vmkernelsOnDpg = Get-VMHostNetworkAdapter -VMHost $vmhost -VMKernel -PortGroup $vdPg -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
                 if ($vmkernelsOnDpg | Where-Object { $_.Name -eq "vmk0" }) {
                     $vmk0OnThisVds = $true
                     Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" vmk0 found on VDS `"$VdsNameWithMgmt`" via DPG iteration (Id check did not match)."
@@ -477,10 +478,10 @@ Function Restore-ManagementToVssBeforeVdsRemoval {
             $vmk0PgRefStr = if ($vmk0PgRef.Value) { $vmk0PgRef.Value.ToString().Trim() } else { $vmk0PgRef.ToString().Trim() }
             if (-not [String]::IsNullOrWhiteSpace($vmk0PgRefStr)) {
                 $vdPgsForRef = Get-VDPortgroup -VDSwitch $vdsObject -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
-                foreach ($dpg in @($vdPgsForRef)) {
-                    $dpgRef = $dpg.ExtensionData.MoRef
-                    $dpgRefStr = if ($dpgRef.Value) { $dpgRef.Value.ToString().Trim() } elseif ($dpg.Id) { $dpg.Id.ToString().Trim() } else { "" }
-                    if ($dpgRefStr -and ($vmk0PgRefStr -eq $dpgRefStr -or $vmk0PgRefStr -like "*$dpgRefStr*" -or $dpgRefStr -like "*$vmk0PgRefStr*")) {
+                foreach ($vdPgRef in @($vdPgsForRef)) {
+                    $dpgRef = $vdPgRef.ExtensionData.MoRef
+                    $dpgRefStr = if ($dpgRef.Value) { $dpgRef.Value.ToString().Trim() } elseif ($vdPgRef.Id) { $vdPgRef.Id.ToString().Trim() } else { "" }
+                    if ($dpgRefStr -and $vmk0PgRefStr -eq $dpgRefStr) {
                         $vmk0OnThisVds = $true
                         Write-LogMessage -Type DEBUG -Message "Host `"$hostName`" vmk0 found on VDS `"$VdsNameWithMgmt`" via MoRef match (port group ref: $vmk0PgRefStr)."
                         break
@@ -820,6 +821,7 @@ Function Get-VDPortgroupById {
         Get-VDPortgroupById -Id "dvportgroup-42" -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Id,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
@@ -844,6 +846,7 @@ Function Get-DpgsOnVds {
         Get-DpgsOnVds -VDSwitch $vdsObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VDSwitch
@@ -872,6 +875,7 @@ Function Get-PhysicalNicsOnVdsForHost {
         Get-PhysicalNicsOnVdsForHost -VMHost $vmhostObj -VDSwitch $vdsObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VDSwitch,
@@ -897,6 +901,7 @@ Function Get-VmkernelAdaptersOnHost {
         Get-VmkernelAdaptersOnHost -VMHost $vmhostObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
@@ -921,6 +926,7 @@ Function Get-VdsListOnHost {
         Get-VdsListOnHost -VMHost $vmhostObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
@@ -945,6 +951,7 @@ Function Get-ClusterByName {
         Get-ClusterByName -Name "Cluster01" -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Name,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
@@ -969,6 +976,7 @@ Function Get-VmHostsInCluster {
         Get-VmHostsInCluster -ClusterObject $clusterObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
@@ -993,6 +1001,7 @@ Function Get-VirtualSwitchesOnHost {
         Get-VirtualSwitchesOnHost -VMHost $vmhostObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
@@ -1017,6 +1026,7 @@ Function Get-VirtualPortGroupsOnSwitch {
         Get-VirtualPortGroupsOnSwitch -VirtualSwitch $vssObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VirtualSwitch
@@ -1044,6 +1054,7 @@ Function Get-VmkernelOnPortGroup {
         Get-VmkernelOnPortGroup -VMHost $vmhostObj -PortGroup $pgObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$PortGroup,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
@@ -2178,6 +2189,7 @@ Function Get-EsxUnformattedDisk {
         - Assigns sequential IDs (1, 2, 3...) for interactive selection
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
         [Parameter(Mandatory = $false)] [Switch]$Silence,
@@ -2287,6 +2299,7 @@ Function Get-EsxDatastoreHealth {
         - Includes extent information for VMFS datastores
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
@@ -2452,6 +2465,7 @@ Function Get-EsxDatastoreInfo {
         - Refactored into modular helper functions for improved maintainability and testability
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
