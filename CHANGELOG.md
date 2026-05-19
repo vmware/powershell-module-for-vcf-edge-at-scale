@@ -1,7 +1,7 @@
 # Release Notes
 
-<a id="v1.0.3.1018"></a>
-## 1.0.3.1018
+<a id="v1.0.3.1019"></a>
+## 1.0.3.1019
 
 ### Details
 - Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.
