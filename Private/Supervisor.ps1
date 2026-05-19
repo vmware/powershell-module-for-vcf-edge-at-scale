@@ -4197,6 +4197,8 @@ function Invoke-MigrateHostManagementToVds {
 
     # Use the VLAN from the host's current management port group so the DPG matches and we do not disconnect the host.
     $effectiveMgmtVlanId = if ($null -ne $mgmtInfo.PSObject.Properties["ManagementPortGroupVlanId"]) { $mgmtInfo.ManagementPortGroupVlanId } else { $ManagementVlanId }
+    $vlanSource = if ($null -ne $mgmtInfo.PSObject.Properties["ManagementPortGroupVlanId"]) { "host vSS port group" } else { "parameter default ($ManagementVlanId)" }
+    Write-LogMessage -Type DEBUG -Message "Host `"$hostDisplay`" management migration pre-flight: VLAN = $effectiveMgmtVlanId (source: $vlanSource); vSS uplink(s) currently carrying management = $($mgmtInfo.PnicNames -join ', '); NicList pNIC(s) targeted for VDS = $($nicNames -join ', '). Ensure the NicList pNIC(s) are on the same management network segment and physical switch VLAN as the existing vSS uplinks."
     $vssPnicNames = $mgmtInfo.PnicNames  # All pNICs on the management vSS (sorted alphabetically); may be 1 or more.
     $firstUnused = Get-FirstUnusedNicFromNicList -VMHost $VMHost -NicNames $nicNames
     # Second Get-VdsObjectByName call: the idempotency check above returned null (VDS not found or vmk0 not already on it),
@@ -4296,6 +4298,18 @@ function Invoke-MigrateHostManagementToVds {
         $null = $vdsObject | Add-VDSwitchPhysicalNetworkAdapter -VMHostPhysicalNic $pnicToAdd -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
         Write-LogMessage -Type DEBUG -Message "Added pNIC `"$firstUnused`" to VDS `"$VdsName`" on host `"$hostDisplay`"."
     }
+
+    # Log the full vmk0 migration picture before the atomic move. If Set-VMHostNetworkAdapter rolls back
+    # with "disconnected the host", this block surfaces the VLAN, IP, and uplink pNIC for rapid diagnosis.
+    $vmk0PreMigrate = $mgmtInfo.ManagementVmkernel
+    $vmk0Ip = if ($vmk0PreMigrate -and $vmk0PreMigrate.PSObject.Properties["IP"]) { $vmk0PreMigrate.IP } else { "unknown" }
+    $uplinkSummary = if ($hostAlreadyHasPnicOnVds) {
+        $existingVdsPnics = @(Get-PhysicalNicsOnVdsForHost -VMHost $VMHost -VDSwitch $vdsObject -Server $Script:vCenterName)
+        ($existingVdsPnics | ForEach-Object { $_.Name }) -join ", "
+    } else {
+        $firstUnused
+    }
+    Write-LogMessage -Type DEBUG -Message "Host `"$hostDisplay`" vmk0 migration: moving vmk0 IP=$vmk0Ip from vSS `"$($mgmtInfo.StandardSwitch.Name)`" to VDS `"$VdsName`" port group `"$ManagementPortGroupName`" (VLAN $effectiveMgmtVlanId) via uplink pNIC `"$uplinkSummary`". A rollback error here means pNIC `"$uplinkSummary`" cannot reach the management network — verify physical switch VLAN and cabling."
 
     # Migrate vmk0 to the distributed port group (same IP preserved by PowerCLI). VCF PowerCLI 9 does not support -Server on Set-VMHostNetworkAdapter. Use -Confirm:$false to avoid interactive prompt. -WarningAction SilentlyContinue suppresses VmwareVDPortgroup.VirtualSwitch deprecation.
     $vmk0 = $mgmtInfo.ManagementVmkernel

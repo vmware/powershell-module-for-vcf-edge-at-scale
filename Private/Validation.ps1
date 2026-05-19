@@ -1717,7 +1717,7 @@ function Initialize-VcfEdgeAtScale {
                 }
             } else {
                 $hostList = $allEsxHosts -join ", "
-                $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host(s): $hostList : " -AsSecureString -AllowEmpty
+                $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host(s): $hostList" -AsSecureString -AllowEmpty
                 foreach ($esxHost in $allEsxHosts) {
                     $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                 }
@@ -1862,7 +1862,7 @@ function Initialize-VcfEdgeAtScale {
             if ($storagePolicyType -ne "vSAN-ESA" -and $storagePolicyType -ne "vSAN-OSA") {
                 foreach ($esxHost in $esxHosts) {
                     if (-not $esxPasswords[$esxHost]) {
-                        $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost : " -AsSecureString -AllowEmpty
+                        $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost" -AsSecureString -AllowEmpty
                         $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                     }
                     try {
@@ -1884,7 +1884,7 @@ function Initialize-VcfEdgeAtScale {
                         if ($errorMessage -match "Authentication failed" -and $esxUsedEnvPassword) {
                             Write-LogMessage -Type WARNING -Message "ESX authentication with ESX_COMMON_PASSWORD failed; falling back to password prompt."
                             $hostList = $esxHosts -join ", "
-                            $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host(s): $hostList : " -AsSecureString -AllowEmpty
+                            $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host(s): $hostList" -AsSecureString -AllowEmpty
                             foreach ($esxHostName in $esxHosts) {
                                 $esxPasswords[$esxHostName] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                             }
@@ -1937,7 +1937,7 @@ function Initialize-VcfEdgeAtScale {
                     $failedAuthHosts = @()
                     foreach ($esxHost in $esxHosts) {
                         if (-not $esxPasswords[$esxHost]) {
-                            $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost : " -AsSecureString -AllowEmpty
+                            $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost" -AsSecureString -AllowEmpty
                             $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                         }
                         try {
@@ -2048,7 +2048,7 @@ function Initialize-VcfEdgeAtScale {
                     Start-Sleep -Seconds $DelayBeforeAddingNextHostSeconds
                 }
                 if (-not $esxPasswords[$esxHost]) {
-                    $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost : " -AsSecureString -AllowEmpty
+                    $esxPassword = Get-InteractiveInput -PromptMessage "`nEnter the password for the user `"$esxUser`" on ESX Host: $esxHost" -AsSecureString -AllowEmpty
                     $esxPasswords[$esxHost] = New-Object System.Management.Automation.PSCredential($esxUser, $esxPassword)
                 }
                 Add-HostToCluster -ClusterName $clusterName -EsxCredential $esxPasswords[$esxHost] -EsxHostName $esxHost -NicList $nicList -StoragePolicyType $storagePolicyType
