@@ -7,11 +7,10 @@ on:
 
 jobs:
   count-downloads:
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-  count-downloads:
-    runs-on: ubuntu-latest
     steps:
       - name: Fetch and Count Downloads
         run: |

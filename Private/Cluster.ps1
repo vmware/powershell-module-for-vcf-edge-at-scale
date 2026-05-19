@@ -581,7 +581,7 @@ Function Test-VmkernelVsanAndWitnessTraffic {
 
     [OutputType([PSCustomObject])]
     Param (
-        [Parameter(Mandatory = $false)] [bool]$RequireWitnessTraffic = $true,
+        [Parameter(Mandatory = $false)] [Bool]$RequireWitnessTraffic = $true,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
 
@@ -691,7 +691,7 @@ Function Test-VmkernelVsanTrafficViaEsxcli {
     [OutputType([System.Boolean])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
-        [Parameter(Mandatory = $false)] [bool]$RequireWitnessTraffic = $true
+        [Parameter(Mandatory = $false)] [Bool]$RequireWitnessTraffic = $true
     )
 
     $hostName = $VMHost.Name
@@ -5626,12 +5626,12 @@ Function Set-VsanDomNetworkSchedulerThrottleOnCluster {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
     )
-    $clusterObject = try { Get-ClusterByName -ClusterName $ClusterName -Server $Server } catch { $null }
+    $clusterObject = try { Get-ClusterByName -Name $ClusterName -Server $Server } catch { $null }
     if (-not $clusterObject) {
         Write-LogMessage -Type DEBUG -Message "Set-VsanDomNetworkSchedulerThrottleOnCluster: cluster `"$ClusterName`" not found."
         return $false
     }
-    $clusterHosts = Get-VmHostsInCluster -ClusterName $ClusterName
+    $clusterHosts = Get-VmHostsInCluster -ClusterObject $clusterObject -Server $Server
     if (-not $clusterHosts -or @($clusterHosts).Count -eq 0) {
         Write-LogMessage -Type DEBUG -Message "Set-VsanDomNetworkSchedulerThrottleOnCluster: no hosts in cluster `"$ClusterName`"."
         return $false
@@ -6328,9 +6328,9 @@ Function Set-VsanLabSilentChecksIfRequested {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $true)] [bool]$LabEnvironmentEnabled,
+        [Parameter(Mandatory = $true)] [Bool]$LabEnvironmentEnabled,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$SilentCheckBatchSize = 3,
-        [Parameter(Mandatory = $false)] [string[]]$SilentCheckIds = @("advcfgsync", "controllerdiskmode", "controlleronhcl", "controllerfirmware", "controllerdriver", "hclhostbadstate")
+        [Parameter(Mandatory = $false)] [String[]]$SilentCheckIds = @("advcfgsync", "controllerdiskmode", "controlleronhcl", "controllerfirmware", "controllerdriver", "hclhostbadstate")
     )
     if (-not $LabEnvironmentEnabled) {
         return

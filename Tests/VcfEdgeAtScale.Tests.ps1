@@ -8709,6 +8709,30 @@ Describe "Set-VsanDomNetworkSchedulerThrottleOnCluster — mocked vCenter" {
             $result | Should -Be $false
         }
     }
+
+    It "Calls Get-ClusterByName with -Name (not -ClusterName)" {
+        # Regression guard: the function previously used -ClusterName which PowerShell silently caught
+        # as a parameter binding error, causing early return without applying the DOM throttle.
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-ClusterByName { return $null }
+            Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName "cl0"
+            Should -Invoke Get-ClusterByName -Times 1 -Scope It -ParameterFilter { $Name -eq "cl0" }
+        }
+    }
+
+    It "Calls Get-VmHostsInCluster with -ClusterObject (not -ClusterName)" {
+        # Regression guard: the function previously used -ClusterName which is not a parameter on
+        # Get-VmHostsInCluster, causing a parameter binding error (and thus no hosts enumerated).
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            $fakeCluster = [PSCustomObject]@{ Name = "cl0" }
+            Mock Get-ClusterByName { return $fakeCluster }
+            Mock Get-VmHostsInCluster { return $null }
+            Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName "cl0" -Server "vc01"
+            Should -Invoke Get-VmHostsInCluster -Times 1 -Scope It -ParameterFilter { $ClusterObject -eq $fakeCluster }
+        }
+    }
 }
 
 # ── Invoke-VsanClusterAlarmCheckAndRemediate ──────────────────────────────────

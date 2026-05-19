@@ -2405,7 +2405,6 @@ Function Get-EsxDatastoreInfo {
         - Get-EsxDatastoreHealth: Validates datastore health
 
         The function reports UUID, capacity, and health status for discovered datastores.
-        This function requires a direct connection to the ESX host.
 
         Key features:
         - Identifies unformatted storage devices available for use
@@ -2415,7 +2414,7 @@ Function Get-EsxDatastoreInfo {
 
         .PARAMETER EsxHostName
         The hostname or IP address of the ESX host to scan. This parameter is mandatory.
-        Requires an active direct connection to the ESX host.
+        The host must be visible to the connected vCenter server.
 
         .PARAMETER DatastoreName
         Optional. Name of a specific mounted datastore to validate.
@@ -2491,7 +2490,7 @@ Function Get-EsxDatastoreInfo {
         }
 
         try {
-            $vmHost = Get-VMHost -Name $EsxHostName -Server $EsxHostName -ErrorAction Stop
+            $vmHost = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction Stop
         }
         catch [System.UnauthorizedAccessException] {
             Write-LogMessage -Type ERROR -Message "Cannot access ESX host `"$EsxHostName`" due to authorization issues: $($_.Exception.Message)"
