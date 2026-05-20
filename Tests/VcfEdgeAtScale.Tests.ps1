@@ -651,6 +651,43 @@ Describe "Test-IpAddressInCidrRange" {
     }
 }
 
+Describe "Test-GatewayIpInRange" {
+    It "Returns true when gateway IP equals the start IP" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.30.10.1/24" -StartIp "10.30.10.1" -Count 5 }
+        $r | Should -Be $true
+    }
+
+    It "Returns false when gateway IP is below the range" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.30.10.1/24" -StartIp "10.30.10.10" -Count 5 }
+        $r | Should -Be $false
+    }
+
+    It "Returns true when gateway IP equals the last IP in the range" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.30.10.14/24" -StartIp "10.30.10.10" -Count 5 }
+        $r | Should -Be $true
+    }
+
+    It "Returns false when gateway IP is one beyond the end of the range" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.30.10.15/24" -StartIp "10.30.10.10" -Count 5 }
+        $r | Should -Be $false
+    }
+
+    It "Returns true for count=1 when gateway IP equals the start IP" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.0.0.1/24" -StartIp "10.0.0.1" -Count 1 }
+        $r | Should -Be $true
+    }
+
+    It "Returns false for an invalid CIDR format" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "not-a-cidr" -StartIp "10.0.0.1" -Count 5 }
+        $r | Should -Be $false
+    }
+
+    It "Returns false for an invalid start IP" {
+        $r = InModuleScope VcfEdgeAtScale { Test-GatewayIpInRange -GatewayCidr "10.0.0.1/24" -StartIp "999.0.0.1" -Count 5 }
+        $r | Should -Be $false
+    }
+}
+
 Describe "Test-AcceptableStrings" {
     It "Returns true for an exact match" {
         $r = InModuleScope VcfEdgeAtScale { Test-AcceptableStrings -InputText "SMALL" -AcceptableStrings @("TINY", "SMALL", "MEDIUM", "LARGE") }
@@ -1708,6 +1745,58 @@ Describe "ESX host deduplication — null and case-insensitive safety" {
     }
 }
 
+Describe "Confirm-FileOverwritePrompt" {
+    It "Returns true without prompting when the file does not exist" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $false }
+            Mock Read-Host {}
+            $result = Confirm-FileOverwritePrompt -FilePath "C:\nonexistent.json"
+            $result | Should -BeTrue
+            Should -Invoke Read-Host -Times 0 -Scope It
+        }
+    }
+
+    It "Returns true when the file exists and the user enters 'y'" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $true }
+            Mock Read-Host { return "y" }
+            Confirm-FileOverwritePrompt -FilePath "C:\existing.json" | Should -BeTrue
+        }
+    }
+
+    It "Returns true when the file exists and the user enters 'Y'" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $true }
+            Mock Read-Host { return "Y" }
+            Confirm-FileOverwritePrompt -FilePath "C:\existing.json" | Should -BeTrue
+        }
+    }
+
+    It "Returns false when the file exists and the user enters 'n'" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $true }
+            Mock Read-Host { return "n" }
+            Confirm-FileOverwritePrompt -FilePath "C:\existing.json" | Should -BeFalse
+        }
+    }
+
+    It "Returns false when the file exists and the user presses Enter (empty string)" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $true }
+            Mock Read-Host { return "" }
+            Confirm-FileOverwritePrompt -FilePath "C:\existing.json" | Should -BeFalse
+        }
+    }
+
+    It "Propagates the exception when Read-Host throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-Path { return $true }
+            Mock Read-Host { throw "No console" }
+            { Confirm-FileOverwritePrompt -FilePath "C:\existing.json" } | Should -Throw
+        }
+    }
+}
+
 Describe "Test-VcfEdgeAtScaleDeploymentRootInitialized" {
     BeforeAll {
         $script:initTestRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("veas-initcheck-" + [System.Guid]::NewGuid().ToString("N").Substring(0, 8))
@@ -1977,6 +2066,109 @@ Describe "Get-VlcmDesiredBaseImageVersionFromSpec" {
         $noMatch = [PSCustomObject]@{ SomeOtherProp = "irrelevant" }
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $noMatch { Get-VlcmDesiredBaseImageVersionFromSpec -SoftwareSpecOrResult $args[0] }
         $result | Should -BeNullOrEmpty
+    }
+}
+
+Describe "Invoke-VlcmClusterComplianceAndRemediate — routing" {
+    It "Throws VcfDeploymentException when the cluster is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return $null }
+            { Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0" } | Should -Throw
+        }
+    }
+
+    It "Returns without remediation when Test-LcmClusterCompliance throws NullReferenceException" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            # Shadow with an untyped PS function to avoid VMware VIContainer coercion on pipeline input.
+            function Test-LcmClusterCompliance {
+                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
+                Process { throw "Object reference not set to an instance of an object" }
+            }
+            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
+            Mock Test-LcmClusterCompliance { throw "Object reference not set to an instance of an object" }
+            Mock Set-Cluster {}
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when Test-LcmClusterCompliance throws a generic error" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            function Test-LcmClusterCompliance {
+                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
+                Process { throw "vLCM API unavailable" }
+            }
+            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
+            Mock Test-LcmClusterCompliance { throw "vLCM API unavailable" }
+            Mock Set-Cluster {}
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when the compliance result is null" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            function Test-LcmClusterCompliance {
+                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
+                Process { return $null }
+            }
+            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
+            Mock Test-LcmClusterCompliance { return $null }
+            Mock Set-Cluster {}
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when the cluster is already compliant" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            function Test-LcmClusterCompliance {
+                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
+                Process { return [PSCustomObject]@{ Status = "Compliant" } }
+            }
+            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
+            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "Compliant" } }
+            Mock Set-Cluster {}
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Set-Cluster -Remediate when the cluster is non-compliant" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
+            function Test-LcmClusterCompliance {
+                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
+                Process { return [PSCustomObject]@{ Status = "NonCompliant"; NonCompliantHosts = @() } }
+            }
+            # Shadow Set-Cluster with all parameters used by the call site.  SupportsShouldProcess
+            # is required so -Confirm:$false is a valid named parameter (not just a common param
+            # accepted when ShouldProcess is declared).
+            function Set-Cluster {
+                [CmdletBinding(SupportsShouldProcess = $true)]
+                Param(
+                    [Parameter(ValueFromPipeline = $true, Mandatory = $false)] [Object] $In,
+                    [Parameter(Mandatory = $false)] [Switch] $Remediate,
+                    [Parameter(Mandatory = $false)] [Switch] $AcceptEULA,
+                    [Parameter(Mandatory = $false)] [Object] $Server
+                )
+                Process { }
+            }
+            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "NonCompliant"; NonCompliantHosts = @() } }
+            Mock Set-Cluster {}
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 1 -Scope It
+        }
     }
 }
 
@@ -3106,6 +3298,70 @@ Describe "Get-EffectiveClusterName" {
         InModuleScope VcfEdgeAtScale -ArgumentList $cluster {
             Get-EffectiveClusterName -Cluster $args[0] -ClusterNamePrefix "cl0" -EdgeSite "site1"
         } | Should -Be ("a" * 80)
+    }
+}
+
+Describe "Test-EdgeSiteNameValid" {
+    It "Accepts a single lowercase letter" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "a" | Should -BeTrue
+        }
+    }
+
+    It "Accepts a typical valid name with hyphens and digits" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "site-1" | Should -BeTrue
+        }
+    }
+
+    It "Accepts a name that is exactly 80 characters" {
+        $name = "a" * 79 + "z"
+        InModuleScope VcfEdgeAtScale -ArgumentList $name {
+            Test-EdgeSiteNameValid -Name $args[0] | Should -BeTrue
+        }
+    }
+
+    It "Rejects an empty string" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "" | Should -BeFalse
+        }
+    }
+
+    It "Rejects a whitespace-only string" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "   " | Should -BeFalse
+        }
+    }
+
+    It "Rejects a name that is 81 characters long" {
+        $name = "a" * 81
+        InModuleScope VcfEdgeAtScale -ArgumentList $name {
+            Test-EdgeSiteNameValid -Name $args[0] | Should -BeFalse
+        }
+    }
+
+    It "Rejects a name with a leading hyphen" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "-site1" | Should -BeFalse
+        }
+    }
+
+    It "Rejects a name with a trailing hyphen" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "site1-" | Should -BeFalse
+        }
+    }
+
+    It "Rejects a name with uppercase letters" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "Site1" | Should -BeFalse
+        }
+    }
+
+    It "Rejects a name containing a space" {
+        InModuleScope VcfEdgeAtScale {
+            Test-EdgeSiteNameValid -Name "site 1" | Should -BeFalse
+        }
     }
 }
 
@@ -4902,6 +5158,69 @@ Describe "Test-JsonIpAddressesInCidrRanges" {
             Test-JsonIpAddressesInCidrRanges -ClustersToValidate @($args[0]) -SupervisorData $args[1]
         } | Should -Be 0
     }
+
+    It "Returns 1 failure when the allocated range includes the gateway address" {
+        $siteSpec = [PSCustomObject]@{
+            edgeSite        = "site1"
+            mgmtNetworkSpec = [PSCustomObject]@{
+                mgmtNetworkName       = "mgmt"
+                mgmtNetworkStartingIp = "10.0.0.1"
+                mgmtNetworkIPCount    = 5
+            }
+        }
+        $cluster = [PSCustomObject]@{
+            edgeSite   = "site1"
+            networking = [PSCustomObject]@{
+                networkSegments = @([PSCustomObject]@{ name = "mgmt"; gateway = "10.0.0.1/24" })
+            }
+        }
+        $supervisorData = [PSCustomObject]@{ siteSpec = @($siteSpec) }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster, $supervisorData {
+            Test-JsonIpAddressesInCidrRanges -ClustersToValidate @($args[0]) -SupervisorData $args[1]
+        } | Should -Be 1
+    }
+
+    It "Returns 0 failures when the allocated range ends before the gateway address" {
+        $siteSpec = [PSCustomObject]@{
+            edgeSite        = "site1"
+            mgmtNetworkSpec = [PSCustomObject]@{
+                mgmtNetworkName       = "mgmt"
+                mgmtNetworkStartingIp = "10.0.0.10"
+                mgmtNetworkIPCount    = 5
+            }
+        }
+        $cluster = [PSCustomObject]@{
+            edgeSite   = "site1"
+            networking = [PSCustomObject]@{
+                networkSegments = @([PSCustomObject]@{ name = "mgmt"; gateway = "10.0.0.1/24" })
+            }
+        }
+        $supervisorData = [PSCustomObject]@{ siteSpec = @($siteSpec) }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster, $supervisorData {
+            Test-JsonIpAddressesInCidrRanges -ClustersToValidate @($args[0]) -SupervisorData $args[1]
+        } | Should -Be 0
+    }
+
+    It "Returns 1 failure when count=1 and the start IP equals the gateway" {
+        $siteSpec = [PSCustomObject]@{
+            edgeSite               = "site1"
+            primaryWorkloadNetwork = [PSCustomObject]@{
+                primaryWorkloadNetworkName       = "workload"
+                primaryWorkloadNetworkStartingIp = "10.1.0.1"
+                primaryWorkloadNetworkIPCount    = 1
+            }
+        }
+        $cluster = [PSCustomObject]@{
+            edgeSite   = "site1"
+            networking = [PSCustomObject]@{
+                networkSegments = @([PSCustomObject]@{ name = "workload"; gateway = "10.1.0.1/24" })
+            }
+        }
+        $supervisorData = [PSCustomObject]@{ siteSpec = @($siteSpec) }
+        InModuleScope VcfEdgeAtScale -ArgumentList $cluster, $supervisorData {
+            Test-JsonIpAddressesInCidrRanges -ClustersToValidate @($args[0]) -SupervisorData $args[1]
+        } | Should -Be 1
+    }
 }
 
 # ── Mock-vCenter tests ────────────────────────────────────────────────────────
@@ -5920,6 +6239,23 @@ Describe "Test-HostHasRequiredNics — NIC presence validation" {
                 -Server "vc.lab" -VMHost $fakeHost
             $result.IsValid | Should -BeFalse
             $result.MissingNics | Should -Contain "vmnic1"
+        }
+    }
+
+    It "Skips a PSCustomObject NicList entry with no Name property and does not treat it as a missing NIC" {
+        InModuleScope VcfEdgeAtScale {
+            $fakeHost = [PSCustomObject]@{ Name = "esx01.lab" }
+            $fakeAdapter = [PSCustomObject]@{ Name = "vmnic0" }
+            Mock Get-PhysicalNicAdapterOnHost { return $fakeAdapter }
+            Mock Write-LogMessage {}
+            # Entry with no Name property at all — the guard must log a WARNING and skip it.
+            $badEntry = [PSCustomObject]@{ Label = "not-a-nic" }
+            $result = Test-HostHasRequiredNics -EsxHostName "esx01.lab" `
+                -NicList @([PSCustomObject]@{ Name = "vmnic0" }, $badEntry) `
+                -Server "vc.lab" -VMHost $fakeHost
+            $result.IsValid | Should -BeTrue
+            $result.MissingNics.Count | Should -Be 0
+            Should -Invoke Write-LogMessage -Times 1 -Scope It -ParameterFilter { $Type -eq "WARNING" }
         }
     }
 }
@@ -8803,6 +9139,198 @@ Describe "Test-SupervisorConfiguration" {
     }
 }
 
+# ── Supervisor upgrade workflow ───────────────────────────────────────────────
+
+Describe "Get-SupervisorUpgradeInfo — mocked vCenter" {
+    It "Returns HasUpgradeAvailable=false when no matching cluster is found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementSoftwareClusters { return @() }
+            $result = Get-SupervisorUpgradeInfo -ClusterId "domain-c22"
+            $result.Success | Should -BeTrue
+            $result.HasUpgradeAvailable | Should -BeFalse
+            $result.LatestVersion | Should -BeNullOrEmpty
+        }
+    }
+
+    It "Returns HasUpgradeAvailable=false when cluster has no available versions" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementSoftwareClusters {
+                return @([PSCustomObject]@{ Cluster = "domain-c22"; CurrentVersion = "v1.29.0"; AvailableVersions = $null; State = "READY" })
+            }
+            $result = Get-SupervisorUpgradeInfo -ClusterId "domain-c22"
+            $result.Success | Should -BeTrue
+            $result.HasUpgradeAvailable | Should -BeFalse
+            $result.CurrentVersion | Should -Be "v1.29.0"
+        }
+    }
+
+    It "Returns HasUpgradeAvailable=true with LatestVersion set to the first entry when versions are available" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementSoftwareClusters {
+                return @([PSCustomObject]@{
+                    Cluster = "domain-c22"
+                    CurrentVersion = "v1.29.0"
+                    AvailableVersions = @("v1.30.0", "v1.31.0")
+                    State = "READY"
+                })
+            }
+            $result = Get-SupervisorUpgradeInfo -ClusterId "domain-c22"
+            $result.Success | Should -BeTrue
+            $result.HasUpgradeAvailable | Should -BeTrue
+            $result.LatestVersion | Should -Be "v1.30.0"
+            $result.CurrentVersion | Should -Be "v1.29.0"
+        }
+    }
+
+    It "Returns Success=false when the API call throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-ListNamespaceManagementSoftwareClusters { throw "API unavailable" }
+            $result = Get-SupervisorUpgradeInfo -ClusterId "domain-c22"
+            $result.Success | Should -BeFalse
+            $result.HasUpgradeAvailable | Should -BeFalse
+            $result.ErrorMessage | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+Describe "Get-SupervisorUpgradeStatus — mocked vCenter" {
+    It "Returns Success=false when the API call throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-GetClusterNamespaceManagementSoftware { throw "API unavailable" }
+            $result = Get-SupervisorUpgradeStatus -ClusterId "domain-c22"
+            $result.Success | Should -BeFalse
+            $result.IsUpgrading | Should -BeFalse
+        }
+    }
+
+    It "Returns IsUpgrading=false when CurrentVersion equals DesiredVersion" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-GetClusterNamespaceManagementSoftware {
+                [PSCustomObject]@{
+                    CurrentVersion = "v1.30.0"
+                    State = "READY"
+                    AvailableVersions = $null
+                    LastUpgradedDate = $null
+                    Messages = $null
+                    UpgradeStatus = [PSCustomObject]@{ DesiredVersion = "v1.30.0"; Progress = $null; Messages = $null }
+                }
+            }
+            $result = Get-SupervisorUpgradeStatus -ClusterId "domain-c22"
+            $result.Success | Should -BeTrue
+            $result.IsUpgrading | Should -BeFalse
+            $result.CurrentVersion | Should -Be "v1.30.0"
+        }
+    }
+
+    It "Returns IsUpgrading=true when CurrentVersion differs from DesiredVersion" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Invoke-GetClusterNamespaceManagementSoftware {
+                [PSCustomObject]@{
+                    CurrentVersion = "v1.29.0"
+                    State = "UPGRADING"
+                    AvailableVersions = $null
+                    LastUpgradedDate = $null
+                    Messages = $null
+                    UpgradeStatus = [PSCustomObject]@{ DesiredVersion = "v1.30.0"; Progress = $null; Messages = $null }
+                }
+            }
+            $result = Get-SupervisorUpgradeStatus -ClusterId "domain-c22"
+            $result.Success | Should -BeTrue
+            $result.IsUpgrading | Should -BeTrue
+            $result.DesiredVersion | Should -Be "v1.30.0"
+        }
+    }
+}
+
+Describe "Invoke-SupervisorUpgrade — mocked vCenter" {
+    It "Returns Success=false when the required upgrade-spec cmdlet is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-VcfSdkInitializeCommand { return $null }
+            $result = Invoke-SupervisorUpgrade -ClusterId "domain-c22" -DesiredVersion "v1.30.0"
+            $result.Success | Should -BeFalse
+            $result.ErrorMessage | Should -Match "cmdlet"
+        }
+    }
+
+    It "Returns Success=true when the upgrade spec is initialized and Invoke-UpgradeCluster succeeds" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-VcfSdkInitializeCommand {
+                return { param($DesiredVersion, $IgnorePrecheckWarnings) [PSCustomObject]@{} }
+            }
+            Mock Invoke-UpgradeCluster {}
+            $result = Invoke-SupervisorUpgrade -ClusterId "domain-c22" -DesiredVersion "v1.30.0"
+            $result.Success | Should -BeTrue
+            $result.ErrorMessage | Should -BeNullOrEmpty
+        }
+    }
+
+    It "Returns Success=false when Invoke-UpgradeCluster throws" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Get-VcfSdkInitializeCommand {
+                return { param($DesiredVersion, $IgnorePrecheckWarnings) [PSCustomObject]@{} }
+            }
+            Mock Invoke-UpgradeCluster { throw "Upgrade failed: precheck ERROR" }
+            $result = Invoke-SupervisorUpgrade -ClusterId "domain-c22" -DesiredVersion "v1.30.0"
+            $result.Success | Should -BeFalse
+            $result.ErrorMessage | Should -Not -BeNullOrEmpty
+        }
+    }
+}
+
+Describe "Wait-SupervisorUpgradeComplete — mocked status" {
+    It "Returns Success=true immediately when status already shows desired version and READY state" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Write-Progress {}
+            Mock Start-Sleep {}
+            Mock Get-SupervisorUpgradeStatus {
+                return [PSCustomObject]@{
+                    Success = $true
+                    CurrentVersion = "v1.30.0"
+                    DesiredVersion = "v1.30.0"
+                    State = "READY"
+                    UpgradeProgress = $null
+                }
+            }
+            Mock Write-SupervisorKubernetesDiagnosticReport {}
+            $result = Wait-SupervisorUpgradeComplete -ClusterId "domain-c22" -ClusterName "cl0" -DesiredVersion "v1.30.0" -CheckInterval 1 -TotalWaitTime 60
+            $result.Success | Should -BeTrue
+            $result.FinalVersion | Should -Be "v1.30.0"
+            Should -Invoke Start-Sleep -Times 0 -Scope It
+        }
+    }
+
+    It "Returns Success=false after one poll cycle when the upgrade does not complete within TotalWaitTime" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Write-LogMessage {}
+            Mock Write-Progress {}
+            Mock Start-Sleep {}
+            Mock Get-SupervisorUpgradeStatus {
+                return [PSCustomObject]@{
+                    Success = $true
+                    CurrentVersion = "v1.29.0"
+                    DesiredVersion = "v1.30.0"
+                    State = "UPGRADING"
+                    UpgradeProgress = $null
+                }
+            }
+            Mock Write-SupervisorKubernetesDiagnosticReport {}
+            $result = Wait-SupervisorUpgradeComplete -ClusterId "domain-c22" -ClusterName "cl0" -DesiredVersion "v1.30.0" -CheckInterval 1 -TotalWaitTime 1
+            $result.Success | Should -BeFalse
+        }
+    }
+}
+
 # ── Invoke-SupervisorOnlyRollback ─────────────────────────────────────────────
 
 Describe "Invoke-SupervisorOnlyRollback — rollback decision routing" {
@@ -9019,6 +9547,32 @@ Describe "Invoke-ReconfigureClusterHA — mocked vCenter" {
             Mock Update-Cluster {}
             Invoke-ReconfigureClusterHA -ClusterName "cl0" -DelaySeconds 0
             Should -Invoke Update-Cluster -Times 1 -Scope It
+        }
+    }
+}
+
+Describe "Update-Cluster — zero-host guard" {
+    It "Returns without calling Set-Cluster and logs a WARNING when the cluster has no hosts" {
+        InModuleScope VcfEdgeAtScale {
+            # Shadow Get-VMHost with an untyped PS function to avoid VMware VIContainer type coercion
+            # on -Location, which Pester replicates from binary cmdlet metadata and cannot bypass.
+            function Get-VMHost {
+                [CmdletBinding()]
+                Param([Parameter(Mandatory = $false)] [Object] $Location)
+                return @()
+            }
+            $loggedWarnings = [System.Collections.Generic.List[String]]::new()
+            Mock Write-LogMessage {
+                param($Type, $Message)
+                if ($Type -eq "WARNING") { $loggedWarnings.Add($Message) }
+            }
+            Mock Test-VcenterConnection { return [PSCustomObject]@{ IsConnected = $true; ErrorMessage = $null } }
+            Mock Get-Cluster { return [PSCustomObject]@{ Id = "domain-c1"; Name = "cl0" } }
+            Mock Set-Cluster {}
+            Update-Cluster -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+            $loggedWarnings.Count | Should -BeGreaterThan 0
+            $loggedWarnings[0] | Should -Match "no hosts"
         }
     }
 }

@@ -1492,7 +1492,14 @@ function Test-HostHasRequiredNics {
 
     $missingNics = [System.Collections.Generic.List[String]]::new()
     foreach ($item in $NicList) {
-        $nicName = if ($item -is [String]) { $item.Trim() } else { $item.Name }
+        $nicName = if ($item -is [String]) {
+            $item.Trim()
+        } elseif ($null -ne $item.PSObject.Properties["Name"]) {
+            ([String]$item.Name).Trim()
+        } else {
+            Write-LogMessage -Type WARNING -Message "Test-HostHasRequiredNics: NicList entry on host `"$EsxHostName`" has no Name property; skipping — verify NicList format."
+            continue
+        }
         if ([String]::IsNullOrWhiteSpace($nicName)) {
             continue
         }

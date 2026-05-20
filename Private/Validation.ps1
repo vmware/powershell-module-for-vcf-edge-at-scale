@@ -618,6 +618,43 @@ function Get-EffectiveHaPolicyForCluster {
     }
     return "reservationBased"
 }
+function Test-EdgeSiteNameValid {
+
+    <#
+        .SYNOPSIS
+        Returns $true when a string is a valid edgeSite name.
+
+        .DESCRIPTION
+        A valid edgeSite name is 1–80 characters, lowercase letters, digits, and hyphens only,
+        and must not start or end with a hyphen. Matches the JavaScript _isValidRfc1123 function in
+        veas-ui.html and the Python RFC1123_RE constant in veas-json-generator.py.
+
+        .PARAMETER Name
+        The candidate edgeSite name to test.
+
+        .OUTPUTS
+        Boolean - $true when valid; $false when the name is missing, too long, or contains invalid characters.
+
+        .EXAMPLE
+        Test-EdgeSiteNameValid -Name "site1"
+        # Returns: $true.
+
+        .EXAMPLE
+        Test-EdgeSiteNameValid -Name "-bad"
+        # Returns: $false.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Name
+    )
+
+    if ([String]::IsNullOrWhiteSpace($Name)) {
+        return $false
+    }
+    return $Name -cmatch '^[a-z0-9]([a-z0-9-]{0,78}[a-z0-9])?$'
+}
 function Get-EffectiveClusterName {
 
     <#

@@ -1106,10 +1106,16 @@ function Disable-SupervisorOnCluster {
         $elapsedTime = 0
         do {
             $wcpList = @(Invoke-ListNamespaceManagementClusters -ErrorAction SilentlyContinue | Where-Object {
-                $_.clusterName -and (
-                    $_.clusterName -eq $ClusterName -or
-                    $_.clusterName.Id -eq $ClusterId
-                )
+                if (-not $_) { return $false }
+                # clusterName may be a plain String or an object with an Id property depending on the
+                # API version. Test both paths explicitly so a null Id on a string-typed clusterName
+                # cannot produce a false $null -eq $null match against $ClusterId.
+                $nameMatch = ($_.clusterName -is [String]) -and ($_.clusterName -eq $ClusterName)
+                $idMatch   = ($null -ne $ClusterId) -and
+                             ($_.clusterName -isnot [String]) -and
+                             ($null -ne $_.clusterName.Id) -and
+                             ($_.clusterName.Id -eq $ClusterId)
+                $nameMatch -or $idMatch
             })
             $wcpEntry = $wcpList | Select-Object -First 1
             $configStatus = if ($wcpEntry) { $wcpEntry.ConfigStatus } else { $null }
@@ -13935,6 +13941,63 @@ function Test-IpAddressInCidrRange {
         return $false
     }
 }
+function Test-GatewayIpInRange {
+
+    <#
+        .SYNOPSIS
+        Returns $true when the gateway IP (host part of a CIDR) falls within the IP range [StartIp, StartIp+Count-1].
+
+        .DESCRIPTION
+        Extracts the host address from GatewayCidr and checks whether it is consumed by the IP block
+        defined by StartIp and Count. Used to prevent allocating an IP range that overwrites the
+        network gateway address.
+
+        .PARAMETER GatewayCidr
+        The gateway CIDR (e.g. 10.0.0.1/24). Only the host portion is used as the gateway IP.
+
+        .PARAMETER StartIp
+        The first IP address of the range to test.
+
+        .PARAMETER Count
+        The number of consecutive IPs in the range. Must be a positive integer.
+
+        .OUTPUTS
+        [Boolean] $true when the gateway IP is within [StartIp, StartIp+Count-1].
+
+        .EXAMPLE
+        Test-GatewayIpInRange -GatewayCidr "10.30.10.1/24" -StartIp "10.30.10.1" -Count 50
+        Returns $true — the gateway 10.30.10.1 is the start IP.
+
+        .EXAMPLE
+        Test-GatewayIpInRange -GatewayCidr "10.30.10.1/24" -StartIp "10.30.10.2" -Count 50
+        Returns $false — the gateway 10.30.10.1 is below the range.
+
+        .NOTES
+        Calls Test-ValidIPv4Address to guard against malformed inputs; returns $false on any parse failure.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Boolean])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$GatewayCidr,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$StartIp,
+        [Parameter(Mandatory = $true)] [ValidateRange(1, [int]::MaxValue)] [Int]$Count
+    )
+
+    try {
+        $gatewayIp = $GatewayCidr.Split('/')[0]
+        if (-not (Test-ValidIPv4Address -IpAddress $gatewayIp) -or -not (Test-ValidIPv4Address -IpAddress $StartIp)) {
+            return $false
+        }
+        $gwInt    = ConvertTo-IpInt -IpString $gatewayIp
+        $startInt = ConvertTo-IpInt -IpString $StartIp
+        $endInt   = $startInt + $Count - 1
+        return ($gwInt -ge $startInt -and $gwInt -le $endInt)
+    }
+    catch {
+        return $false
+    }
+}
 function Get-JsonPropertyValue {
 
     <#
@@ -15912,24 +15975,28 @@ function Test-JsonIpAddressesInCidrRanges {
         $ipToNetworkMappings = @(
             @{
                 IpPath = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressStartingIp"
+                CountPath = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkIpAddressCount"
                 NetworkNamePath = "foundationLoadBalancerComponents.flbManagementNetwork.flbNetworkName"
                 Description = "FLB Management Network Starting IP"
                 SiteSpec = $matchingSiteSpec
             },
             @{
                 IpPath = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressStartingIp"
+                CountPath = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkIpAddressCount"
                 NetworkNamePath = "foundationLoadBalancerComponents.flbVirtualServerNetwork.flbNetworkName"
                 Description = "FLB Virtual Server Network Starting IP"
                 SiteSpec = $matchingSiteSpec
             },
             @{
                 IpPath = "mgmtNetworkSpec.mgmtNetworkStartingIp"
+                CountPath = "mgmtNetworkSpec.mgmtNetworkIPCount"
                 NetworkNamePath = "mgmtNetworkSpec.mgmtNetworkName"
                 Description = "Supervisor Management Network Starting IP"
                 SiteSpec = $matchingSiteSpec
             },
             @{
                 IpPath = "primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp"
+                CountPath = "primaryWorkloadNetwork.primaryWorkloadNetworkIPCount"
                 NetworkNamePath = "primaryWorkloadNetwork.primaryWorkloadNetworkName"
                 Description = "Primary Workload Network Starting IP"
                 SiteSpec = $matchingSiteSpec
@@ -15953,6 +16020,18 @@ function Test-JsonIpAddressesInCidrRanges {
                         $validationFailures++
                     } else {
                         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$($mapping.Description) ($ipValue) in edgeSite '$currentEdgeSite' is within the gateway CIDR range ($gatewayValue)"
+
+                        # Verify that the gateway IP itself is not consumed by the IP range.
+                        $countRaw = Get-JsonPropertyValue -InputData $mapping.SiteSpec -PropertyPath $mapping.CountPath
+                        $ipCount = 0
+                        if ($null -ne $countRaw) {
+                            try { $ipCount = [int]$countRaw } catch { $ipCount = 0 }
+                        }
+                        if ($ipCount -gt 0 -and (Test-GatewayIpInRange -GatewayCidr $gatewayValue -StartIp $ipValue -Count $ipCount)) {
+                            $gatewayIp = $gatewayValue.Split('/')[0]
+                            Write-LogMessage -Type ERROR -Message "$($mapping.Description) ($ipValue, count $ipCount) in edgeSite '$currentEdgeSite' includes the gateway address $gatewayIp. Set the start IP to an address after the gateway."
+                            $validationFailures++
+                        }
                     }
                 } else {
                     Write-LogMessage -Type ERROR -Message "Network '$networkName' referenced in supervisor JSON (edgeSite: $currentEdgeSite) not found in infrastructure JSON network segments."
