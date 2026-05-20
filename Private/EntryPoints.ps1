@@ -1158,6 +1158,22 @@ function Start-VcfEdgeAtScale {
         }
         $siteIndication = if ($edgeSitesArrayForValidation.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArrayForValidation -join '", "')`"" } else { "all sites" }
 
+        $edgeSiteErrors = [System.Collections.Generic.List[String]]::new()
+        foreach ($cluster in $inputData.clusters) {
+            $siteName = [String]($cluster.edgeSite)
+            if ([String]::IsNullOrWhiteSpace($siteName)) {
+                $edgeSiteErrors.Add("clusters[].edgeSite: a required edgeSite name is missing or empty.")
+            } elseif (-not (Test-EdgeSiteNameValid -Name $siteName)) {
+                $edgeSiteErrors.Add("clusters[`"$siteName`"].edgeSite: must be 1-80 chars, lowercase letters, digits, and hyphens only; must not start or end with a hyphen.")
+            }
+        }
+        if ($edgeSiteErrors.Count -gt 0) {
+            foreach ($err in $edgeSiteErrors) {
+                Write-LogMessage -Type ERROR -Message $err
+            }
+            throw [VcfDeploymentException]::new("One or more edgeSite names failed validation. See log for details.")
+        }
+
         # Validate YAML file existence for required ArgoCD and Harbor files (cheap operation, do this first). Skip when -CleanUp is set (cleanup does not use deployment YAMLs). Skip when -ComputeOnly (no supervisor or services).
         if ($CleanUp -notin @("Supervisor", "Compute", "All", "ArgoCD", "Harbor") -and -not $ComputeOnly) {
             Write-LogMessage -Type DEBUG -Message "Validating YAML file existence for $siteIndication..."

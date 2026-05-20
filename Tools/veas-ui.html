@@ -1,30 +1,30 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1019 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1020 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
 <style>
   :root {
-    --bg: #1a1d23;
-    --surface: #22262f;
-    --surface2: #2a2f3a;
-    --border: #3a4050;
+    --bg: #1b2a32;
+    --surface: #213645;
+    --surface2: #27404f;
+    --border: #2e4a5a;
     --accent: #00b4d8;
     --accent-dark: #0096c7;
     --success: #2ec27e;
     --error: #e05353;
     --warning: #f0a500;
-    --text: #e8eaf0;
-    --text-muted: #8892a4;
-    --radius: 8px;
+    --text: #eaedf3;
+    --text-muted: #8ea5b3;
+    --radius: 3px;
     --shadow: 0 4px 16px rgba(0,0,0,0.4);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { background: var(--bg); color: var(--text); font-family: 'Segoe UI', system-ui, sans-serif; font-size: 14px; line-height: 1.6; }
   header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; gap: 16px; }
-  header h1 { font-size: 20px; font-weight: 600; color: var(--accent); }
+  header h1 { font-size: 20px; font-weight: 600; color: var(--text); }
   header p { font-size: 12px; color: var(--text-muted); }
   .layout { display: flex; min-height: calc(100vh - 61px); }
   .sidebar { width: 220px; background: var(--surface); border-right: 1px solid var(--border); padding: 24px 0; flex-shrink: 0; }
@@ -44,16 +44,16 @@
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
   .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; }
   .field { display: flex; flex-direction: column; gap: 5px; }
-  .field label { font-size: 12px; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  .field label { font-size: 12px; font-weight: 600; color: var(--text-muted); }
   .field label .req { color: var(--error); margin-left: 2px; }
   .field label .tip { color: var(--text-muted); font-weight: 400; text-transform: none; font-size: 11px; margin-left: 4px; letter-spacing: 0; }
   .tt { position: relative; display: inline-flex; align-items: center; margin-left: 5px; cursor: help; }
   .tt-icon { display: inline-flex; align-items: center; justify-content: center; width: 14px; height: 14px; border-radius: 50%; background: var(--border); color: var(--text-muted); font-size: 9px; font-weight: 700; line-height: 1; text-transform: none; letter-spacing: 0; font-style: normal; }
   .tt-icon:hover { background: var(--accent); color: #fff; }
-  .tt .tt-body { visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: 240px; background: #0d1117; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; font-size: 11px; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: 0; line-height: 1.5; z-index: 100; pointer-events: none; transition: opacity 0.15s; white-space: normal; box-shadow: var(--shadow); }
+  .tt .tt-body { visibility: hidden; opacity: 0; position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%); width: 240px; background: #0d1117; border: 1px solid var(--border); border-radius: 3px; padding: 8px 10px; font-size: 11px; font-weight: 400; color: var(--text); text-transform: none; letter-spacing: 0; line-height: 1.5; z-index: 100; pointer-events: none; transition: opacity 0.15s; white-space: normal; box-shadow: var(--shadow); }
   .tt .tt-body::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 5px solid transparent; border-top-color: var(--border); }
   .tt:hover .tt-body, .tt:focus-within .tt-body { visibility: visible; opacity: 1; }
-  input, select, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 6px; padding: 8px 12px; font-size: 13px; width: 100%; outline: none; transition: border-color 0.15s; font-family: inherit; }
+  input, select, textarea { background: var(--surface2); border: 1px solid var(--border); color: var(--text); border-radius: 3px; padding: 8px 12px; font-size: 13px; width: 100%; outline: none; transition: border-color 0.15s; font-family: inherit; }
   input:focus, select:focus, textarea:focus { border-color: var(--accent); }
   input.invalid, select.invalid { border-color: var(--error) !important; }
   textarea { resize: vertical; min-height: 60px; }
@@ -61,7 +61,7 @@
   .field-error { font-size: 11px; color: var(--error); display: none; }
   .inline-row { display: flex; gap: 12px; align-items: flex-end; }
   .inline-row .field { flex: 1; }
-  .btn { padding: 9px 20px; border-radius: 6px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 8px; }
+  .btn { padding: 9px 20px; border-radius: 3px; border: none; font-size: 13px; font-weight: 600; cursor: pointer; transition: all 0.15s; display: inline-flex; align-items: center; gap: 8px; }
   .btn-primary { background: var(--accent); color: #fff; }
   .btn-primary:hover { background: var(--accent-dark); }
   .btn-secondary { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
@@ -93,19 +93,19 @@
   .toggle-row label { font-size: 13px; cursor: pointer; }
   .collapsible-content { overflow: visible; transition: max-height 0.3s ease; }
   .collapsible-content.collapsed { display: none; }
-  .section-toggle { color: var(--accent); font-size: 11px; cursor: pointer; font-weight: 600; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 4px; padding: 3px 11px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
+  .section-toggle { color: var(--accent); font-size: 11px; cursor: pointer; font-weight: 600; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 3px; padding: 3px 11px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
   .section-toggle:hover { background: var(--success); border-color: var(--success); color: #fff; }
-  .chip-add-btn { color: var(--accent); font-size: 14px; cursor: pointer; font-weight: 700; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 4px; padding: 1px 8px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
+  .chip-add-btn { color: var(--accent); font-size: 14px; cursor: pointer; font-weight: 700; background: rgba(0,180,216,0.08); border: 1px solid rgba(0,180,216,0.35); border-radius: 3px; padding: 1px 8px; line-height: 1; transition: background 0.15s, color 0.15s, border-color 0.15s; display: inline-flex; align-items: center; white-space: nowrap; user-select: none; }
   .chip-add-btn:hover { background: var(--success); border-color: var(--success); color: #fff; }
   .tag-row { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
-  .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; padding: 2px 8px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
+  .tag { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 2px 8px; font-size: 12px; display: flex; align-items: center; gap: 4px; }
   .tag-remove { cursor: pointer; color: var(--text-muted); }
   .tag-remove:hover { color: var(--error); }
   .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.3); border-top-color: #fff; border-radius: 50%; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
   .json-preview { background: #0d1117; border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; font-family: 'Consolas', 'Monaco', monospace; font-size: 12px; color: #c9d1d9; white-space: pre; overflow-x: auto; max-height: 400px; overflow-y: auto; }
   .tabs { display: flex; gap: 2px; margin-bottom: 12px; }
-  .tab { padding: 7px 16px; border-radius: 6px 6px 0 0; font-size: 13px; cursor: pointer; background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); border-bottom: none; }
+  .tab { padding: 7px 16px; border-radius: 3px 3px 0 0; font-size: 13px; cursor: pointer; background: var(--surface2); color: var(--text-muted); border: 1px solid var(--border); border-bottom: none; }
   .tab.active { background: #0d1117; color: var(--accent); font-weight: 600; }
   hr { border: none; border-top: 1px solid var(--border); margin: 20px 0; }
   .logo-badge { background: var(--accent); color: #fff; font-size: 11px; font-weight: 700; padding: 3px 10px; border-radius: 20px; }
@@ -118,14 +118,14 @@
   .step-console .line-info { color: #6bddaa; }
   .step-console .line-plain { color: #c9d1d9; }
   .next-btn-wrap { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  #undoToast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--border); border-radius: 8px; padding: 10px 18px; display: flex; align-items: center; gap: 12px; font-size: 13px; box-shadow: var(--shadow); z-index: 9999; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
+  #undoToast { position: fixed; bottom: 24px; left: 50%; transform: translateX(-50%); background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 10px 18px; display: flex; align-items: center; gap: 12px; font-size: 13px; box-shadow: var(--shadow); z-index: 9999; opacity: 0; transition: opacity 0.2s; pointer-events: none; }
   #undoToast.visible { opacity: 1; pointer-events: auto; }
-  #undoToast button { padding: 4px 14px; border-radius: 5px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; }
+  #undoToast button { padding: 4px 14px; border-radius: 3px; border: 1px solid var(--accent); background: transparent; color: var(--accent); font-size: 12px; font-weight: 700; cursor: pointer; }
   #undoToast button:hover { background: var(--accent); color: #fff; }
   #undoDepth { font-size: 11px; color: var(--text-muted); margin-left: 2px; }
   #checkpointBar { position: fixed; bottom: 0; left: 0; right: 0; background: var(--surface); border-top: 1px solid var(--border); padding: 7px 24px; display: none; align-items: center; gap: 12px; font-size: 12px; color: var(--text-muted); z-index: 9998; }
   #checkpointBar.visible { display: flex; }
-  #checkpointBar button { padding: 3px 12px; border-radius: 5px; border: 1px solid var(--warning); background: transparent; color: var(--warning); font-size: 12px; font-weight: 700; cursor: pointer; }
+  #checkpointBar button { padding: 3px 12px; border-radius: 3px; border: 1px solid var(--warning); background: transparent; color: var(--warning); font-size: 12px; font-weight: 700; cursor: pointer; }
   #checkpointBar button:hover { background: var(--warning); color: #1a1d23; }
   /* Shared modal-box style — used by cloneModal and newSiteModal */
   .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 28px 32px; width: 420px; max-width: 95vw; box-shadow: var(--shadow); }
@@ -133,7 +133,7 @@
   .modal-box p  { margin: 0 0 18px; font-size: 13px; color: var(--text-muted); }
   .modal-box label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
   /* Service badge state classes — supervisor service band */
-  .svc-badge { padding: 2px 10px; border-radius: 4px; font-size: 11px; font-weight: 700; cursor: pointer; }
+  .svc-badge { padding: 2px 10px; border-radius: 3px; font-size: 11px; font-weight: 700; cursor: pointer; }
   .svc-badge-enabled          { background: rgba(46,194,126,0.12); border: 1px solid var(--success);     color: var(--success); }
   .svc-badge-enabled-override { background: rgba(46,194,126,0.20); border: 2px solid var(--success);     color: var(--success); }
   .svc-badge-disabled-common  { background: rgba(240,165,0,0.12);  border: 1px solid var(--warning);     color: var(--warning); }
@@ -157,10 +157,10 @@
   #siteRemapModalBox h3 { margin: 0 0 6px; font-size: 16px; font-weight: 600; color: var(--warning); }
   #siteRemapModalBox p { margin: 0 0 18px; font-size: 13px; color: var(--text-muted); }
   .remap-row { display: grid; grid-template-columns: 1fr 20px 1fr; align-items: center; gap: 10px; margin-bottom: 12px; }
-  .remap-sup { font-family: monospace; font-size: 12px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--warning); border-radius: 4px; color: var(--warning); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .remap-sup { font-family: monospace; font-size: 12px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--warning); border-radius: 3px; color: var(--warning); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .remap-arrow { text-align: center; color: var(--text-muted); font-size: 14px; }
   #siteRemapModalActions { display: flex; gap: 10px; justify-content: flex-end; margin-top: 20px; border-top: 1px solid var(--border); padding-top: 16px; }
-  .remap-infra-note { font-family: monospace; font-size: 12px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 4px; margin-bottom: 8px; color: var(--text-muted); }
+  .remap-infra-note { font-family: monospace; font-size: 12px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; margin-bottom: 8px; color: var(--text-muted); }
   #architectureDiagram svg { display: block; }
   #architectureDiagram { overflow-x: auto; overflow-y: hidden; }
   #archDiagramDetails summary { user-select: none; }
@@ -171,17 +171,17 @@
   .site-diagram-extra > summary::-webkit-details-marker { display: none; }
   .site-diagram-extra > summary::before { content: '▶'; font-size: 9px; margin-right: 2px; transition: transform 0.15s; display: inline-block; }
   details.site-diagram-extra[open] > summary::before { transform: rotate(90deg); }
-  .arch-tab { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s; }
+  .arch-tab { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 4px 14px; font-size: 12px; font-weight: 600; cursor: pointer; transition: border-color 0.15s, color 0.15s; }
   .arch-tab:hover { border-color: var(--accent); color: var(--accent); }
   .arch-tab-active { background: transparent; }
-  .nic-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--accent); color: var(--text); border-radius: 4px; padding: 2px 8px; font-size: 12px; font-family: 'Consolas','Monaco',monospace; }
+  .nic-chip { display: inline-flex; align-items: center; gap: 5px; background: var(--surface); border: 1px solid var(--accent); color: var(--text); border-radius: 3px; padding: 2px 8px; font-size: 12px; font-family: 'Consolas','Monaco',monospace; }
   .nic-chip-remove { cursor: pointer; color: var(--text-muted); font-size: 14px; line-height: 1; margin-left: 2px; }
   .nic-chip-remove:hover { color: var(--error); }
   .nic-count-ok  { color: var(--success); }
   .nic-count-bad { color: var(--error); }
   .conn-results { margin-top: 10px; display: flex; flex-direction: column; gap: 5px; }
   .conn-row { display: flex; align-items: center; gap: 8px; font-size: 12px; font-family: 'Consolas', 'Monaco', monospace; }
-  .conn-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .conn-badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 700; white-space: nowrap; }
   .conn-ok   { background: rgba(46,194,126,0.15); border: 1px solid var(--success); color: var(--success); }
   .conn-fail { background: rgba(224,83,83,0.15);  border: 1px solid var(--error);   color: var(--error); }
   .conn-spin { background: rgba(136,146,164,0.15); border: 1px solid var(--text-muted); color: var(--text-muted); }
@@ -206,19 +206,19 @@
   /* Required-field empty warning border (applied programmatically on render/blur) */
   input.req-empty, select.req-empty, textarea.req-empty, div.req-empty { border-color: var(--warning) !important; }
   /* Segment role guide */
-  .seg-role-guide { background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; padding: 10px 14px; margin-bottom: 14px; font-size: 12px; color: var(--text-muted); }
+  .seg-role-guide { background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; padding: 10px 14px; margin-bottom: 14px; font-size: 12px; color: var(--text-muted); }
   .seg-role-guide summary { cursor: pointer; font-weight: 600; color: var(--text); list-style: none; display: flex; align-items: center; gap: 6px; user-select: none; }
   .seg-role-guide summary::-webkit-details-marker { display: none; }
   .seg-role-guide summary::before { content: '▶'; font-size: 9px; color: var(--accent); transition: transform 0.15s; display: inline-block; }
   .seg-role-guide[open] summary::before { transform: rotate(90deg); }
   .seg-role-guide ul { margin: 8px 0 0; padding-left: 18px; line-height: 1.8; }
   .seg-role-guide li strong { color: var(--text); }
-  .readme-link { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 6px; background: rgba(0,180,216,0.1); border: 1px solid rgba(0,180,216,0.3); color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
+  .readme-link { display: inline-flex; align-items: center; gap: 6px; padding: 6px 12px; border-radius: 3px; background: rgba(0,180,216,0.1); border: 1px solid rgba(0,180,216,0.3); color: var(--accent); font-size: 12px; font-weight: 600; text-decoration: none; transition: background 0.15s, border-color 0.15s; }
   .readme-link:hover { background: rgba(0,180,216,0.2); border-color: var(--accent); }
   /* Chip-input container — DNS / NTP / search / ESX host entry areas */
-  .chip-container { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 6px; align-items: center; }
+  .chip-container { display: flex; flex-wrap: wrap; gap: 6px; min-height: 34px; padding: 6px 10px; background: var(--surface2); border: 1px solid var(--border); border-radius: 3px; align-items: center; }
   /* Chip item — outer/inner span pair for NIC-pair, ESX, DNS/NTP/search, VMK IP chips */
-  .chip-item { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--accent); border-radius: 5px; overflow: hidden; font-family: 'Consolas','Monaco',monospace; font-size: 12px; }
+  .chip-item { display: inline-flex; align-items: center; gap: 0; border: 1px solid var(--accent); border-radius: 3px; overflow: hidden; font-family: 'Consolas','Monaco',monospace; font-size: 12px; }
   .chip-item-label { padding: 3px 8px; background: rgba(0,180,216,0.08); color: var(--text); }
   /* Summary table header cell typography */
   .th-label { padding: 5px 10px; text-align: left; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .05em; }
@@ -226,24 +226,24 @@
   .text-muted-sm { color: var(--text-muted); font-size: 13px; }
   /* ---- Light mode ---- */
   body.light {
-    --bg: #f0f2f5;
+    --bg: #f0f4f7;
     --surface: #ffffff;
-    --surface2: #edf1f7;
-    --border: #c8d0dc;
+    --surface2: #e8f1f6;
+    --border: #c8d3db;
     --accent: #0091be;
     --accent-dark: #007699;
     --success: #1a9e5c;
     --error: #c0392b;
     --warning: #c07800;
-    --text: #1c2135;
-    --text-muted: #5a6680;
+    --text: #1c2a35;
+    --text-muted: #5a7080;
     --shadow: 0 4px 16px rgba(0,0,0,0.08);
   }
   body.light .errors-box { background: #fef2f2; }
   body.light .errors-box li { color: #c0392b; }
   body.light .success-box { background: #f0fdf4; }
   /* ---- Theme toggle button ---- */
-  #themeToggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); border-radius: 6px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: border-color 0.15s, color 0.15s; white-space: nowrap; }
+  #themeToggle { background: var(--surface2); border: 1px solid var(--border); color: var(--text-muted); border-radius: 3px; padding: 5px 11px; font-size: 12px; font-weight: 600; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; transition: border-color 0.15s, color 0.15s; white-space: nowrap; }
   #themeToggle:hover { border-color: var(--accent); color: var(--accent); }
 </style>
 </head>
@@ -355,7 +355,7 @@
         <div class="field">
           <label>Physical NICs <span class="req">*</span><span class="tt"><span class="tt-icon">?</span><span class="tt-body">Physical NIC names on each ESX host. Enter exactly two NIC names at a time, separated by a comma (e.g. vmnic0, vmnic1). A total of 2 or 4 NICs is required across all entries.</span></span></label>
           <input type="hidden" id="nicList">
-          <div id="nicChips" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;align-items:center;">
+          <div id="nicChips" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;align-items:center;">
             <span class="text-muted-sm">No NICs added yet</span>
           </div>
           <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
@@ -559,7 +559,7 @@
           <div class="field">
             <label>FLB Network Type<span class="tt"><span class="tt-icon">?</span><span class="tt-body">Network type for the FLB. Only DVPG (vSphere Distributed Port Group) is supported.</span></span></label>
             <input type="hidden" id="flbNetworkType" value="DVPG">
-            <div style="padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:8px;">
+            <div style="padding:8px 12px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;font-size:13px;color:var(--text-muted);display:flex;align-items:center;gap:8px;">
               <span style="font-family:'Consolas','Monaco',monospace;color:var(--text);">DVPG</span>
               <span style="font-size:11px;">(vSphere Distributed Port Group)</span>
             </div>
@@ -575,7 +575,7 @@
             </div>
             <div style="display:flex;gap:6px;margin-top:6px;">
               <input type="text" id="dnsInput" placeholder="10.0.0.1" style="flex:1;font-size:13px;" onkeydown="if(event.key==='Enter'){event.preventDefault();addDns();}">
-              <button class="btn btn-secondary" style="padding:6px 12px;font-size:13px;white-space:nowrap;" onclick="addDns()">+ Add</button>
+              <button id="dnsAddBtn" class="btn btn-secondary" style="padding:6px 12px;font-size:13px;white-space:nowrap;" onclick="addDns()">+ Add</button>
             </div>
             <span class="field-hint" id="dnsHint">Max 3 IPv4 addresses.</span>
           </div>
@@ -606,7 +606,7 @@
         </div>
       </div>
 
-      <div style="background:rgba(0,180,216,0.07);border:1px solid rgba(0,180,216,0.3);border-radius:8px;padding:14px 18px;margin:0 0 16px;font-size:13px;line-height:1.7;color:var(--text);">
+      <div style="background:rgba(0,180,216,0.07);border:1px solid rgba(0,180,216,0.3);border-radius:3px;padding:14px 18px;margin:0 0 16px;font-size:13px;line-height:1.7;color:var(--text);">
         <div style="font-weight:700;margin-bottom:6px;color:var(--accent);">ℹ How supervisor sites link to infrastructure sites</div>
         <ul style="margin:0;padding-left:18px;color:var(--text-muted);">
           <li>Each site block below corresponds to a cluster defined in <strong>Edge Sites</strong>, matched by its <strong>Edge Site ID</strong>. The PowerShell module joins the two config files on this field — every site must appear in <em>both</em> files with exactly the same name.</li>
@@ -659,7 +659,7 @@
           <div class="tab active" data-tab="infra" onclick="switchTab('infra')">infrastructure.json</div>
           <div class="tab" data-tab="supervisor" onclick="switchTab('supervisor')">supervisor.json</div>
         </div>
-        <button id="copyJsonBtn" class="btn btn-secondary" style="font-size:12px;padding:5px 14px;margin-bottom:0;border-radius:6px 6px 0 0;border-bottom:none;"
+        <button id="copyJsonBtn" class="btn btn-secondary" style="font-size:12px;padding:5px 14px;margin-bottom:0;border-radius:3px 3px 0 0;border-bottom:none;"
           onclick="copyActiveJson()" title="Copy the currently displayed JSON to clipboard">⎘ Copy</button>
       </div>
       <div id="infraPreview" class="json-preview"></div>
@@ -823,6 +823,20 @@ function _suggestStartIp(cidr) {
   return r ? r.first : "";
 }
 
+// Like _suggestStartIp but skips the gateway IP itself when it equals the first usable host
+// address (the common /24 case where gateway = network+1). Returns the IP after the gateway
+// so the auto-filled start IP never collides with the gateway address.
+function _suggestStartIpAfterGateway(cidr) {
+  const r = _cidrToRange(cidr);
+  if (!r) return "";
+  const gwIp = (cidr || "").split("/")[0];
+  if (r.first === gwIp) {
+    const gwInt = _ipToInt(gwIp);
+    if (gwInt !== null) return _intToIp((gwInt + 1) >>> 0);
+  }
+  return r.first;
+}
+
 // Returns true when ipStr falls within the CIDR's network (host part check only).
 function _ipInCidr(ipStr, cidr) {
   if (!ipStr || !cidr) return false;
@@ -868,13 +882,16 @@ function _segCtxHtml(name, segMeta) {
 }
 
 // Renders the range hint HTML for a start-IP field given the selected segment name and meta map.
+// The display start uses _suggestStartIpAfterGateway so the hint never shows the gateway itself
+// as a valid first address (the gateway cannot be assigned to a workload IP range).
 function _rangeHintHtml(segName, segMeta) {
   if (!segName) return `<span class="range-hint"></span>`;
   const meta = segMeta[segName];
   if (!meta || !meta.gw) return `<span class="range-hint warn">Set a gateway in Edge Sites first.</span>`;
   const r = _cidrToRange(meta.gw);
   if (!r) return `<span class="range-hint warn">Gateway CIDR is not valid.</span>`;
-  return `<span class="range-hint">Allowed range: ${esc(r.first)} \u2013 ${esc(r.last)}</span>`;
+  const displayFirst = _suggestStartIpAfterGateway(meta.gw) || r.first;
+  return `<span class="range-hint">Allowed range: ${esc(displayFirst)} \u2013 ${esc(r.last)}</span>`;
 }
 
 // ---------------------------------------------------------------------------
@@ -972,7 +989,7 @@ function _restrictInput(el, allowedChars) {
 // Lowercases and strips non-RFC1123 characters in-place (a–z, 0–9, hyphens only).
 function _restrictRfc1123Input(el) {
   const old = el.value;
-  el.value  = old.toLowerCase().replace(/[^a-z0-9-]/g, '');
+  el.value  = old.toLowerCase().replace(/[^a-z0-9-]/g, '').slice(0, 80);
   if (el.value !== old) {
     try { el.setSelectionRange(el.value.length, el.value.length); } catch (_) {}
   }
@@ -1137,6 +1154,59 @@ function validateSegField(el, type, min, allowEmpty) {
       errEl.textContent = "";
       errEl.classList.remove("vis");
     }
+  }
+}
+
+// Maps supervisor section keys to the JSON field names used for the network name and IP count,
+// allowing _validateGatewayConflict to look up those values without per-callsite string literals.
+const _SUP_SECTION_META = {
+  flbMgmt:             { nameField: "flbNetworkName",              countField: "flbNetworkIpAddressCount" },
+  flbVirtualServerNet: { nameField: "flbNetworkName",              countField: "flbNetworkIpAddressCount" },
+  mgmt:                { nameField: "mgmtNetworkName",             countField: "mgmtNetworkIPCount"        },
+  workloadNet:         { nameField: "primaryWorkloadNetworkName",  countField: "primaryWorkloadNetworkIPCount" },
+};
+
+// Inline gateway-conflict validator. Call on onblur of any supervisor start-IP field after
+// validateSegField so format errors are shown first. Reports an error when the gateway address
+// (the host part of the segment's CIDR) falls within [startIp, startIp + count - 1].
+// Only runs when the start IP is already a valid IPv4 address (format checked by validateSegField).
+function _validateGatewayConflict(siteId, section, inputEl) {
+  const startIp = (inputEl.value || "").trim();
+  if (!startIp || !_isValidIPv4(startIp)) return;
+
+  const site = sites.find(s => s.id === siteId);
+  if (!site) return;
+
+  const sm = _SUP_SECTION_META[section];
+  if (!sm) return;
+
+  const sv      = site._supervisor || {};
+  const secData = sv[section] || {};
+  const segName = secData[sm.nameField] || "";
+  if (!segName) return;
+
+  const segMeta = _segMetaMap(site);
+  const meta    = segMeta[segName];
+  if (!meta || !meta.gw || !_isValidCidrFmt(meta.gw)) return;
+
+  const gwIp  = meta.gw.split("/")[0];
+  const count = parseInt(String(secData[sm.countField] || "0"), 10);
+  if (isNaN(count) || count <= 0) return;
+
+  const startInt = _ipToInt(startIp);
+  const gwInt    = _ipToInt(gwIp);
+  if (startInt === null || gwInt === null) return;
+
+  const endInt = (startInt + count - 1) >>> 0;
+  if (gwInt >= startInt && gwInt <= endInt) {
+    const errElId = inputEl.dataset.errId;
+    const errEl   = errElId ? document.getElementById(errElId) : inputEl.nextElementSibling;
+    const endIp   = _intToIp(endInt);
+    if (errEl && errEl.classList.contains("field-inline-err")) {
+      errEl.textContent = `Gateway ${gwIp} falls within this range (${startIp}–${endIp}). Choose a start IP after ${gwIp}.`;
+      errEl.classList.add("vis");
+    }
+    inputEl.classList.add("invalid");
   }
 }
 
@@ -1391,7 +1461,11 @@ function _fromValue(val) {
 }
 
 // DNS servers (max 3 — IPv4 only)
-function renderDnsChips()  { _renderSimpleChips('dnsChips',    dnsList,          'dnsServers',         i => removeDns(i),    'No DNS servers added'); }
+function renderDnsChips() {
+  _renderSimpleChips('dnsChips', dnsList, 'dnsServers', i => removeDns(i), 'No DNS servers added');
+  const btn = document.getElementById('dnsAddBtn');
+  if (btn) btn.style.display = dnsList.length >= 3 ? 'none' : '';
+}
 function addDns() {
   const input = document.getElementById('dnsInput');
   const val = (input.value || '').trim();
@@ -1556,7 +1630,7 @@ function _appendCheckpointOfferToConsole(consoleEl) {
   div.style.cssText = 'margin-top:10px;padding:8px 10px;background:rgba(240,165,0,0.08);border-left:3px solid var(--warning);border-radius:0 4px 4px 0;display:flex;align-items:center;gap:10px;flex-wrap:wrap;';
   div.innerHTML =
     `<span style="color:var(--warning);font-size:12px;">Last checkpoint: ${_checkpoint.length} ${siteWord} from "${esc(_checkpointLabel)}"</span>` +
-    `<button onclick="_restoreCheckpointFromConsole(this)" style="padding:3px 12px;border-radius:4px;border:1px solid var(--warning);background:transparent;color:var(--warning);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Restore</button>` +
+    `<button onclick="_restoreCheckpointFromConsole(this)" style="padding:3px 12px;border-radius:3px;border:1px solid var(--warning);background:transparent;color:var(--warning);font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Restore</button>` +
     `<span style="font-size:11px;color:var(--text-muted);">Reverts site data to last successful validation — may resolve the errors above.</span>`;
   consoleEl.appendChild(div);
   consoleEl.scrollTop = consoleEl.scrollHeight;
@@ -2146,6 +2220,8 @@ function _renderVmkIpChips(siteId, vmkIdx) {
       `</span>`
     ).join('');
   }
+  const addBtn = document.getElementById(`vmkIpAddBtn_${siteId}_${vmkIdx}`);
+  if (addBtn) addBtn.style.display = ips.length >= 2 ? 'none' : '';
 }
 
 function addVmkIp(siteId, vmkIdx) {
@@ -2272,7 +2348,6 @@ function _svcBadge(label, state, siteId, flagName, flagValue, commonDisabled) {
 
   return `<div style="display:flex;flex-direction:column;gap:4px;">
     <div style="display:flex;align-items:center;gap:8px;">
-      <span style="font-size:12px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.04em;width:52px;">${esc(label)}</span>
       <span class="svc-badge ${badgeClass}"
         title="${toggleTitle}"
         onclick="_toggleSiteSvc(${siteId},'${flagName}','${state}')">${statusText}</span>
@@ -2343,7 +2418,7 @@ function _renderSiteHeaderFields(site) {
       </div>
       <div class="field">
         <label>Physical NIC Override <span class="tip">optional; overrides common</span>${tt('Override the common NIC list for this site only. Enter exactly two NIC names separated by a comma (e.g. vmnic0, vmnic1). Leave blank to inherit from Common Settings.')}</label>
-        <div id="nicChips_${site.id}" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;align-items:center;"></div>
+        <div id="nicChips_${site.id}" style="display:flex;flex-wrap:wrap;gap:8px;min-height:40px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;align-items:center;"></div>
         <div style="display:flex;gap:8px;margin-top:8px;align-items:center;">
           <input type="text" id="nicPairInput_${site.id}" placeholder="vmnic0, vmnic1" style="flex:1;font-size:13px;"
             onkeydown="if(event.key==='Enter'){event.preventDefault();addSiteNicPair(${site.id});}">
@@ -2374,8 +2449,8 @@ function _renderSiteHeaderFields(site) {
         <label>Cluster Name Override <span class="tip">optional</span>${tt('Override the vSphere cluster name for this site. When set, replaces the generated {prefix}-{edgeSite} name entirely. Allowed: 1–80 chars, alphanumeric with spaces, _, +, -, (), . Leave blank to use the generated name.')}</label>
         <input type="text" value="${esc(site.overrideClusterName)}" placeholder="Leave blank to use generated name"
           data-err-id="overrideClusterNameErr_${site.id}"
-          oninput="updateSiteField(${site.id},'overrideClusterName',this.value)"
-          onblur="validateSegField(this,'vsphereObjectName',null,true)">
+          oninput="updateSiteField(${site.id},'overrideClusterName',this.value);validateSegField(this,'vsLabel',null,true)"
+          onblur="validateSegField(this,'vsLabel',null,true)">
         <span class="field-inline-err" id="overrideClusterNameErr_${site.id}"></span>
         <span class="field-hint">Optional. Overrides the auto-generated cluster name for this site only.</span>
       </div>
@@ -2470,13 +2545,13 @@ function _renderSiteVmkWidget(site) {
           <span class="field-inline-err"></span>
         </div>
         <div class="field"><label>IP List <span class="req">*</span>${tt('Exactly 2 unique IPv4 addresses — one per ESX data host — assigned to this VMkernel adapter type.')}</label>
-          <div id="vmkIpChips_${site.id}_${vi}" style="display:flex;flex-wrap:wrap;gap:6px;min-height:30px;padding:5px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;align-items:center;"></div>
+          <div id="vmkIpChips_${site.id}_${vi}" style="display:flex;flex-wrap:wrap;gap:6px;min-height:30px;padding:5px 8px;background:var(--surface2);border:1px solid var(--border);border-radius:3px;align-items:center;"></div>
           <div style="display:flex;gap:6px;margin-top:5px;">
             <input type="text" id="vmkIpInput_${site.id}_${vi}" placeholder="10.30.10.12" style="flex:1;font-size:13px;"
               oninput="_restrictIpv4Input(this)"
               onblur="_validateChipEntry(this,'vmkIpHint_${site.id}_${vi}','ipv4')"
               onkeydown="if(event.key==='Enter'){event.preventDefault();addVmkIp(${site.id},${vi});}">
-            <button class="btn btn-secondary" style="padding:4px 10px;font-size:12px;white-space:nowrap;" onclick="addVmkIp(${site.id},${vi})">+ Add</button>
+            <button id="vmkIpAddBtn_${site.id}_${vi}" class="btn btn-secondary" style="padding:4px 10px;font-size:12px;white-space:nowrap;" onclick="addVmkIp(${site.id},${vi})">+ Add</button>
           </div>
           <span class="field-hint" id="vmkIpHint_${site.id}_${vi}"></span>
         </div>
@@ -2918,7 +2993,7 @@ function _renderFlbNetworkSection(site, opts) {
         <input id="sup-${site.id}-${idSuffix}-startip" type="text" value="${esc(net.flbNetworkIpAddressStartingIp)}" placeholder="10.30.11.101"
           class="${!net.flbNetworkIpAddressStartingIp ? 'req-empty' : ''}"
           oninput="_restrictIpv4Input(this);updateSupField(${site.id},'${sectionKey}','flbNetworkIpAddressStartingIp',this.value)"
-          onblur="validateSegField(this,'ipv4')">
+          onblur="validateSegField(this,'ipv4');_validateGatewayConflict(${site.id},'${sectionKey}',this)">
         <span class="field-inline-err"></span>
         <span id="sup-${site.id}-${idSuffix}-range">${_rangeHintHtml(selectedName, segMeta)}</span>
       </div>
@@ -2960,7 +3035,7 @@ function renderSupervisorSiteBlock(site) {
       </span>
     </div>
     <div id="sup-site-body-${site.id}" style="${collapsed ? 'display:none' : ''}">
-    <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:5px;border-left:3px solid var(--accent);">
+    <div style="font-size:12px;color:var(--text-muted);margin-bottom:14px;padding:8px 12px;background:var(--surface2);border-radius:3px;border-left:3px solid var(--accent);">
       Linked to infrastructure cluster <strong>${esc(site.edgeSite)||'(unnamed)'}</strong> — network name selects below show segments defined for this site in Edge Sites.
     </div>
     <div class="grid-2" style="margin-bottom:16px;">
@@ -3013,7 +3088,7 @@ function renderSupervisorSiteBlock(site) {
         <input id="sup-${site.id}-mgmt-startip" type="text" value="${esc(mgmt.mgmtNetworkStartingIp)}" placeholder="10.30.13.100"
           class="${!mgmt.mgmtNetworkStartingIp ? 'req-empty' : ''}"
           oninput="_restrictIpv4Input(this);updateSupField(${site.id},'mgmt','mgmtNetworkStartingIp',this.value)"
-          onblur="validateSegField(this,'ipv4')">
+          onblur="validateSegField(this,'ipv4');_validateGatewayConflict(${site.id},'mgmt',this)">
         <span class="field-inline-err"></span>
         <span id="sup-${site.id}-mgmt-range">${_rangeHintHtml(mgmtName, segMeta)}</span>
       </div>
@@ -3039,7 +3114,7 @@ function renderSupervisorSiteBlock(site) {
         <input id="sup-${site.id}-workloadNet-startip" type="text" value="${esc(workloadNet.primaryWorkloadNetworkStartingIp)}" placeholder="10.30.10.101"
           class="${!workloadNet.primaryWorkloadNetworkStartingIp ? 'req-empty' : ''}"
           oninput="_restrictIpv4Input(this);updateSupField(${site.id},'workloadNet','primaryWorkloadNetworkStartingIp',this.value)"
-          onblur="validateSegField(this,'ipv4')">
+          onblur="validateSegField(this,'ipv4');_validateGatewayConflict(${site.id},'workloadNet',this)">
         <span class="field-inline-err"></span>
         <span id="sup-${site.id}-workloadNet-range">${_rangeHintHtml(workloadName, segMeta)}</span>
       </div>
@@ -3102,10 +3177,11 @@ function _onSupSegmentChange(siteId, section, startIpField, newSegName, startIpE
   }
 
   // Auto-suggest only when the start-IP field is currently empty (Day 0).
+  // Use _suggestStartIpAfterGateway so the suggestion skips the gateway IP itself.
   const startEl = document.getElementById(startIpElId);
   if (startEl && !startEl.value.trim() && newSegName) {
     if (meta && meta.gw) {
-      const suggested = _suggestStartIp(meta.gw);
+      const suggested = _suggestStartIpAfterGateway(meta.gw);
       if (suggested) {
         startEl.value = suggested;
         // Keep the state in sync with the auto-suggested value.
@@ -3114,6 +3190,12 @@ function _onSupSegmentChange(siteId, section, startIpField, newSegName, startIpE
         site._supervisor[section][startIpField] = suggested;
       }
     }
+  }
+
+  // Re-run the gateway-conflict check when the segment changes and the start-IP field
+  // already has a value — the gateway may have changed even though the IP didn't.
+  if (startEl && startEl.value.trim()) {
+    _validateGatewayConflict(siteId, section, startEl);
   }
 }
 
@@ -3174,7 +3256,7 @@ function _autoFixGatewayDrift(site) {
     const meta = segMeta[segName];
     if (!meta || !meta.gw) continue;
     if (_ipInCidr(startIp, meta.gw)) continue;
-    const suggested = _suggestStartIp(meta.gw);
+    const suggested = _suggestStartIpAfterGateway(meta.gw);
     if (!suggested) continue;
     if (!site._supervisor) site._supervisor = {};
     if (!site._supervisor[fd.section]) site._supervisor[fd.section] = {};
@@ -4431,14 +4513,14 @@ async function saveToBaseDir() {
       const backups   = result.backups   || [];
       const warnings  = result.warnings  || [];
       const backupHtml = backups.length > 0
-        ? `<div style="margin-top:12px;padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:6px;border:1px solid var(--border);">
+        ? `<div style="margin-top:12px;padding:10px 12px;background:rgba(0,0,0,0.2);border-radius:3px;border:1px solid var(--border);">
              <p style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">📦 Backup copies created</p>
              ${backups.map(b => `<p style="font-size:12px;color:var(--text-muted);font-family:monospace;word-break:break-all;">↳ ${esc(b)}</p>`).join('')}
            </div>`
         : `<p style="margin-top:8px;font-size:12px;color:var(--text-muted);">No existing files — no backup needed.</p>`;
       // Surface any validation warnings that passed the error gate but are still noteworthy.
       const warningHtml = warnings.length > 0
-        ? `<div style="margin-top:12px;padding:10px 12px;background:rgba(240,165,0,0.08);border-radius:6px;border:1px solid var(--warning);">
+        ? `<div style="margin-top:12px;padding:10px 12px;background:rgba(240,165,0,0.08);border-radius:3px;border:1px solid var(--warning);">
              <p style="font-size:11px;font-weight:600;color:var(--warning);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:6px;">⚠ Validation warnings</p>
              ${warnings.map(w => `<p style="font-size:12px;color:var(--warning);">${esc(w)}</p>`).join('')}
            </div>`

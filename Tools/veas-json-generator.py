@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1019"
+UI_VERSION = "1.0.3.1020"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -103,6 +103,9 @@ _MAX_VMK_MTU = 9190
 # Bind address for the HTTP server. Localhost only — the server has no TLS and is
 # not designed for network exposure. Use SSH port-forwarding for remote access.
 _BIND_HOST = "127.0.0.1"
+# Sentinel returned when an integer field cannot be parsed; distinct from 0 so
+# callers can distinguish "field missing/invalid" from "field explicitly set to 0".
+_COUNT_PARSE_ERROR = -1
 
 # Resolved once at import time so every path-safety check uses the same anchor
 # and avoids repeated syscalls.
@@ -217,6 +220,18 @@ def is_ip_in_cidr(ip_str, cidr_str):
     try:
         network = ipaddress.IPv4Network(cidr_str, strict=False)
         return ipaddress.IPv4Address(ip_str) in network
+    except (ValueError, TypeError):
+        return False
+
+
+def is_gateway_ip_in_ip_range(gateway_cidr: str, start_ip_str: str, count: int) -> bool:
+    """Returns True when the gateway IP (host part of gateway_cidr) falls within
+    [start_ip, start_ip + count - 1]. Catches start-IP pools that consume the gateway address."""
+    try:
+        gateway_ip = ipaddress.IPv4Address(gateway_cidr.split("/")[0])
+        start_ip = ipaddress.IPv4Address(start_ip_str)
+        end_ip = ipaddress.IPv4Address(int(start_ip) + count - 1)
+        return start_ip <= gateway_ip <= end_ip
     except (ValueError, TypeError):
         return False
 
@@ -567,6 +582,11 @@ def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: 
 
     if not edge_site:
         errors.append(f"{prefix}.edgeSite: required field is missing or empty.")
+    elif not RFC1123_RE.match(edge_site):
+        errors.append(
+            f"{prefix}.edgeSite: must be 1–80 chars, lowercase letters, digits, and "
+            "hyphens only; must not start or end with a hyphen."
+        )
 
     override_cluster_name = cluster.get("overrideClusterName", "")
     if override_cluster_name and not VSPHERE_NAME_RE.match(override_cluster_name):
@@ -909,7 +929,7 @@ def validate_supervisor(
                     try:
                         ip_count = int(net.get("flbNetworkIpAddressCount", 0))
                     except (TypeError, ValueError):
-                        ip_count = -1
+                        ip_count = _COUNT_PARSE_ERROR
 
                     if net_key == "flbVirtualServerNetwork":
                         # Warn (do not fail) when the virtual-server-network IP pool is small.
@@ -934,7 +954,8 @@ def validate_supervisor(
                             f".flbNetworkGateway: must be a valid IPv4 address or CIDR."
                         )
 
-                    # Starting IP must fall within the gateway CIDR for this segment.
+                    # Starting IP must fall within the gateway CIDR for this segment and
+                    # the gateway address must not fall within the allocated IP range.
                     # Skip the cross-check when either side is empty — the empty-field
                     # validator already covers that case and we must not block mid-edit.
                     site_gateways = cluster_segment_gateways.get(edge_site, {})
@@ -945,6 +966,14 @@ def validate_supervisor(
                                 f"{prefix}.foundationLoadBalancerComponents.{net_key}"
                                 f".flbNetworkIpAddressStartingIp: '{start_ip}' is not within the "
                                 f"gateway subnet {cidr} for segment '{net_name}'."
+                            )
+                        elif ip_count > 0 and is_gateway_ip_in_ip_range(cidr, start_ip, ip_count):
+                            gw_ip = cidr.split("/")[0]
+                            errors.append(
+                                f"{prefix}.foundationLoadBalancerComponents.{net_key}"
+                                f".flbNetworkIpAddressStartingIp: gateway {gw_ip} falls within "
+                                f"the IP range starting at '{start_ip}' (count {ip_count}). "
+                                f"Set the start IP to an address after the gateway."
                             )
 
         # Management network spec.
@@ -963,6 +992,11 @@ def validate_supervisor(
                     f"Available: {site_segments}."
                 )
 
+            try:
+                mgmt_count = int(mgmt.get("mgmtNetworkIPCount", 0))
+            except (TypeError, ValueError):
+                mgmt_count = _COUNT_PARSE_ERROR
+
             mgmt_start = mgmt.get("mgmtNetworkStartingIp", "")
             if not is_valid_ipv4(mgmt_start):
                 errors.append(f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: must be a valid IPv4 address.")
@@ -975,11 +1009,14 @@ def validate_supervisor(
                         f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: '{mgmt_start}' is not within "
                         f"the gateway subnet {mgmt_cidr} for segment '{mgmt_name}'."
                     )
+                elif mgmt_cidr and is_valid_cidr(mgmt_cidr) and mgmt_count > 0 and is_gateway_ip_in_ip_range(mgmt_cidr, mgmt_start, mgmt_count):
+                    gw_ip = mgmt_cidr.split("/")[0]
+                    errors.append(
+                        f"{prefix}.mgmtNetworkSpec.mgmtNetworkStartingIp: gateway {gw_ip} falls within "
+                        f"the IP range starting at '{mgmt_start}' (count {mgmt_count}). "
+                        f"Set the start IP to an address after the gateway."
+                    )
 
-            try:
-                mgmt_count = int(mgmt.get("mgmtNetworkIPCount", 0))
-            except (TypeError, ValueError):
-                mgmt_count = -1
             if mgmt_count < 5:
                 errors.append(f"{prefix}.mgmtNetworkSpec.mgmtNetworkIPCount: must be an integer ≥ 5.")
 
@@ -998,6 +1035,11 @@ def validate_supervisor(
                     f"Available: {site_segments}."
                 )
 
+            try:
+                pwn_ip_count = int(pwn.get("primaryWorkloadNetworkIPCount", 0))
+            except (TypeError, ValueError):
+                pwn_ip_count = _COUNT_PARSE_ERROR
+
             pwn_start = pwn.get("primaryWorkloadNetworkStartingIp", "")
             if not is_valid_ipv4(pwn_start):
                 errors.append(
@@ -1012,11 +1054,14 @@ def validate_supervisor(
                         f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp: '{pwn_start}' is not within "
                         f"the gateway subnet {pwn_cidr} for segment '{pwn_name}'."
                     )
+                elif pwn_cidr and is_valid_cidr(pwn_cidr) and pwn_ip_count > 0 and is_gateway_ip_in_ip_range(pwn_cidr, pwn_start, pwn_ip_count):
+                    gw_ip = pwn_cidr.split("/")[0]
+                    errors.append(
+                        f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkStartingIp: gateway {gw_ip} falls within "
+                        f"the IP range starting at '{pwn_start}' (count {pwn_ip_count}). "
+                        f"Set the start IP to an address after the gateway."
+                    )
 
-            try:
-                pwn_ip_count = int(pwn.get("primaryWorkloadNetworkIPCount", 0))
-            except (TypeError, ValueError):
-                pwn_ip_count = -1
             if pwn_ip_count < 2:
                 errors.append(
                     f"{prefix}.primaryWorkloadNetwork.primaryWorkloadNetworkIPCount: must be an integer ≥ 2."
@@ -1149,7 +1194,6 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
                     "[ERROR] supervisorServices.parentDirectory: the path must be within "
                     "your home directory."
                 )
-                parent_dir = None
             elif not parent_dir.is_dir():
                 messages.append(
                     f"[ERROR] supervisorServices.parentDirectory: '{parent_dir}' does not "
@@ -2238,7 +2282,7 @@ def main():
     else:
         base_dir = _FALLBACK_TEMPLATES_DIR
 
-    browser_url = f"http://localhost:{args.port}"
+    browser_url = f"http://127.0.0.1:{args.port}"
 
     try:
         server = _SecureHTTPServer((_BIND_HOST, args.port), _make_handler(base_dir))
@@ -2258,7 +2302,7 @@ def main():
         raise
 
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on {_BIND_HOST}:{args.port} (localhost only)")
+    print(f"Listening on {_BIND_HOST}:{args.port}")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")
