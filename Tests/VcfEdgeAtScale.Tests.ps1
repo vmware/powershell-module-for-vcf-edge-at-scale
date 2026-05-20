@@ -2070,90 +2070,19 @@ Describe "Get-VlcmDesiredBaseImageVersionFromSpec" {
 }
 
 Describe "Invoke-VlcmClusterComplianceAndRemediate — routing" {
-    It "Throws VcfDeploymentException when the cluster is not found" {
+    BeforeEach {
+        # Function shadows must be defined in the same InModuleScope call as their Mocks.
+        # Pester's AfterEach cleanup restores each mocked function to its pre-mock state;
+        # if the shadow is defined elsewhere (e.g. BeforeAll), cleanup restores the VMware
+        # binary cmdlet instead of the stub, and subsequent Mocks wrap the binary cmdlet
+        # directly — which breaks pipeline-input interception due to VIContainer coercion.
         InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return $null }
-            { Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0" } | Should -Throw
-        }
-    }
-
-    It "Returns without remediation when Test-LcmClusterCompliance throws NullReferenceException" {
-        InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            # Shadow with an untyped PS function to avoid VMware VIContainer coercion on pipeline input.
             function Test-LcmClusterCompliance {
                 [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
-                Process { throw "Object reference not set to an instance of an object" }
+                Process { }
             }
-            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
-            Mock Test-LcmClusterCompliance { throw "Object reference not set to an instance of an object" }
-            Mock Set-Cluster {}
-            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
-            Should -Invoke Set-Cluster -Times 0 -Scope It
-        }
-    }
-
-    It "Returns without remediation when Test-LcmClusterCompliance throws a generic error" {
-        InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            function Test-LcmClusterCompliance {
-                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
-                Process { throw "vLCM API unavailable" }
-            }
-            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
-            Mock Test-LcmClusterCompliance { throw "vLCM API unavailable" }
-            Mock Set-Cluster {}
-            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
-            Should -Invoke Set-Cluster -Times 0 -Scope It
-        }
-    }
-
-    It "Returns without remediation when the compliance result is null" {
-        InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            function Test-LcmClusterCompliance {
-                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
-                Process { return $null }
-            }
-            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
-            Mock Test-LcmClusterCompliance { return $null }
-            Mock Set-Cluster {}
-            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
-            Should -Invoke Set-Cluster -Times 0 -Scope It
-        }
-    }
-
-    It "Returns without remediation when the cluster is already compliant" {
-        InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            function Test-LcmClusterCompliance {
-                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
-                Process { return [PSCustomObject]@{ Status = "Compliant" } }
-            }
-            function Set-Cluster { [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In) Process { } }
-            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "Compliant" } }
-            Mock Set-Cluster {}
-            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
-            Should -Invoke Set-Cluster -Times 0 -Scope It
-        }
-    }
-
-    It "Calls Set-Cluster -Remediate when the cluster is non-compliant" {
-        InModuleScope VcfEdgeAtScale {
-            Mock Write-LogMessage {}
-            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
-            function Test-LcmClusterCompliance {
-                [CmdletBinding()] Param([Parameter(ValueFromPipeline = $true)] [Object] $In)
-                Process { return [PSCustomObject]@{ Status = "NonCompliant"; NonCompliantHosts = @() } }
-            }
-            # Shadow Set-Cluster with all parameters used by the call site.  SupportsShouldProcess
-            # is required so -Confirm:$false is a valid named parameter (not just a common param
-            # accepted when ShouldProcess is declared).
+            # SupportsShouldProcess is required so -Confirm:$false is accepted as a named
+            # parameter at the call site, not just a common ShouldProcess parameter.
             function Set-Cluster {
                 [CmdletBinding(SupportsShouldProcess = $true)]
                 Param(
@@ -2164,11 +2093,60 @@ Describe "Invoke-VlcmClusterComplianceAndRemediate — routing" {
                 )
                 Process { }
             }
-            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "NonCompliant"; NonCompliantHosts = @() } }
+            Mock Write-LogMessage {}
+            Mock Get-Cluster { return [PSCustomObject]@{ Name = "cl0" } }
             Mock Set-Cluster {}
-            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
-            Should -Invoke Set-Cluster -Times 1 -Scope It
         }
+    }
+
+    It "Throws VcfDeploymentException when the cluster is not found" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Get-Cluster { return $null }
+            { Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0" } | Should -Throw
+        }
+    }
+
+    It "Returns without remediation when Test-LcmClusterCompliance throws NullReferenceException" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-LcmClusterCompliance { throw "Object reference not set to an instance of an object" }
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when Test-LcmClusterCompliance throws a generic error" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-LcmClusterCompliance { throw "vLCM API unavailable" }
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when the compliance result is null" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-LcmClusterCompliance { return $null }
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Returns without remediation when the cluster is already compliant" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "Compliant" } }
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+            Should -Invoke Set-Cluster -Times 0 -Scope It
+        }
+    }
+
+    It "Calls Set-Cluster -Remediate when the cluster is non-compliant" {
+        InModuleScope VcfEdgeAtScale {
+            Mock Test-LcmClusterCompliance { return [PSCustomObject]@{ Status = "NonCompliant"; NonCompliantHosts = @() } }
+            Invoke-VlcmClusterComplianceAndRemediate -ClusterName "cl0"
+        }
+        # Should -Invoke must be outside InModuleScope here: the mock was registered in BeforeEach's
+        # InModuleScope and Pester's -Scope It call-record tracking does not bridge separate
+        # InModuleScope invocations. -ModuleName targets the correct mock registry explicitly.
+        Should -Invoke Set-Cluster -ModuleName VcfEdgeAtScale -Times 1 -Scope It
     }
 }
 
