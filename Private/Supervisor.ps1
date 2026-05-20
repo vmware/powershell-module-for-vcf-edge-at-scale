@@ -16027,8 +16027,8 @@ function Test-JsonIpAddressesInCidrRanges {
                         if ($null -ne $countRaw) {
                             try { $ipCount = [int]$countRaw } catch { $ipCount = 0 }
                         }
+                        $gatewayIp = $gatewayValue.Split('/')[0]
                         if ($ipCount -gt 0 -and (Test-GatewayIpInRange -GatewayCidr $gatewayValue -StartIp $ipValue -Count $ipCount)) {
-                            $gatewayIp = $gatewayValue.Split('/')[0]
                             Write-LogMessage -Type ERROR -Message "$($mapping.Description) ($ipValue, count $ipCount) in edgeSite '$currentEdgeSite' includes the gateway address $gatewayIp. Set the start IP to an address after the gateway."
                             $validationFailures++
                         }

@@ -62,7 +62,8 @@ BeforeAll {
     $script:vcUser   = if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_USER)) { "administrator@vsphere.local" } else { $env:VCF_TEST_USER }
     $script:vcPass   = $env:VCF_TEST_PASSWORD
     $script:cluster  = $env:VCF_TEST_CLUSTER
-    $script:liveMode = -not [String]::IsNullOrWhiteSpace($script:vCenter) -and -not [String]::IsNullOrWhiteSpace($script:vcPass)
+    $script:liveMode   = -not [String]::IsNullOrWhiteSpace($script:vCenter) -and -not [String]::IsNullOrWhiteSpace($script:vcPass)
+    $script:skipReason = "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set"
 
     if ($script:liveMode) {
         InModuleScope VcfEdgeAtScale {
@@ -77,11 +78,12 @@ BeforeAll {
                 $Script:vCenterName = $args[0]
             }
         } catch {
-            Write-Warning "BeforeAll: Could not connect to vCenter '$($script:vCenter)': $($_.Exception.Message). Some live tests will skip."
+            $script:skipReason = "could not connect to vCenter '$($script:vCenter)': $($_.Exception.Message)"
+            Write-Warning "BeforeAll: $($script:skipReason). All live tests will be skipped."
             $script:liveMode = $false
         }
     } else {
-        Write-Warning "Live tests: VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set. All live tests will be skipped."
+        Write-Warning "Live tests: $($script:skipReason). All live tests will be skipped."
     }
 }
 
@@ -101,7 +103,7 @@ AfterAll {
 
 Describe "Test-TcpPortReachable — live" -Tag "Live" {
     It "Returns true when connecting to vCenter on port 443" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter {
             Test-TcpPortReachable -IpAddress $args[0] -Port 443 -TimeoutMilliseconds 5000
         }
@@ -109,7 +111,7 @@ Describe "Test-TcpPortReachable — live" -Tag "Live" {
     }
 
     It "Returns false for a TCP port that is not open" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         # Port 19999 is unlikely to be open on any vCenter.
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter {
             Test-TcpPortReachable -IpAddress $args[0] -Port 19999 -TimeoutMilliseconds 1500
@@ -120,7 +122,7 @@ Describe "Test-TcpPortReachable — live" -Tag "Live" {
 
 Describe "Test-VcenterAndEsxReachability — live" -Tag "Live" {
     It "Does not throw when vCenter is reachable" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter {
                 Mock Write-LogMessage {}
@@ -132,7 +134,7 @@ Describe "Test-VcenterAndEsxReachability — live" -Tag "Live" {
 
 Describe "Connect-Vcenter and Disconnect-Vcenter — live" -Tag "Live" {
     It "Establishes a vCenter session visible in DefaultViServers" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         $connected = $Global:DefaultViServers | Where-Object { $_.Name -eq $script:vCenter -and $_.IsConnected }
         $connected | Should -Not -BeNullOrEmpty
     }
@@ -144,7 +146,7 @@ Describe "Connect-Vcenter and Disconnect-Vcenter — live" -Tag "Live" {
 
 Describe "Get-VmHostsInCluster — live" -Tag "Live" {
     It "Returns without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -158,7 +160,7 @@ Describe "Get-VmHostsInCluster — live" -Tag "Live" {
 
 Describe "Get-VsanClusterTriggeredAlarms — live" -Tag "Live" {
     It "Returns an array (possibly empty) for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -171,7 +173,7 @@ Describe "Get-VsanClusterTriggeredAlarms — live" -Tag "Live" {
 
 Describe "Get-VsanDatastoreForCluster — live" -Tag "Live" {
     It "Returns a datastore object or null without throwing" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $hostIds = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
             Mock Write-LogMessage {}
@@ -190,7 +192,7 @@ Describe "Get-VsanDatastoreForCluster — live" -Tag "Live" {
 
 Describe "Get-EsxDatastoreHealth — live" -Tag "Live" {
     It "Returns a result object without throwing" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -211,7 +213,7 @@ Describe "Get-EsxDatastoreHealth — live" -Tag "Live" {
 
 Describe "Find-SupervisorByName — live" -Tag "Live" {
     It "Returns null without throwing when supervisor name does not exist" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:vcUser, $script:vcPass {
                 Mock Write-LogMessage {}
@@ -226,7 +228,7 @@ Describe "Find-SupervisorByName — live" -Tag "Live" {
 
 Describe "Get-SupervisorUpgradeInfo and Get-SupervisorUpgradeStatus — live" -Tag "Live" {
     It "Runs without throwing when supervisor is not found" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -239,7 +241,7 @@ Describe "Get-SupervisorUpgradeInfo and Get-SupervisorUpgradeStatus — live" -T
 
 Describe "Get-ContentLibraryId — live" -Tag "Live" {
     It "Returns null when no content library matches the name" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         $result = InModuleScope VcfEdgeAtScale {
             Mock Write-LogMessage {}
             Get-ContentLibraryId -LibraryName "veas-live-test-nonexistent-cl-99999"
@@ -250,7 +252,7 @@ Describe "Get-ContentLibraryId — live" -Tag "Live" {
 
 Describe "Get-StoragePolicyId — live" -Tag "Live" {
     It "Returns null when no storage policy matches the name" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         $result = InModuleScope VcfEdgeAtScale {
             Mock Write-LogMessage {}
             Get-StoragePolicyId -StoragePolicyName "veas-live-test-nonexistent-policy-99999"
@@ -261,7 +263,7 @@ Describe "Get-StoragePolicyId — live" -Tag "Live" {
 
 Describe "Test-VsanAutomaticRebalanceAtThreshold — live" -Tag "Live" {
     It "Returns a boolean without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
             Mock Write-LogMessage {}
@@ -277,7 +279,7 @@ Describe "Test-VsanAutomaticRebalanceAtThreshold — live" -Tag "Live" {
 
 Describe "Write-VsanClusterHealthReport — live" -Tag "Live" {
     It "Runs without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -290,7 +292,7 @@ Describe "Write-VsanClusterHealthReport — live" -Tag "Live" {
 
 Describe "Write-SupervisorHealthReport — live" -Tag "Live" {
     It "Runs without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -303,7 +305,7 @@ Describe "Write-SupervisorHealthReport — live" -Tag "Live" {
 
 Describe "Write-VsanHealthFailureDebugInfo — live" -Tag "Live" {
     It "Runs without throwing for health_red context" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -316,7 +318,7 @@ Describe "Write-VsanHealthFailureDebugInfo — live" -Tag "Live" {
 
 Describe "Test-VcenterAndEsxReachability live — all hosts in cluster" -Tag "Live" {
     It "Does not throw when all cluster hosts are reachable" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:vCenter, $script:cluster {
@@ -335,7 +337,7 @@ Describe "Test-VcenterAndEsxReachability live — all hosts in cluster" -Tag "Li
 
 Describe "Set-VsanLabSilentChecksIfRequested — live write" -Tag "Live" {
     It "Runs without throwing for test cluster (no-op when lab silent checks not requested)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -350,7 +352,7 @@ Describe "Set-VsanLabSilentChecksIfRequested — live write" -Tag "Live" {
 
 Describe "Enable-VsanHealthAlarms — live write" -Tag "Live" {
     It "Runs without throwing for test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -364,7 +366,7 @@ Describe "Enable-VsanHealthAlarms — live write" -Tag "Live" {
 
 Describe "Set-VclsRetreatModeForCluster — live write" -Tag "Live" {
     It "Runs without throwing (no state change: RetreatMode not requested)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -382,7 +384,7 @@ Describe "Set-VclsRetreatModeForCluster — live write" -Tag "Live" {
 
 Describe "Get-SupervisorUpgradeInfo and Get-SupervisorUpgradeStatus — live ClusterId" -Tag "Live" {
     It "Get-SupervisorUpgradeStatus returns without throwing for a non-existent ClusterId" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         {
             InModuleScope VcfEdgeAtScale {
                 Mock Write-LogMessage {}
@@ -394,7 +396,7 @@ Describe "Get-SupervisorUpgradeInfo and Get-SupervisorUpgradeStatus — live Clu
 
 Describe "Get-EsxDatastoreInfo — live" -Tag "Live" {
     It "Returns a result without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -415,7 +417,7 @@ Describe "Get-EsxDatastoreInfo — live" -Tag "Live" {
 
 Describe "Test-TagCatalogCategory — live write" -Tag "Live" {
     It "Runs without throwing (creates category if absent)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
             InModuleScope VcfEdgeAtScale {
@@ -428,7 +430,7 @@ Describe "Test-TagCatalogCategory — live write" -Tag "Live" {
 
 Describe "Test-Tag — live write" -Tag "Live" {
     It "Runs without throwing (creates tag if absent)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
             InModuleScope VcfEdgeAtScale {
@@ -441,7 +443,7 @@ Describe "Test-Tag — live write" -Tag "Live" {
 
 Describe "Set-VMHostConnectedState — live write" -Tag "Live" {
     It "Runs without throwing for first host in cluster (no-op when already connected)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -463,7 +465,7 @@ Describe "Set-VMHostConnectedState — live write" -Tag "Live" {
 
 Describe "Get-VsanOsaDiskGroupsOnHost — live" -Tag "Live" {
     It "Returns without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -480,7 +482,7 @@ Describe "Get-VsanOsaDiskGroupsOnHost — live" -Tag "Live" {
 
 Describe "Get-VsanClusterHealthSummaryViaView — live" -Tag "Live" {
     It "Returns without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -493,7 +495,7 @@ Describe "Get-VsanClusterHealthSummaryViaView — live" -Tag "Live" {
 
 Describe "Get-VsanOsaEligibleDisksFromCluster — live" -Tag "Live" {
     It "Returns without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -510,7 +512,7 @@ Describe "Get-VsanOsaEligibleDisksFromCluster — live" -Tag "Live" {
 
 Describe "Get-EsxUnformattedDisk — live" -Tag "Live" {
     It "Returns without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -527,7 +529,7 @@ Describe "Get-EsxUnformattedDisk — live" -Tag "Live" {
 
 Describe "Get-VdsListOnHost — live" -Tag "Live" {
     It "Returns without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -544,7 +546,7 @@ Describe "Get-VdsListOnHost — live" -Tag "Live" {
 
 Describe "Get-VirtualSwitchesOnHost — live" -Tag "Live" {
     It "Returns without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -561,7 +563,7 @@ Describe "Get-VirtualSwitchesOnHost — live" -Tag "Live" {
 
 Describe "Test-VsanOsaDiskGroupPresentViaEsxcli — live" -Tag "Live" {
     It "Returns a boolean without throwing for the first host in the cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         $result = InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
             Mock Write-LogMessage {}
@@ -579,7 +581,7 @@ Describe "Test-VsanOsaDiskGroupPresentViaEsxcli — live" -Tag "Live" {
 
 Describe "Find-Datastore — live" -Tag "Live" {
     It "Does not throw an untyped exception when the datastore does not exist" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster {
@@ -600,7 +602,7 @@ Describe "Find-Datastore — live" -Tag "Live" {
 
 Describe "Test-ContentLibraryBySubscriptionUri — live" -Tag "Live" {
     It "Returns false when no content library matches the subscription URI" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         $result = InModuleScope VcfEdgeAtScale {
             Mock Write-LogMessage {}
             Test-ContentLibraryBySubscriptionUri -SubscriptionUri "https://veas-live-test-nonexistent.example.com/lib.json"
@@ -615,7 +617,7 @@ Describe "Test-ContentLibraryBySubscriptionUri — live" -Tag "Live" {
 
 Describe "Invoke-AbandonHciWorkflowIfInProgress — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster (no-op when workflow already skipped)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -629,7 +631,7 @@ Describe "Invoke-AbandonHciWorkflowIfInProgress — live write" -Tag "Live" {
 
 Describe "Invoke-VsanClusterConfigReapply — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -643,7 +645,7 @@ Describe "Invoke-VsanClusterConfigReapply — live write" -Tag "Live" {
 
 Describe "Invoke-ReconfigureClusterHA — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster (re-applies HA/DRS; no state change when already configured)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -657,7 +659,7 @@ Describe "Invoke-ReconfigureClusterHA — live write" -Tag "Live" {
 
 Describe "Set-VsanDomNetworkSchedulerThrottleOnCluster — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster (idempotent: already-set is success)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -671,7 +673,7 @@ Describe "Set-VsanDomNetworkSchedulerThrottleOnCluster — live write" -Tag "Liv
 
 Describe "Enable-VsanAutomaticRebalance — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -685,7 +687,7 @@ Describe "Enable-VsanAutomaticRebalance — live write" -Tag "Live" {
 
 Describe "Enable-VsanAutomaticDiskClaimIfSupported — live write" -Tag "Live" {
     It "Runs without throwing for the test cluster" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -699,7 +701,7 @@ Describe "Enable-VsanAutomaticDiskClaimIfSupported — live write" -Tag "Live" {
 
 Describe "Test-PhysicalNicConnected — live" -Tag "Live" {
     It "Returns a boolean for the first physical NIC on the first cluster host" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
             Mock Write-LogMessage {}
@@ -718,7 +720,7 @@ Describe "Test-PhysicalNicConnected — live" -Tag "Live" {
 
 Describe "Get-VsanEsaEligibleDisksFromCluster — live" -Tag "Live" {
     It "Runs without throwing for the test cluster (result may be empty on OSA clusters)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {
@@ -735,7 +737,7 @@ Describe "Get-VsanEsaEligibleDisksFromCluster — live" -Tag "Live" {
 
 Describe "Set-VsanDomNetworkSchedulerThrottleOnHost — live write" -Tag "Live" {
     It "Runs without throwing for the first host in the test cluster (idempotent)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         if ([String]::IsNullOrWhiteSpace($env:VCF_TEST_ALLOW_WRITES)) { Set-ItResult -Skipped -Because "VCF_TEST_ALLOW_WRITES not set" }
         {
@@ -753,7 +755,7 @@ Describe "Set-VsanDomNetworkSchedulerThrottleOnHost — live write" -Tag "Live" 
 
 Describe "Invoke-VsanClusterHealthRetestAfterDeployment — live" -Tag "Live" {
     It "Runs without throwing for the test cluster (non-fatal; skips if Test-VsanClusterHealth unavailable)" {
-        if (-not $script:liveMode) { Set-ItResult -Skipped -Because "VCF_TEST_VCENTER or VCF_TEST_PASSWORD not set" }
+        if (-not $script:liveMode) { Set-ItResult -Skipped -Because $script:skipReason }
         if ([String]::IsNullOrWhiteSpace($script:cluster)) { Set-ItResult -Skipped -Because "VCF_TEST_CLUSTER not set" }
         {
             InModuleScope VcfEdgeAtScale -ArgumentList $script:cluster, $script:vCenter {

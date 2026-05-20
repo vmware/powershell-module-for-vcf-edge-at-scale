@@ -522,7 +522,7 @@ function Invoke-ReconfigureClusterHA {
         Seconds to wait before applying HA settings. Use when vCenter needs time to see the management network on all hosts (avoids "no port groups enabled for vSphere HA communication"). Default is 10; the module also uses $Script:HaNetworkStabilizationDelaySeconds during deployment.
 
         .PARAMETER HaPolicy
-        Multi-host clusters only (ignored for single-host): reservationBased, slotBased, or disabled. Passed through to Update-Cluster. Deployment sets this from common/clusters haPolicy for vSAN-OSA and vSAN-ESA, and reservationBased for VMFS.
+        Multi-host clusters only (ignored for single-host): reservationBased, slotBased, or disabled. Passed through to Update-Cluster. Deployment sets this from common/clusters haPolicy for vSAN-OSA and vSAN-ESA. VMFS is always single-host; Update-Cluster forces HAAdmissionControlEnabled=$false regardless of this value.
 
         .EXAMPLE
         Invoke-ReconfigureClusterHA -ClusterName "production-cluster"

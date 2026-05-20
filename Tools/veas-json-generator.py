@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1020"
+UI_VERSION = "1.0.3.1021"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -128,6 +128,25 @@ def _safe_resolve_path(path_str: str) -> "Path | None":
     except (TypeError, ValueError, RuntimeError):
         return None
     return resolved if resolved.is_relative_to(_HOME_DIR) else None
+
+
+def _is_windows_absolute_path(path_str: str) -> bool:
+    r"""Returns True when *path_str* looks like a Windows absolute path.
+
+    Covers drive-letter paths (C:\, D:/, …) and UNC paths (\\server\share).
+    Used to give a better diagnostic when a config file authored on Windows is
+    loaded on macOS or Linux.
+    """
+    return bool(re.match(r"^[A-Za-z]:[/\\]", path_str)) or path_str.startswith("\\\\")
+
+
+def _is_posix_absolute_path(path_str: str) -> bool:
+    """Returns True when *path_str* looks like a POSIX absolute path (starts with '/').
+
+    Used to give a better diagnostic when a config file authored on macOS or Linux
+    is loaded on Windows.
+    """
+    return path_str.startswith("/")
 
 
 # ---------------------------------------------------------------------------
@@ -1188,18 +1207,34 @@ def _validate_step1_messages(infra: dict, base_dir: Path | None = None) -> list[
         # Resolve the parent directory and confine it to the home tree so that
         # a crafted JSON payload cannot probe arbitrary filesystem paths.
         if parent_dir_str:
-            parent_dir = _safe_resolve_path(parent_dir_str)
-            if parent_dir is None:
+            if _is_windows_absolute_path(parent_dir_str) and sys.platform != "win32":
                 messages.append(
-                    "[ERROR] supervisorServices.parentDirectory: the path must be within "
-                    "your home directory."
+                    f"[WARNING] supervisorServices.parentDirectory: '{parent_dir_str}' looks "
+                    "like a Windows path and cannot be used on this OS. "
+                    f"Falling back to the base directory: '{base_dir}'."
                 )
-            elif not parent_dir.is_dir():
+                parent_dir = Path(base_dir)
+            elif _is_posix_absolute_path(parent_dir_str) and sys.platform == "win32":
                 messages.append(
-                    f"[ERROR] supervisorServices.parentDirectory: '{parent_dir}' does not "
-                    "exist or is not a directory. Correct the path before specifying YAML filenames."
+                    f"[WARNING] supervisorServices.parentDirectory: '{parent_dir_str}' looks "
+                    "like a POSIX path and cannot be used on Windows. "
+                    f"Falling back to the base directory: '{base_dir}'."
                 )
-                parent_dir = None
+                parent_dir = Path(base_dir)
+            else:
+                parent_dir = _safe_resolve_path(parent_dir_str)
+                if parent_dir is None:
+                    messages.append(
+                        "[ERROR] supervisorServices.parentDirectory: the path must be within "
+                        "your home directory."
+                    )
+                    # parent_dir stays None — YAML file checks below are skipped
+                elif not parent_dir.is_dir():
+                    messages.append(
+                        f"[ERROR] supervisorServices.parentDirectory: '{parent_dir}' does not "
+                        "exist or is not a directory. Correct the path before specifying YAML filenames."
+                    )
+                    parent_dir = None
         else:
             parent_dir = Path(base_dir)
 
@@ -1265,7 +1300,22 @@ def _validate_step2_harbor_files(infra: dict, base_dir: Path | None) -> list[str
             continue
 
         # Resolve and confine to the home tree before any filesystem operation.
-        parent_dir = _safe_resolve_path(parent_dir_str)
+        if _is_windows_absolute_path(parent_dir_str) and sys.platform != "win32":
+            messages.append(
+                f"[WARNING] infrastructure.clusters[\"{site}\"].harborConfiguration.parentDirectory: "
+                f"'{parent_dir_str}' looks like a Windows path and cannot be used on this OS. "
+                f"Falling back to the base directory: '{base_dir}'."
+            )
+            parent_dir = Path(base_dir)
+        elif _is_posix_absolute_path(parent_dir_str) and sys.platform == "win32":
+            messages.append(
+                f"[WARNING] infrastructure.clusters[\"{site}\"].harborConfiguration.parentDirectory: "
+                f"'{parent_dir_str}' looks like a POSIX path and cannot be used on Windows. "
+                f"Falling back to the base directory: '{base_dir}'."
+            )
+            parent_dir = Path(base_dir)
+        else:
+            parent_dir = _safe_resolve_path(parent_dir_str)
         if parent_dir is None:
             messages.append(
                 f"[ERROR] infrastructure.clusters[\"{site}\"].harborConfiguration.parentDirectory: "
@@ -2302,7 +2352,7 @@ def main():
         raise
 
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on {_BIND_HOST}:{args.port}")
+    print(f"Listening on {_BIND_HOST}:{args.port} (localhost only — use SSH port-forwarding for remote access)")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")

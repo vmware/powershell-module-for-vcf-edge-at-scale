@@ -1880,11 +1880,13 @@ function Initialize-VcfEdgeAtScale {
                 Write-LogMessage -Type DEBUG -Message "No storage policy configuration found for cluster `"$currentEdgeSite`"."
             }
 
-            # Multi-host HA admission after VDS: vSAN OSA/ESA use common/clusters haPolicy (default reservationBased when omitted); VMFS keeps reservationBased.
+            # Multi-host HA admission after VDS: vSAN OSA/ESA use common/clusters haPolicy (default reservationBased when omitted).
+            # VMFS is always single-host; Update-Cluster ignores HaPolicy for single-host clusters and always sets
+            # HAAdmissionControlEnabled=$false (disabled). Pass "disabled" explicitly so the value is semantically correct.
             $effectiveMultiHostHaPolicy = if ($storagePolicyType -eq "vSAN-ESA" -or $storagePolicyType -eq "vSAN-OSA") {
                 Get-EffectiveHaPolicyForCluster -Cluster $cluster -InputData $inputData
             } else {
-                "reservationBased"
+                "disabled"
             }
             Write-LogMessage -Type DEBUG -Message "Multi-host HA admission policy for edgeSite `"$currentEdgeSite`" (storage type `"$($storagePolicyType)`"): $effectiveMultiHostHaPolicy."
 
