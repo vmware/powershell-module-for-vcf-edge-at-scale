@@ -1,7 +1,17 @@
 # Release Notes
 
+<a id="v1.0.3.1022"></a>
+## 1.0.3.1022
+
+### Release Date: 2026-05-21
+
+### Details
+- Fix: `veas-json-generator.py` no longer rejects requests from `localhost`; loading templates from the default local directory now works correctly in the browser.
+
 <a id="v1.0.3.1021"></a>
 ## 1.0.3.1021
+
+### Release Date: 2026-05-20
 
 ### Details
 - Checks for updates automatically daily, unless the feature is disabled. Provides manual update feature.

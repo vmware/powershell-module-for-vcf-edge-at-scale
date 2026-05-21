@@ -1733,19 +1733,19 @@ function Get-SupervisorUpgradeStatus {
 
         # Extract upgrade progress information.
         $upgradeProgress = $clusterSoftware.UpgradeStatus.Progress
-        $messages = [System.Collections.ArrayList]::new()
+        $messages = [System.Collections.Generic.List[Object]]::new()
         if ($clusterSoftware.Messages) {
             if ($clusterSoftware.Messages -is [Array]) {
-                $null = $messages.AddRange($clusterSoftware.Messages)
+                $messages.AddRange([Object[]]$clusterSoftware.Messages)
             } else {
-                $null = $messages.Add($clusterSoftware.Messages)
+                $messages.Add($clusterSoftware.Messages)
             }
         }
         if ($clusterSoftware.UpgradeStatus.Messages) {
             if ($clusterSoftware.UpgradeStatus.Messages -is [Array]) {
-                $null = $messages.AddRange($clusterSoftware.UpgradeStatus.Messages)
+                $messages.AddRange([Object[]]$clusterSoftware.UpgradeStatus.Messages)
             } else {
-                $null = $messages.Add($clusterSoftware.UpgradeStatus.Messages)
+                $messages.Add($clusterSoftware.UpgradeStatus.Messages)
             }
         }
 
@@ -3295,6 +3295,62 @@ function Get-VlcmDesiredBaseImageVersionFromSpec {
 
     return $null
 }
+function Get-VlcmComplianceItemInfo {
+
+    <#
+        .SYNOPSIS
+        Resolves a display name and VMHost reference from a vLCM compliance item.
+
+        .DESCRIPTION
+        vLCM compliance result items may expose the host reference under different property names
+        depending on the PowerCLI version and vCenter API level (Host, VMHost, Entity, Name, or HostName).
+        This function encapsulates the fallback detection so callers do not repeat the same switch block.
+        Returns a PSCustomObject with DisplayName (string) and VMHost (object or $null).
+
+        .PARAMETER Item
+        A single compliance result item from Test-LcmClusterCompliance output.
+
+        .PARAMETER FallbackIndex
+        Integer used as the fallback label ("Host N") when no property yields a usable name.
+
+        .OUTPUTS
+        [PSCustomObject] with DisplayName ([String]) and VMHost ([Object], may be $null).
+
+        .EXAMPLE
+        $info = Get-VlcmComplianceItemInfo -Item $complianceItem -FallbackIndex 1
+        Write-Host "Host: $($info.DisplayName)"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [Object]$Item,
+        [Parameter(Mandatory = $true)] [ValidateRange(1, [int]::MaxValue)] [Int]$FallbackIndex
+    )
+
+    $displayName = $null
+    $vmHost = $null
+
+    if ($null -ne $Item) {
+        $displayName = switch ($true) {
+            { $Item.PSObject.Properties['Host'] -and $null -ne $Item.Host -and -not [String]::IsNullOrWhiteSpace($Item.Host.Name) } { $Item.Host.Name }
+            { $Item.PSObject.Properties['VMHost'] -and $null -ne $Item.VMHost -and -not [String]::IsNullOrWhiteSpace($Item.VMHost.Name) } { $Item.VMHost.Name }
+            { $Item.PSObject.Properties['Entity'] -and $null -ne $Item.Entity -and -not [String]::IsNullOrWhiteSpace($Item.Entity.Name) } { $Item.Entity.Name }
+            { $Item.PSObject.Properties['Name'] -and -not [String]::IsNullOrWhiteSpace($Item.Name) } { $Item.Name }
+            { $Item.PSObject.Properties['HostName'] -and -not [String]::IsNullOrWhiteSpace($Item.HostName) } { $Item.HostName }
+            default { $null }
+        }
+        if ([String]::IsNullOrWhiteSpace($displayName) -or $displayName -match '^\s*Vmware\.') {
+            $displayName = "Host $FallbackIndex"
+        }
+        if ($Item.PSObject.Properties['Host'] -and $null -ne $Item.Host) { $vmHost = $Item.Host }
+        elseif ($Item.PSObject.Properties['VMHost'] -and $null -ne $Item.VMHost) { $vmHost = $Item.VMHost }
+    } else {
+        $displayName = "Host $FallbackIndex"
+    }
+
+    return [PSCustomObject]@{ DisplayName = $displayName; VMHost = $vmHost }
+}
 function Invoke-VlcmClusterComplianceAndRemediate {
 
     <#
@@ -3363,27 +3419,11 @@ function Invoke-VlcmClusterComplianceAndRemediate {
     $nonCompliantCount = $nonCompliantHosts.Count
     $nonCompliantHostNames = @()
     $index = 0
-    # Resolve a display name for each non-compliant host. vLCM/API may expose Host, VMHost, Entity, Name, or HostName; use first available non-empty value so logs list host names instead of indices only.
     foreach ($item in $nonCompliantHosts) {
         $index++
-        $displayName = $null
-        if ($null -ne $item) {
-            $displayName = switch ($true) {
-                { $item.PSObject.Properties['Host'] -and $null -ne $item.Host -and -not [String]::IsNullOrWhiteSpace($item.Host.Name) } { $item.Host.Name }
-                { $item.PSObject.Properties['VMHost'] -and $null -ne $item.VMHost -and -not [String]::IsNullOrWhiteSpace($item.VMHost.Name) } { $item.VMHost.Name }
-                { $item.PSObject.Properties['Entity'] -and $null -ne $item.Entity -and -not [String]::IsNullOrWhiteSpace($item.Entity.Name) } { $item.Entity.Name }
-                { $item.PSObject.Properties['Name'] -and -not [String]::IsNullOrWhiteSpace($item.Name) } { $item.Name }
-                { $item.PSObject.Properties['HostName'] -and -not [String]::IsNullOrWhiteSpace($item.HostName) } { $item.HostName }
-                default { $null }
-            }
-            if ([String]::IsNullOrWhiteSpace($displayName) -or $displayName -match '^\s*Vmware\.') {
-                $displayName = "Host $index"
-            }
-        } else {
-            $displayName = "Host $index"
-        }
-        if (-not [String]::IsNullOrWhiteSpace($displayName)) {
-            $nonCompliantHostNames += $displayName
+        $itemInfo = Get-VlcmComplianceItemInfo -Item $item -FallbackIndex $index
+        if (-not [String]::IsNullOrWhiteSpace($itemInfo.DisplayName)) {
+            $nonCompliantHostNames += $itemInfo.DisplayName
         }
     }
     $hostNamesStr = if ($nonCompliantHostNames.Count -gt 0) { $nonCompliantHostNames -join ", " } else { "($nonCompliantCount host(s))" }
@@ -3399,23 +3439,13 @@ function Invoke-VlcmClusterComplianceAndRemediate {
     }
 
     if (-not [String]::IsNullOrWhiteSpace($baseImageVersion)) {
+        # Restart index for this loop; labels are independent of the display-name log loop above.
+        $innerIndex = 0
         foreach ($item in $nonCompliantHosts) {
-            $displayName = $null
-            $vmHost = $null
-
-            # Resolve host display name and VMHost from compliance item (API may expose Host, VMHost, Entity, Name, or HostName).
-            if ($null -ne $item) {
-                $displayName = switch ($true) {
-                    { $item.PSObject.Properties['Host'] -and $null -ne $item.Host -and -not [String]::IsNullOrWhiteSpace($item.Host.Name) } { $item.Host.Name }
-                    { $item.PSObject.Properties['VMHost'] -and $null -ne $item.VMHost -and -not [String]::IsNullOrWhiteSpace($item.VMHost.Name) } { $item.VMHost.Name }
-                    { $item.PSObject.Properties['Entity'] -and $null -ne $item.Entity -and -not [String]::IsNullOrWhiteSpace($item.Entity.Name) } { $item.Entity.Name }
-                    { $item.PSObject.Properties['Name'] -and -not [String]::IsNullOrWhiteSpace($item.Name) } { $item.Name }
-                    { $item.PSObject.Properties['HostName'] -and -not [String]::IsNullOrWhiteSpace($item.HostName) } { $item.HostName }
-                    default { $null }
-                }
-                if ($item.PSObject.Properties['Host'] -and $null -ne $item.Host) { $vmHost = $item.Host }
-                elseif ($item.PSObject.Properties['VMHost'] -and $null -ne $item.VMHost) { $vmHost = $item.VMHost }
-            }
+            $innerIndex++
+            $itemInfo = Get-VlcmComplianceItemInfo -Item $item -FallbackIndex $innerIndex
+            $displayName = $itemInfo.DisplayName
+            $vmHost = $itemInfo.VMHost
 
             if ([String]::IsNullOrWhiteSpace($displayName)) { continue }
             if (-not $vmHost) {
@@ -8840,7 +8870,7 @@ function Test-YamlPropertyConsistency {
         $validationFailed = $false
         $documentsChecked = 0
         $propertiesFound = 0
-        $validationResults = [System.Collections.ArrayList]::new()
+        $validationResults = [System.Collections.Generic.List[Hashtable]]::new()
 
         # Check each document for the specified properties.
 
@@ -8899,7 +8929,7 @@ function Test-YamlPropertyConsistency {
                         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$ValidationName validation on YAML file `"$YamlFilePath`": for property `"$propertyPath`"."
                     }
 
-                    $null = $validationResults.Add(@{
+                    $validationResults.Add(@{
                         DocumentIndex = $documentsChecked
                         PropertyPath = $propertyPath
                         FoundValue = $foundValue
@@ -8916,7 +8946,7 @@ function Test-YamlPropertyConsistency {
                         $validationFailed = $true
                     }
 
-                    $null = $validationResults.Add(@{
+                    $validationResults.Add(@{
                         DocumentIndex = $documentsChecked
                         PropertyPath = $propertyPath
                         FoundValue = $null
@@ -10568,9 +10598,9 @@ function Add-ArgoCDNamespace {
         # Build a new array with foreach (no pipeline) to avoid triggering a bug in the VCF cmdlet
         # that can cause '"$_"' to be evaluated when the parameter is bound from a piped array.
         Write-LogMessage -Type DEBUG -Message "Configuring VM classes ($($VmClasses.Count)): $($VmClasses -join ', ')"
-        $vmClassesArray = [System.Collections.ArrayList]::new()
+        $vmClassesArray = [System.Collections.Generic.List[String]]::new()
         foreach ($className in $VmClasses) {
-            [void]$vmClassesArray.Add([string]$className)
+            $vmClassesArray.Add([String]$className)
         }
         $vmClassesToPass = $vmClassesArray.ToArray()
         Write-LogMessage -Type DEBUG -Message "VM classes array: $($vmClassesToPass -join ', ')"
@@ -11306,6 +11336,38 @@ function ConvertTo-YamlLiteralBlock {
     $indentedLines = $lines | ForEach-Object { $contentIndent + $_ }
     return $keyIndent + $KeyName + ": |`n" + ($indentedLines -join "`n") + "`n"
 }
+function ConvertTo-YamlSingleQuotedScalar {
+
+    <#
+        .SYNOPSIS
+        Wraps a string value in YAML single quotes with proper escaping.
+
+        .DESCRIPTION
+        Returns a YAML-safe single-quoted scalar for the given string. Single quoting is the
+        safest way to inject user-controlled values into YAML: no indicator characters
+        ({, [, >, |, *, &, !, %, @, `) can be misinterpreted, and colons followed by a
+        space are inert inside single quotes. The only character that requires escaping in a
+        YAML single-quoted scalar is the single quote itself, which is represented as ''.
+
+        .PARAMETER Value
+        The plain-text string to encode.
+
+        .OUTPUTS
+        [String] The value wrapped in YAML single quotes, with any embedded single quotes doubled.
+
+        .EXAMPLE
+        ConvertTo-YamlSingleQuotedScalar -Value "pass'word{}"
+        Returns: 'pass''word{}'
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [ValidateNotNull()] [String]$Value
+    )
+
+    return "'" + $Value.Replace("'", "''") + "'"
+}
 function Update-HarborYamlContent {
 
     <#
@@ -11440,7 +11502,8 @@ function Update-HarborYamlContent {
     # Replace optional top-level secret values; $env: references are resolved from the environment.
     if (-not [String]::IsNullOrWhiteSpace($HarborAdminPassword)) {
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "harborAdminPassword" -Value $HarborAdminPassword
-        $YamlContent = $YamlContent -replace '(?m)^(?:#\s*)?harborAdminPassword:.*$', ('harborAdminPassword: ' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)^(?:#\s*)?harborAdminPassword:.*$', ('harborAdminPassword: ' + $quotedSecret.Replace('$', '$$'))
     }
     if (-not [String]::IsNullOrWhiteSpace($SecretKey)) {
         # RequiredLength enforces Y/N-gated re-prompting for $env: references (normally already
@@ -11452,25 +11515,30 @@ function Update-HarborYamlContent {
             Write-LogMessage -Type ERROR -Message "Harbor secretKey must be exactly 16 characters but the resolved value is $($resolvedSecret.Length) character(s). Update the `"SECRET_KEY`" environment variable (or harborConfiguration.secretKey) to a 16-character string."
             throw [VcfDeploymentException]::new("Harbor secretKey must be exactly 16 characters but the resolved value is $($resolvedSecret.Length) character(s). Update the `"SECRET_KEY`" environment variable (or harborConfiguration.secretKey) to a 16-character string.")
         }
-        $YamlContent = $YamlContent -replace '(?m)^(?:#\s*)?secretKey:.*$', ('secretKey: ' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)^(?:#\s*)?secretKey:.*$', ('secretKey: ' + $quotedSecret.Replace('$', '$$'))
     }
     # Replace optional nested secret values; each section is anchored by its top-level YAML key.
     # Uses '${1}' (not '$1') to prevent .NET regex greedy-digit group number ambiguity.
     if (-not [String]::IsNullOrWhiteSpace($DatabasePassword)) {
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "databasePassword" -Value $DatabasePassword
-        $YamlContent = $YamlContent -replace '(?m)(^database:\r?\n(?:  [^\n]*\r?\n)*?  password:\s*).*$', ('${1}' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)(^database:\r?\n(?:  [^\n]*\r?\n)*?  password:\s*).*$', ('${1}' + $quotedSecret.Replace('$', '$$'))
     }
     if (-not [String]::IsNullOrWhiteSpace($CoreSecret)) {
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "coreSecret" -Value $CoreSecret
-        $YamlContent = $YamlContent -replace '(?m)(^core:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)(^core:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $quotedSecret.Replace('$', '$$'))
     }
     if (-not [String]::IsNullOrWhiteSpace($JobserviceSecret)) {
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "jobserviceSecret" -Value $JobserviceSecret
-        $YamlContent = $YamlContent -replace '(?m)(^jobservice:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)(^jobservice:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $quotedSecret.Replace('$', '$$'))
     }
     if (-not [String]::IsNullOrWhiteSpace($RegistrySecret)) {
         $resolvedSecret = Resolve-HarborSecretValue -FieldName "registrySecret" -Value $RegistrySecret
-        $YamlContent = $YamlContent -replace '(?m)(^registry:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $resolvedSecret.Replace('$', '$$'))
+        $quotedSecret = ConvertTo-YamlSingleQuotedScalar -Value $resolvedSecret
+        $YamlContent = $YamlContent -replace '(?m)(^registry:\r?\n(?:  [^\n]*\r?\n)*?  secret:\s*).*$', ('${1}' + $quotedSecret.Replace('$', '$$'))
     }
     # Inject TLS certificate PEM content when TlsCrtPath and TlsKeyPath are provided.
     if (-not [String]::IsNullOrWhiteSpace($TlsCrtPath)) {
