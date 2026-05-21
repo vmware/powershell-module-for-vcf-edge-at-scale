@@ -1315,22 +1315,18 @@ function Connect-Vcenter {
 
                 switch -Regex ($errorMessage) {
                     "SSL connection could not be established|SSL|certificate" {
-                        Write-LogMessage -Type ERROR -Message "Failed to establish SSL connection to $ServerType `"$ServerName`"."
-                        Write-Host ""
-                        Write-LogMessage -Type ERROR -Message "Common causes and solutions:"
-                        Write-LogMessage -Type ERROR -Message "  1. Self-signed or untrusted SSL certificate."
-                        Write-LogMessage -Type ERROR -Message "     Solution: Configure PowerCLI to ignore invalid certificates:"
-                        Write-LogMessage -Type ERROR -Message "     Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:`$false"
-                        Write-Host ""
-                        Write-LogMessage -Type ERROR -Message "  2. TLS protocol version mismatch."
-                        Write-LogMessage -Type ERROR -Message "     Solution: Enable TLS 1.2 in PowerShell:"
-                        Write-LogMessage -Type ERROR -Message "     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12"
-                        Write-Host ""
-                        Write-LogMessage -Type ERROR -Message "  3. Network connectivity or firewall blocking HTTPS (port 443)"
-                        Write-LogMessage -Type ERROR -Message "     Solution: Verify network connectivity: Test-NetConnection -ComputerName $ServerName -Port 443"
-                        Write-Host ""
-                        Write-LogMessage -Type ERROR -Message "Full error details: $errorMessage."
-                        throw [VcfDeploymentException]::new("Full error details: $errorMessage.")
+                        $sslHelp = @"
+Failed to establish SSL connection to $ServerType `"$ServerName`". Common causes and solutions:
+  1. Self-signed or untrusted SSL certificate.
+     Solution: Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:`$false
+  2. TLS protocol version mismatch.
+     Solution: [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  3. Network connectivity or firewall blocking HTTPS (port 443).
+     Solution: Test-NetConnection -ComputerName $ServerName -Port 443
+Full error details: $errorMessage.
+"@
+                        Write-LogMessage -Type ERROR -Message $sslHelp.Trim()
+                        throw [VcfDeploymentException]::new("SSL connection to $ServerType `"$ServerName`" failed: $errorMessage.")
                     }
                     "incorrect user name or password|authentication|credentials" {
                         Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."

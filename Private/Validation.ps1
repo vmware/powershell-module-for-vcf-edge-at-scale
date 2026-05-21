@@ -2739,10 +2739,7 @@ function ConvertFrom-Yaml {
     )
 
     begin {
-        # Initialize an ArrayList to collect YAML lines from pipeline input.
-        # Using ArrayList for better performance when adding multiple items.
-
-        $yamlLines = New-Object System.Collections.ArrayList
+        $yamlLines = [System.Collections.Generic.List[String]]::new()
     }
 
     process {
@@ -2753,11 +2750,8 @@ function ConvertFrom-Yaml {
 
         $lines = $YamlContent -split "`n"
 
-        # Add each line to our collection for later processing.
-        # Out-Null suppresses the ArrayList.Add() return value (index)
         foreach ($line in $lines) {
-            # TrimEnd removes any trailing \r from Windows line endings.
-            $yamlLines.Add($line.TrimEnd("`r")) | Out-Null
+            $yamlLines.Add($line.TrimEnd("`r"))
         }
     }
 
@@ -2842,13 +2836,13 @@ function ConvertTo-Yaml {
     begin {
         Write-LogMessage -Type DEBUG -Message "Entered ConvertTo-Yaml function..."
 
-        $yamlContent = New-Object System.Collections.ArrayList
+        $yamlContent = [System.Collections.Generic.List[String]]::new()
     }
 
     process {
         $lines = ConvertTo-YamlInternal -InputObject $InputObject -IndentSize $IndentSize -CurrentIndent 0
         foreach ($line in $lines) {
-            $yamlContent.Add($line) | Out-Null
+            $yamlContent.Add($line)
         }
     }
 
@@ -2896,7 +2890,7 @@ function ConvertFrom-YamlInternal {
     )
 
     $result = @{}
-    $stack = New-Object System.Collections.ArrayList
+    $stack = [System.Collections.Generic.List[Hashtable]]::new()
     $currentObject = $result
     $lineNumber = 0
 
@@ -2943,9 +2937,9 @@ function ConvertFrom-YamlInternal {
             }
             elseif ($parsedItem.Type -eq "ArrayItem") {
                 if (-not $currentObject.ContainsKey($parsedItem.Key)) {
-                    $currentObject[$parsedItem.Key] = New-Object System.Collections.ArrayList
+                    $currentObject[$parsedItem.Key] = [System.Collections.Generic.List[Object]]::new()
                 }
-                $currentObject[$parsedItem.Key].Add($parsedItem.Value) | Out-Null
+                $currentObject[$parsedItem.Key].Add($parsedItem.Value)
             }
             elseif ($parsedItem.Type -eq "ObjectStart") {
                 $newObject = @{}
@@ -2953,16 +2947,16 @@ function ConvertFrom-YamlInternal {
                 $stack.Add(@{
                     Object = $newObject
                     IndentLevel = $currentIndentLevel
-                }) | Out-Null
+                })
             }
             elseif ($parsedItem.Type -eq "ArrayStart") {
-                $newArray = New-Object System.Collections.ArrayList
+                $newArray = [System.Collections.Generic.List[Object]]::new()
                 Add-ObjectProperty -Object $currentObject -Path $parsedItem.Key -Value $newArray
                 $stack.Add(@{
                     Object = $newArray
                     IndentLevel = $currentIndentLevel
                     IsArray = $true
-                }) | Out-Null
+                })
             }
         }
     }
@@ -3275,8 +3269,8 @@ function ConvertTo-YamlInternal {
           - item3
 
     .OUTPUTS
-        System.Collections.ArrayList
-        Returns an ArrayList containing strings, where each string represents a line of YAML output
+        System.Collections.Generic.List[String]
+        Returns a List[String] where each string represents a line of YAML output
         with appropriate indentation. The caller can join these lines with newline characters to
         create the final YAML document.
 
@@ -3285,7 +3279,6 @@ function ConvertTo-YamlInternal {
         - The function uses recursive calls to handle nested object structures
         - Proper YAML formatting is maintained through careful indentation management
         - The function delegates primitive value conversion to ConvertTo-YamlValue for consistency
-        - Output suppression (| Out-Null) is used when adding items to ArrayList to prevent index output
         - The function handles both hashtables and PSCustomObjects uniformly through PSObject.Properties
 
         Author: PowerShell YAML Parser
@@ -3302,7 +3295,7 @@ function ConvertTo-YamlInternal {
 
     Write-LogMessage -Type DEBUG -Message "Entered ConvertTo-YamlInternal function..."
 
-    $yamlLines = New-Object System.Collections.ArrayList
+    $yamlLines = [System.Collections.Generic.List[String]]::new()
     $indent = " " * ($CurrentIndent * $IndentSize)
 
     if ($InputObject -is [hashtable] -or $InputObject -is [PSCustomObject]) {
@@ -3310,31 +3303,31 @@ function ConvertTo-YamlInternal {
             $key = $property.Name
             $value = $property.Value
 
-            if ($value -is [array] -or $value -is [System.Collections.ArrayList]) {
-                $yamlLines.Add("$indent$key`:") | Out-Null
+            if ($value -is [array] -or $value -is [System.Collections.IList]) {
+                $yamlLines.Add("$indent$key`:")
                 foreach ($item in $value) {
-                    $yamlLines.Add("$indent  - $(ConvertTo-YamlValue -Value $item -IndentSize $IndentSize -CurrentIndent $CurrentIndent + 1)") | Out-Null
+                    $yamlLines.Add("$indent  - $(ConvertTo-YamlValue -Value $item -IndentSize $IndentSize -CurrentIndent $CurrentIndent + 1)")
                 }
             }
             elseif ($value -is [hashtable] -or $value -is [PSCustomObject]) {
-                $yamlLines.Add("$indent$key`:") | Out-Null
+                $yamlLines.Add("$indent$key`:")
                 $subLines = ConvertTo-YamlInternal -InputObject $value -IndentSize $IndentSize -CurrentIndent $CurrentIndent + 1
                 foreach ($line in $subLines) {
-                    $yamlLines.Add($line) | Out-Null
+                    $yamlLines.Add($line)
                 }
             }
             else {
-                $yamlLines.Add("$indent$key`: $(ConvertTo-YamlValue -Value $value -IndentSize $IndentSize -CurrentIndent $CurrentIndent)") | Out-Null
+                $yamlLines.Add("$indent$key`: $(ConvertTo-YamlValue -Value $value -IndentSize $IndentSize -CurrentIndent $CurrentIndent)")
             }
         }
     }
-    elseif ($InputObject -is [array] -or $InputObject -is [System.Collections.ArrayList]) {
+    elseif ($InputObject -is [array] -or $InputObject -is [System.Collections.IList]) {
         foreach ($item in $InputObject) {
-            $yamlLines.Add("$indent- $(ConvertTo-YamlValue -Value $item -IndentSize $IndentSize -CurrentIndent $CurrentIndent)") | Out-Null
+            $yamlLines.Add("$indent- $(ConvertTo-YamlValue -Value $item -IndentSize $IndentSize -CurrentIndent $CurrentIndent)")
         }
     }
     else {
-        $yamlLines.Add("$indent$(ConvertTo-YamlValue -Value $InputObject -IndentSize $IndentSize -CurrentIndent $CurrentIndent)") | Out-Null
+        $yamlLines.Add("$indent$(ConvertTo-YamlValue -Value $InputObject -IndentSize $IndentSize -CurrentIndent $CurrentIndent)")
     }
 
     return $yamlLines
@@ -3421,11 +3414,11 @@ function ConvertTo-YamlValue {
         $subYaml = ConvertTo-YamlInternal -InputObject $Value -IndentSize $IndentSize -CurrentIndent $CurrentIndent + 1
         return "`n$subYaml"
     }
-    elseif ($Value -is [array] -or $Value -is [System.Collections.ArrayList]) {
-        $arrayItems = New-Object System.Collections.ArrayList
+    elseif ($Value -is [array] -or $Value -is [System.Collections.IList]) {
+        $arrayItems = [System.Collections.Generic.List[String]]::new()
         foreach ($item in $Value) {
             $itemValue = ConvertTo-YamlValue -Value $item -IndentSize $IndentSize -CurrentIndent $CurrentIndent
-            $arrayItems.Add($itemValue) | Out-Null
+            $arrayItems.Add($itemValue)
         }
         return "`n$($arrayItems -join "`n")"
     }

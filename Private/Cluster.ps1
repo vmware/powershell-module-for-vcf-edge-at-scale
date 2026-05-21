@@ -276,12 +276,12 @@ function Remove-ClusterSafely {
     if ($vmsInCluster) {
         $runningVms = @($vmsInCluster | Where-Object { $_.PowerState -eq 'PoweredOn' })
     }
-    $blockingVms = [System.Collections.ArrayList]::new()
+    $blockingVms = [System.Collections.Generic.List[PSObject]]::new()
     $vclsPhotonCrxGuestName = "VMware Photon CRX (64-bit)"
     if ($runningVms -and $runningVms.Count -gt 0) {
         foreach ($vm in @($runningVms)) {
             if ($vm.Name -notlike "vCLS-*") {
-                [void]$blockingVms.Add($vm)
+                $blockingVms.Add($vm)
                 continue
             }
             $guestFullName = $null
@@ -302,7 +302,7 @@ function Remove-ClusterSafely {
                 Write-LogMessage -Type DEBUG -Message "Excluding running VM `"$($vm.Name)`" (vCLS with guest $vclsPhotonCrxGuestName) from cluster-removal check."
                 continue
             }
-            [void]$blockingVms.Add($vm)
+            $blockingVms.Add($vm)
         }
     }
     if ($blockingVms.Count -gt 0) {
@@ -2389,11 +2389,11 @@ function Get-VcenterSupervisorCount {
 
         if ($IncludeDetails -and $count -gt 0) {
             $clusterIds = @($softwareClusters | ForEach-Object { $_.Cluster })
-            $clusterNames = [System.Collections.ArrayList]::new()
+            $clusterNames = [System.Collections.Generic.List[String]]::new()
             foreach ($clusterId in $clusterIds) {
                 $clusterObj = Get-Cluster -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.ExtensionData.MoRef.Value -eq $clusterId } | Select-Object -First 1
                 $name = if ($clusterObj) { $clusterObj.Name } else { $clusterId }
-                [void]$clusterNames.Add($name)
+                $clusterNames.Add($name)
             }
             $result = [PSCustomObject]@{
                 Count        = $count
@@ -2865,9 +2865,9 @@ function Group-DisksByHost {
     foreach ($disk in $Disks) {
         $hostName = $disk.VMHostName
         if (-not $disksByHost.ContainsKey($hostName)) {
-            $disksByHost[$hostName] = [System.Collections.ArrayList]::new()
+            $disksByHost[$hostName] = [System.Collections.Generic.List[PSObject]]::new()
         }
-        [void]$disksByHost[$hostName].Add($disk)
+        $disksByHost[$hostName].Add($disk)
     }
 
     return $disksByHost
@@ -3178,7 +3178,7 @@ function Get-VsanEsaEligibleDisksFromCluster {
     Write-LogMessage -Type DEBUG -Message "Retrieving eligible disks from $($ClusterHosts.Count) host(s) in cluster `"$ClusterName`"."
 
     # Collect eligible disks from all hosts. Force array so a single VMHost is still enumerated once per host.
-    $allEligibleDisks = [System.Collections.ArrayList]::new()
+    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
     $overallStartTime = Get-Date
     $hostsToQuery = @($ClusterHosts)
 
@@ -3209,7 +3209,7 @@ function Get-VsanEsaEligibleDisksFromCluster {
         $addedCount = 0
         foreach ($disk in $hostEligibleDisks) {
             if ($null -ne $disk) {
-                [void]$allEligibleDisks.Add($disk)
+                $allEligibleDisks.Add($disk)
                 $addedCount++
             }
         }
@@ -3222,7 +3222,7 @@ function Get-VsanEsaEligibleDisksFromCluster {
                 $syncDisks = @(Get-VsanEsaEligibleDisk -VMHost $vmHost -ErrorAction Stop)
                 foreach ($disk in $syncDisks) {
                     if ($null -ne $disk) {
-                        [void]$allEligibleDisks.Add($disk)
+                        $allEligibleDisks.Add($disk)
                         $addedCount++
                     }
                 }
@@ -3505,7 +3505,7 @@ function Get-VsanOsaEligibleDisksFromCluster {
     Write-LogMessage -Type DEBUG -Message "Retrieving eligible disks from $($ClusterHosts.Count) host(s) in cluster `"$ClusterName`" (HostVsanSystem.QueryDisksForVsan)."
 
     # Collect eligible disks from each host via HostVsanSystem.QueryDisksForVsan (vSphere API).
-    $allEligibleDisks = [System.Collections.ArrayList]::new()
+    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
     $hostsToQuery = @($ClusterHosts)
 
     foreach ($vmHost in $hostsToQuery) {
@@ -3534,14 +3534,14 @@ function Get-VsanOsaEligibleDisksFromCluster {
 
         # Each result item has .state ("eligible" etc.) and .disk (capacity, canonicalName, model, ssd).
         $eligibleCountThisHost = 0
-        $rawStatesThisHost = [System.Collections.ArrayList]::new()
+        $rawStatesThisHost = [System.Collections.Generic.List[String]]::new()
         # Log every disk and its state from QueryDisksForVsan so we can see why some disks (e.g. boot) are not eligible.
         foreach ($resultItem in $diskResults) {
             $state = if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) { $resultItem.state } else { "(no state)" }
             $canonical = if ($resultItem -and $resultItem.disk -and $resultItem.disk.canonicalName) { $resultItem.disk.canonicalName } else { "(no canonical)" }
             Write-LogMessage -Type DEBUG -Message "QueryDisksForVsan host `"$hostName`" disk $canonical state=$state."
             if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) {
-                [void]$rawStatesThisHost.Add($resultItem.state)
+                $rawStatesThisHost.Add($resultItem.state)
             }
             if ($null -eq $resultItem -or $resultItem.state -ne "eligible") {
                 continue
@@ -3572,7 +3572,7 @@ function Get-VsanOsaEligibleDisksFromCluster {
                 Model        = $model
                 IsSsd        = $isSsd
             }
-            [void]$allEligibleDisks.Add($eligibleDiskObject)
+            $allEligibleDisks.Add($eligibleDiskObject)
             $eligibleCountThisHost++
         }
         if ($eligibleCountThisHost -gt 0) {
@@ -3667,7 +3667,7 @@ function Get-UserDiskSelection {
     )
 
     # Create display objects with IDs.
-    $diskDisplayList = [System.Collections.ArrayList]::new()
+    $diskDisplayList = [System.Collections.Generic.List[PSObject]]::new()
     $diskIdCounter = 1
 
     foreach ($disk in $EligibleDisks) {
@@ -3682,7 +3682,7 @@ function Get-UserDiskSelection {
             DiskObject = $disk
         }
 
-        [void]$diskDisplayList.Add($diskDisplayObject)
+        $diskDisplayList.Add($diskDisplayObject)
         $diskIdCounter++
     }
 
@@ -3717,13 +3717,13 @@ function Get-UserDiskSelection {
         }
 
         # Parse the input and remove selected IDs from the default selection.
-        $idsToDeselect = [System.Collections.ArrayList]::new()
+        $idsToDeselect = [System.Collections.Generic.List[Int]]::new()
         if ($deselectInput -and $deselectInput.Trim()) {
             $inputParts = $deselectInput -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
             foreach ($part in $inputParts) {
                 $parsedId = 0
                 if ([int]::TryParse($part, [ref]$parsedId)) {
-                    [void]$idsToDeselect.Add($parsedId)
+                    $idsToDeselect.Add($parsedId)
                 }
                 else {
                     Write-LogMessage -Type ERROR -Message "Invalid disk ID format: `"$part`". Expected numeric value."
@@ -3948,9 +3948,9 @@ function Add-VsanEsaDiskToStoragePool {
     foreach ($hostName in ($DisksByHost.Keys | Sort-Object)) {
         $hostDisks = $DisksByHost[$hostName]
         # Create array of canonical names as strings.
-        $canonicalNames = [System.Collections.ArrayList]::new()
+        $canonicalNames = [System.Collections.Generic.List[String]]::new()
         foreach ($disk in $hostDisks) {
-            [void]$canonicalNames.Add($disk.CanonicalName)
+            $canonicalNames.Add($disk.CanonicalName)
         }
         # Convert to array for cmdlet parameter.
         $canonicalNames = $canonicalNames.ToArray()
@@ -4400,11 +4400,11 @@ function Initialize-VsanWitnessDiskGroup {
         # Resolve each disk to the ScsiLun's CanonicalName (typically NAA) so New-VsanDiskGroup receives the format the host/vSAN API expects; avoids "Sequence contains no elements" when QueryDisksForVsan returns mpx and the cmdlet looks up by NAA.
         $cacheLun = $visibleLuns | Where-Object { $_.CanonicalName -eq $cacheDisk.CanonicalName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $cacheDisk.CanonicalName) } | Select-Object -First 1
         $cacheNameForCmdlet = if ($cacheLun) { $cacheLun.CanonicalName } else { $cacheDisk.CanonicalName }
-        $capacityNamesForCmdlet = [System.Collections.ArrayList]::new()
+        $capacityNamesForCmdlet = [System.Collections.Generic.List[String]]::new()
         foreach ($capName in $capacityCanonicalNames) {
             $capLun = $visibleLuns | Where-Object { $_.CanonicalName -eq $capName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $capName) } | Select-Object -First 1
             $nameToAdd = if ($capLun) { $capLun.CanonicalName } else { $capName }
-            [void]$capacityNamesForCmdlet.Add($nameToAdd)
+            $capacityNamesForCmdlet.Add($nameToAdd)
         }
         $dataDiskArray = @($capacityNamesForCmdlet)
         if ($cacheNameForCmdlet -ne $cacheDisk.CanonicalName -or ($capacityNamesForCmdlet -join ',') -ne ($capacityCanonicalNames -join ',')) {
@@ -5609,7 +5609,7 @@ function Get-VsanClusterTriggeredAlarms {
         return @()
     }
 
-    $result = [System.Collections.ArrayList]::new()
+    $result = [System.Collections.Generic.List[PSObject]]::new()
     foreach ($triggered in $triggeredStates) {
         $alarmName = $null
         $status = $triggered.OverallStatus
@@ -5624,7 +5624,7 @@ function Get-VsanClusterTriggeredAlarms {
         if (-not $alarmName) {
             $alarmName = "Unknown alarm (id: $($triggered.Alarm))"
         }
-        [void]$result.Add([PSCustomObject]@{ AlarmName = $alarmName; Status = $status })
+        $result.Add([PSCustomObject]@{ AlarmName = $alarmName; Status = $status })
     }
     return $result
 }
@@ -5884,7 +5884,7 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
     # Alarm handling order: (1) advCfgSync alarms are remediated once by re-applying vSAN cluster config; (2) for all other alarms we run pattern-based handling: Performance service (enable programmatically), Stats primary election (DEBUG guidance; post-witness gate uses re-trigger in Invoke-VsanClusterHealthCheckAfterWitness), vSAN cluster compliance (set DOM throttle on hosts). Alarms we cannot remediate are logged as WARNING and collected in remainingAlarms.
     $advCfgSyncPattern = "advanced\s*(virtual\s*)?san\s*configuration\s*in\s*sync|advCfgSync|configuration\s*in\s*sync"
     $attemptedFix = $false
-    $remainingAlarms = [System.Collections.ArrayList]::new()
+    $remainingAlarms = [System.Collections.Generic.List[PSObject]]::new()
 
     foreach ($alarm in $alarms) {
         $name = $alarm.AlarmName
@@ -5898,12 +5898,12 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
                     $afterAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
                     foreach ($alarmItem in $afterAlarms) {
                         if ($alarmItem.AlarmName -match $advCfgSyncPattern) {
-                            [void]$remainingAlarms.Add($alarmItem)
+                            $remainingAlarms.Add($alarmItem)
                         }
                     }
                 }
                 else {
-                    [void]$remainingAlarms.Add($alarm)
+                    $remainingAlarms.Add($alarm)
                 }
             }
             # When attemptedFix is already true, remaining advCfgSync alarms were captured from re-query; do not add again from initial list.
@@ -5945,8 +5945,8 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
     }
 
     $labThirdPartyPattern = "Registration/unregistration of third-party IO filter storage providers fails on a host"
-    $blockingRedAlarms = [System.Collections.ArrayList]::new()
-    $yellowAlarms = [System.Collections.ArrayList]::new()
+    $blockingRedAlarms = [System.Collections.Generic.List[PSObject]]::new()
+    $yellowAlarms = [System.Collections.Generic.List[PSObject]]::new()
     foreach ($a in $refreshedAlarms) {
         $statusText = ([string]$a.Status).ToLower()
         $alarmLabel = $a.AlarmName
@@ -5959,10 +5959,10 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
                     Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has red triggered alarm (not blocking on this gate): `"$($a.AlarmName)`". Same transient Stats primary handling as post-witness health; if supervisor or host preflight still fails, align witness and data node ESX builds, then see Broadcom KB 401679."
                     continue
                 }
-                [void]$blockingRedAlarms.Add($a)
+                $blockingRedAlarms.Add($a)
             }
             '^yellow$' {
-                [void]$yellowAlarms.Add($a)
+                $yellowAlarms.Add($a)
             }
         }
     }
@@ -6457,7 +6457,7 @@ function Add-VsanClusterSilentHealthChecks {
         return
     }
     $batchSize = $SilentCheckBatchSize
-    $failed = [System.Collections.ArrayList]::new()
+    $failed = [System.Collections.Generic.List[String]]::new()
     for ($i = 0; $i -lt $toAdd.Count; $i += $batchSize) {
         $endIdx = [Math]::Min($i + $batchSize - 1, $toAdd.Count - 1)
         $chunk = @($toAdd[$i..$endIdx])
@@ -6466,7 +6466,7 @@ function Add-VsanClusterSilentHealthChecks {
             Write-LogMessage -Type DEBUG -Message "Silenced vSAN health check ID(s) on cluster `"$ClusterName`" ($LogContext): $($chunk -join ', ')."
         } catch {
             Write-LogMessage -Type WARNING -Message "VsanHealthSetVsanClusterSilentChecks failed for cluster `"$ClusterName`" ($LogContext, batch: $($chunk -join ', ')): $($_.Exception.Message). Skipping this batch."
-            [void]$failed.AddRange($chunk)
+            $failed.AddRange([String[]]$chunk)
         }
     }
     if ($failed.Count -gt 0) {

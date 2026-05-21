@@ -1699,7 +1699,7 @@ function Add-VsanOsaDiskGroupToCluster {
                 -ClusterName $ClusterName `
                 -ClusterHosts $clusterHosts
 
-            $diskDisplayList = [System.Collections.ArrayList]::new()
+            $diskDisplayList = [System.Collections.Generic.List[PSObject]]::new()
             $diskIdCounter = 1
             foreach ($disk in $eligibleDisks) {
                 $hostName = $disk.VMHost.Name
@@ -1715,7 +1715,7 @@ function Add-VsanOsaDiskGroupToCluster {
                     IsSsd = $isSsd
                     DiskObject = $disk
                 }
-                [void]$diskDisplayList.Add($diskDisplayObject)
+                $diskDisplayList.Add($diskDisplayObject)
                 $diskIdCounter++
             }
             $uniqueHostNames = $diskDisplayList | Select-Object -ExpandProperty VMHostName -Unique
@@ -1734,19 +1734,19 @@ function Add-VsanOsaDiskGroupToCluster {
                 $ssdsOnHost = @($disksOnCurrentHost | Where-Object { $_.IsSsd } | Sort-Object -Property CapacityGB)
                 $nonSsdsOnHost = $disksOnCurrentHost | Where-Object { -not $_.IsSsd }
                 $cacheDisk = $null
-                $capacityDisks = [System.Collections.ArrayList]::new()
+                $capacityDisks = [System.Collections.Generic.List[PSObject]]::new()
                 if ($ssdsOnHost -and $ssdsOnHost.Count -gt 0) {
                     $cacheDisk = $ssdsOnHost[0]
                     $autoclaimApiOrderStr = ($disksOnCurrentHost | ForEach-Object { "$($_.Id)/$($_.CapacityGB)/$($_.IsSsd)" }) -join ", "
                     Write-LogMessage -Type DEBUG -Message "OSA autoclaim host `"$currentHostName`": disks (API order) Id/CapacityGB/IsSsd: $autoclaimApiOrderStr. Chosen cache: Id=$($cacheDisk.Id), CanonicalName=$($cacheDisk.CanonicalName), CapacityGB=$($cacheDisk.CapacityGB)."
-                    foreach ($disk in $ssdsOnHost) { if ($disk -ne $cacheDisk) { [void]$capacityDisks.Add($disk) } }
+                    foreach ($disk in $ssdsOnHost) { if ($disk -ne $cacheDisk) { $capacityDisks.Add($disk) } }
                 } else {
                     Write-LogMessage -Type WARNING -Message "No SSD found on host `"$currentHostName`"; using first disk as cache for OSA disk group."
                     $cacheDisk = $disksOnCurrentHost[0]
                     Write-LogMessage -Type DEBUG -Message "OSA autoclaim host `"$currentHostName`": no SSDs; using first disk as cache: Id=$($cacheDisk.Id), CanonicalName=$($cacheDisk.CanonicalName), CapacityGB=$($cacheDisk.CapacityGB)."
-                    foreach ($capacityIndex in 1..($disksOnCurrentHost.Count - 1)) { [void]$capacityDisks.Add($disksOnCurrentHost[$capacityIndex]) }
+                    foreach ($capacityIndex in 1..($disksOnCurrentHost.Count - 1)) { $capacityDisks.Add($disksOnCurrentHost[$capacityIndex]) }
                 }
-                foreach ($disk in $nonSsdsOnHost) { [void]$capacityDisks.Add($disk) }
+                foreach ($disk in $nonSsdsOnHost) { $capacityDisks.Add($disk) }
                 $capacitySizes = ($capacityDisks | ForEach-Object { $_.CapacityGB }) -join ", "
                 Write-LogMessage -Type DEBUG -Message "OSA autoclaim host `"$currentHostName`": cache CapacityGB=$($cacheDisk.CapacityGB); capacity disk count=$($capacityDisks.Count), CapacityGB=($capacitySizes)."
                 $selectionByHost[$currentHostName] = [PSCustomObject]@{ CacheDisk = $cacheDisk; CapacityDisks = $capacityDisks.ToArray() }
@@ -2102,7 +2102,7 @@ function Add-VsanEsaStoragePoolDisk {
                 -TimeoutSeconds $DiskRetrievalTimeoutSeconds `
                 -CheckInterval $CheckInterval
 
-            $diskDisplayList = [System.Collections.ArrayList]::new()
+            $diskDisplayList = [System.Collections.Generic.List[PSObject]]::new()
             $diskIdCounter = 1
             foreach ($disk in $eligibleDisks) {
                 $diskDisplayObject = [PSCustomObject]@{
@@ -2113,7 +2113,7 @@ function Add-VsanEsaStoragePoolDisk {
                     Model = $disk.Model
                     DiskObject = $disk
                 }
-                [void]$diskDisplayList.Add($diskDisplayObject)
+                $diskDisplayList.Add($diskDisplayObject)
                 $diskIdCounter++
             }
             # Safety: require eligible disks from every data host when 2+ hosts (ESA auto-claim).
@@ -2314,12 +2314,12 @@ function Get-EsxUnformattedDisk {
         $allDisks = $VmHost | Get-ScsiLun -LunType disk
         $mountedDatastores = Get-Datastore -VMHost $VmHost
 
-        $usedDisks = [System.Collections.ArrayList]::new()
+        $usedDisks = [System.Collections.Generic.List[String]]::new()
         foreach ($ds in $mountedDatastores) {
             $dsExt = $ds.ExtensionData
             if ($dsExt -and $dsExt.Info -and $dsExt.Info.Vmfs) {
                 foreach ($extent in $dsExt.Info.Vmfs.Extent) {
-                    [void]$usedDisks.Add($extent.DiskName)
+                    $usedDisks.Add($extent.DiskName)
                 }
             }
         }
@@ -2331,7 +2331,7 @@ function Get-EsxUnformattedDisk {
             $null -ne $_.MultipathPolicy  # Exclude pseudo disks.
         }
 
-        $unformattedDiskArray = [System.Collections.ArrayList]::new()
+        $unformattedDiskArray = [System.Collections.Generic.List[PSObject]]::new()
 
         if ($unformattedDisks -and $unformattedDisks.Count -gt 0) {
             Write-LogMessage -Type INFO -SuppressOutputToScreen:$Silence -Message "Found $($unformattedDisks.Count) unformatted disk(s) on ESX host `"$EsxHostName`"."
@@ -2348,7 +2348,7 @@ function Get-EsxUnformattedDisk {
                     MultipathPolicy = $disk.MultipathPolicy
                     RuntimeName = $disk.RuntimeName
                 }
-                [void]$unformattedDiskArray.Add($unformattedInfo)
+                $unformattedDiskArray.Add($unformattedInfo)
 
                 Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Unformatted: $($unformattedInfo.CanonicalName) - UUID: $($unformattedInfo.UUID) - Capacity: $($unformattedInfo.CapacityGB) GB - Vendor: $($unformattedInfo.Vendor)"
                 $diskId++

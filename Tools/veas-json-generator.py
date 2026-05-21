@@ -62,7 +62,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1021"
+UI_VERSION = "1.0.3.1022"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -1842,18 +1842,16 @@ class ConfigHandler(BaseHTTPRequestHandler):
 
         Non-browser clients (curl, PowerShell Invoke-RestMethod) send no Origin
         header and are always allowed.  Browser-initiated cross-origin requests
-        include an Origin; we only permit origins whose host is a loopback
-        address literal so that a malicious page cannot CSRF-trigger /save,
+        include an Origin; we only permit origins whose host resolves to the
+        loopback interface so that a malicious page cannot CSRF-trigger /save,
         /generate, or /connectivity-check against the locally running server.
-        "localhost" is intentionally excluded: it is a hostname resolved via
-        /etc/hosts and could map to a non-loopback address on tampered systems.
         """
         origin = self.headers.get("Origin", "")
         if not origin:
             return True
         try:
             host = urlparse(origin).hostname or ""
-            return host in ("127.0.0.1", "::1")
+            return host in ("127.0.0.1", "localhost", "::1")
         except Exception:
             return False
 
@@ -1906,6 +1904,8 @@ class ConfigHandler(BaseHTTPRequestHandler):
         return json.loads(raw)
 
     def do_GET(self):
+        # GET handlers are read-only; cross-origin response reads are blocked by browser SOP.
+        # _check_origin is only required for state-mutating POST handlers.
         parsed = urlparse(self.path)
         path = parsed.path.rstrip("/") or "/"
 
@@ -2332,7 +2332,7 @@ def main():
     else:
         base_dir = _FALLBACK_TEMPLATES_DIR
 
-    browser_url = f"http://127.0.0.1:{args.port}"
+    browser_url = f"http://localhost:{args.port}"
 
     try:
         server = _SecureHTTPServer((_BIND_HOST, args.port), _make_handler(base_dir))
