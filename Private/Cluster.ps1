@@ -27,6 +27,68 @@
 # =============================================================================
 #
 #region Private — cluster, datastore, vSAN, VMFS, disk operations
+function Enable-VsanEsaOnExistingCluster {
+
+    <#
+        .SYNOPSIS
+        Ensures vSAN ESA is enabled on a cluster found to already exist by Add-Cluster.
+
+        .DESCRIPTION
+        vSAN 9.1 introduced a strict API precheck that reads vsanEsaEnabled directly from the vCenter
+        database before allowing an ESA witness to join a stretched cluster. A cluster created by an
+        older version of this script, created manually, or where New-Cluster -VsanEsaEnabled was
+        silently ignored will have vsanEsaEnabled=false, causing witness configuration to fail with
+        "This witness host does not support joining vSAN ESA disabled cluster."
+
+        This function calls Set-Cluster -VsanEnabled $true -VsanEsaEnabled $true to set the flag.
+        The call is idempotent when ESA is already enabled.
+
+        Failure is treated as non-fatal (WARNING + continue) for two reasons:
+          1. vCenter 9.0 does not have the strict witness precheck so even if this call is
+             rejected by the API the witness join will still succeed.
+          2. A transient API error here should not abort a deployment that may otherwise succeed.
+
+        If this call fails and the environment is vCenter 9.1+, the witness join step will later
+        emit a targeted actionable error via Set-VsanWitness, directing the operator to either
+        re-run the deployment or recreate the cluster with storageType: vSAN-ESA.
+
+        .PARAMETER Cluster
+        The cluster object returned by Get-Cluster.
+
+        .PARAMETER ClusterName
+        The cluster name, used for logging.
+
+        .OUTPUTS
+        None. Non-fatal — logs WARNING on failure and returns; never throws.
+
+        .EXAMPLE
+        Enable-VsanEsaOnExistingCluster -Cluster $clusterObject -ClusterName "cluster-vsan-edge1"
+
+        .NOTES
+        Called exclusively from Add-Cluster when the cluster already exists and -VsanEsaEnabled is set.
+        Safe to call on clusters that already have ESA enabled (idempotent via Set-Cluster).
+        Non-fatal design preserves vCenter 9.0 compatibility.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Ensuring vSAN ESA is enabled on existing cluster `"$ClusterName`" (vSAN 9.1+ requires vsanEsaEnabled=true before ESA witness configuration)."
+    try {
+        Set-Cluster -Cluster $Cluster -VsanEnabled $true -VsanEsaEnabled $true `
+            -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop | Out-Null
+        Write-LogMessage -Type DEBUG -Message "vSAN ESA confirmed/applied on existing cluster `"$ClusterName`"."
+    } catch {
+        # Non-fatal: vCenter 9.0 does not enforce the ESA precheck, so if this API call is
+        # unsupported on the installed vCenter version the witness join will still succeed.
+        # On vCenter 9.1+ the witness join step will surface a targeted actionable error if
+        # the flag was genuinely required and this call failed.
+        Write-LogMessage -Type WARNING -Message "Could not apply vSAN ESA flag to existing cluster `"$ClusterName`": $($_.Exception.Message). Continuing — if the witness join fails with an ESA-disabled error, delete this cluster and re-run with storageType: vSAN-ESA in infrastructure.json."
+    }
+}
 function Add-Cluster {
 
     <#
@@ -78,7 +140,7 @@ function Add-Cluster {
         Creates a new cluster named "Production-Cluster-01" in "Datacenter1" on the specified vCenter.
 
         .EXAMPLE
-        Add-Cluster -clusterName $clusterName -dataCenterName $datacenterName
+        Add-Cluster -ClusterName $clusterName -DataCenterName $datacenterName
 
         Creates a cluster using variables for dynamic cluster deployment scenarios.
 
@@ -94,42 +156,43 @@ function Add-Cluster {
 
     [CmdletBinding(SupportsShouldProcess)]
     Param (
-        [Parameter(Mandatory = $false)] [ValidateRange(0, [int]::MaxValue)] [Int]$ClusterCreationDelaySeconds = 5,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, [Int]::MaxValue)] [Int]$ClusterCreationDelaySeconds = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DataCenterName,
         [Parameter(Mandatory = $false)] [AllowNull()] [String]$VlcmImageName,
         [Parameter(Mandatory = $false)] [Switch]$VsanEsaEnabled,
         [Parameter(Mandatory = $false)] [Switch]$VsanOsaEnabled
     )
+
     Write-LogMessage -Type DEBUG -Message "Entered Add-Cluster function..."
     $vlcmImageNameParamDisplay = if ([String]::IsNullOrWhiteSpace($VlcmImageName)) { "(none)" } else { "`"$VlcmImageName`"" }
     Write-LogMessage -Type DEBUG -Message "Add-Cluster parameters: ClusterName=`"$ClusterName`", DataCenterName=`"$DataCenterName`", VsanEsaEnabled=$($VsanEsaEnabled.IsPresent), VsanOsaEnabled=$($VsanOsaEnabled.IsPresent), VlcmImageName=$vlcmImageNameParamDisplay."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     try {
         $dataCenterFound = Get-Datacenter -Name $DataCenterName -Server $Script:vCenterName -ErrorAction Ignore
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to authorization issues: $($_.Exception.Message)")
+        $err = "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to authorization issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+        $err = "Cannot perform Get-Datacenter operation for `"$DataCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Datacenter operation on `"$DataCenterName`" : $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to perform Get-Datacenter operation on `"$DataCenterName`" : $($_.Exception.Message)")
+        $err = "Failed to perform Get-Datacenter operation on `"$DataCenterName`" : $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -AppendNewLine -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     if (-not $dataCenterFound) {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:vCenterName`". Exiting."
-        throw [VcfDeploymentException]::new("The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:vCenterName`". Exiting.")
+        $err = "The datacenter `"$DataCenterName`" could not be found on vCenter `"$Script:vCenterName`". Exiting."
+        Write-LogMessage -Type ERROR -AppendNewLine -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     Write-LogMessage -Type DEBUG -Message "Datacenter `"$DataCenterName`" found on vCenter `"$Script:vCenterName`"."
 
@@ -158,12 +221,14 @@ function Add-Cluster {
             } catch [VcfDeploymentException] {
                 throw  # already logged and typed — propagate without re-wrapping
             } catch {
-                Write-LogMessage -Type ERROR -Message "Failed to retrieve software specification with ID `"$softwareSpecificationId`": $($_.Exception.Message)"
-                throw [VcfDeploymentException]::new("Failed to retrieve software specification with ID `"$softwareSpecificationId`": $($_.Exception.Message)")
+                $err = "Failed to retrieve software specification with ID `"$softwareSpecificationId`": $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
             }
             if ($null -eq $softwareSpecification) {
-                Write-LogMessage -Type ERROR -Message "Software specification with ID `"$softwareSpecificationId`" was not found."
-                throw [VcfDeploymentException]::new("Software specification with ID `"$softwareSpecificationId`" was not found.")
+                $err = "Software specification with ID `"$softwareSpecificationId`" was not found."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
             }
             $specId = if ($softwareSpecification.Id) { $softwareSpecification.Id } else { "N/A" }
             $specName = if ($softwareSpecification.Name) { $softwareSpecification.Name } else { "N/A" }
@@ -180,7 +245,6 @@ function Add-Cluster {
             }
             Write-LogMessage -Type DEBUG -Message "Add-Cluster: base cluster construct: Name=$ClusterName, Location=$DataCenterName, DrsEnabled=$true, HAEnabled=$true, Server=$Script:vCenterName, SoftwareSpecification=[Id=$specId]."
 
-            # Add VsanEnabled and VsanEsaEnabled flags if specified.
             # vSAN must be enabled before vSAN ESA can be enabled. For OSA use VsanOsaEnabled; for ESA use VsanEsaEnabled (implies VsanEnabled).
             if ($VsanEsaEnabled) {
                 $newClusterParams["VsanEnabled"] = $true
@@ -219,17 +283,22 @@ function Add-Cluster {
         }
     } else {
         Write-LogMessage -Type INFO -Message "The cluster `"$ClusterName`" in datacenter `"$DataCenterName`" is already present. Skipping cluster creation."
+        if ($VsanEsaEnabled) {
+            Enable-VsanEsaOnExistingCluster -Cluster $clusterFound -ClusterName $ClusterName
+        }
         return
     }
 
     if ($clusterFound) {
         Write-LogMessage -Type INFO -CompletePending -Message " Success"
     } else {
-        Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" was not found in datacenter `"$DataCenterName`" on vCenter `"$Script:vCenterName`" after creation attempt."
-        throw [VcfDeploymentException]::new("Cluster `"$ClusterName`" was not found in datacenter `"$DataCenterName`" on vCenter `"$Script:vCenterName`" after creation attempt.")
+        $err = "Cluster `"$ClusterName`" was not found in datacenter `"$DataCenterName`" on vCenter `"$Script:vCenterName`" after creation attempt."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 }
 function Remove-ClusterSafely {
+
     <#
         .SYNOPSIS
         Removes a vSphere cluster after verifying there are no running VMs.
@@ -259,11 +328,7 @@ function Remove-ClusterSafely {
 
     Write-LogMessage -Type DEBUG -Message "Entered Remove-ClusterSafely for cluster `"$ClusterName`"."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
     if (-not $clusterObject) {
@@ -286,14 +351,11 @@ function Remove-ClusterSafely {
             }
             $guestFullName = $null
             try {
-                if ($vm.PSObject.Properties['ExtensionData'] -and $vm.ExtensionData -and $vm.ExtensionData.PSObject.Properties['Guest'] -and $vm.ExtensionData.Guest -and $vm.ExtensionData.Guest.PSObject.Properties['GuestFullName']) {
-                    $guestFullName = $vm.ExtensionData.Guest.GuestFullName
-                }
+                # The outer try-catch handles any property-access errors; no pre-flight guards needed.
+                $guestFullName = $vm.ExtensionData.Guest.GuestFullName
                 if (-not $guestFullName) {
                     $vmView = Get-View -Id $vm.Id -Server $Script:vCenterName -Property Guest -ErrorAction SilentlyContinue
-                    if ($vmView -and $vmView.Guest -and $vmView.Guest.PSObject.Properties['GuestFullName']) {
-                        $guestFullName = $vmView.Guest.GuestFullName
-                    }
+                    $guestFullName = $vmView.Guest.GuestFullName
                 }
             } catch {
                 Write-LogMessage -Type DEBUG -Message "Could not read guest OS for VM `"$($vm.Name)`"; treating as blocking for cluster removal."
@@ -307,8 +369,9 @@ function Remove-ClusterSafely {
     }
     if ($blockingVms.Count -gt 0) {
         $blockingNames = $blockingVms | Select-Object -ExpandProperty Name
-        Write-LogMessage -Type ERROR -Message "Cannot remove cluster `"$ClusterName`": $($blockingVms.Count) running VM(s) found: $($blockingNames -join ', '). Power off or migrate VMs first."
-        throw [VcfDeploymentException]::new("Deployment failed. Cluster `"$ClusterName`" has running VMs. Power them off or migrate before removing the cluster.")
+        $err = "Cannot remove cluster `"$ClusterName`": $($blockingVms.Count) running VM(s) found: $($blockingNames -join ', '). Power off or migrate VMs first."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     Write-LogMessage -Type INFO -NoNewline -Message "Removing cluster `"$ClusterName`" (no running VMs)... "
@@ -316,6 +379,113 @@ function Remove-ClusterSafely {
         Remove-Cluster -Cluster $clusterObject -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop
     }
     Write-LogMessage -Type INFO -CompletePending -Message "Removed"
+}
+function New-ClusterDasConfigSpec {
+
+    <#
+        .SYNOPSIS
+        Builds a ClusterConfigSpecEx with HostMonitoring and VmMonitoring pre-set to the standard deployment values.
+
+        .DESCRIPTION
+        Constructs and returns a VMware.Vim.ClusterConfigSpecEx seeded from the current cluster DAS configuration,
+        with HostMonitoring="enabled" and VmMonitoring="vmMonitoringOnly" already applied. Used by
+        Set-MultiHostClusterHA to eliminate the identical 4-line setup block that would otherwise appear in all
+        three switch branches.
+
+        .PARAMETER ClusterView
+        The cluster view object retrieved via Get-View.
+
+        .OUTPUTS
+        VMware.Vim.ClusterConfigSpecEx pre-configured for standard HA monitoring settings.
+
+        .EXAMPLE
+        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
+        $configSpec = New-ClusterDasConfigSpec -ClusterView $clusterView
+        $configSpec.dasConfig.AdmissionControlEnabled = $false
+        $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
+    #>
+
+    [CmdletBinding()]
+    [OutputType([VMware.Vim.ClusterConfigSpecEx])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$ClusterView
+    )
+
+    $configSpec = New-Object VMware.Vim.ClusterConfigSpecEx
+    $configSpec.dasConfig = $ClusterView.ConfigurationEx.DasConfig
+    $configSpec.dasConfig.HostMonitoring = "enabled"
+    $configSpec.dasConfig.VmMonitoring = "vmMonitoringOnly"
+    return $configSpec
+}
+function Set-MultiHostClusterHA {
+
+    <#
+    .SYNOPSIS
+        Applies HA and DRS admission-control settings to a multi-host vSphere cluster.
+    .DESCRIPTION
+        Issues the appropriate Set-Cluster and/or ReconfigureComputeResource_Task calls for the
+        three supported HA policies: slotBased, reservationBased, and disabled. Should only be
+        called when the cluster has 2 or more hosts.
+    .PARAMETER Cluster
+        The cluster object returned by Get-Cluster.
+    .PARAMETER ClusterName
+        Name of the cluster, used in log messages.
+    .PARAMETER HaClusterResourceFailoverPercent
+        For reservationBased: explicit failover percentage (1–100). Pass 0 to auto-compute.
+    .PARAMETER HaPolicy
+        Admission control policy: slotBased, reservationBased, or disabled.
+    .PARAMETER HostCount
+        Number of hosts in the cluster, used to auto-compute the reservation percentage.
+    .EXAMPLE
+        Set-MultiHostClusterHA -Cluster $cluster -ClusterName "cl02" -HaClusterResourceFailoverPercent 0 -HaPolicy "slotBased" -HostCount 3
+    .NOTES
+        Uses $Script:vCenterName. Throws on any PowerCLI failure.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateRange(0, 100)] [Int]$HaClusterResourceFailoverPercent,
+        [Parameter(Mandatory = $true)] [ValidateSet("disabled", "reservationBased", "slotBased")] [String]$HaPolicy,
+        [Parameter(Mandatory = $true)] [ValidateRange(2, [Int]::MaxValue)] [Int]$HostCount
+    )
+
+    switch ($HaPolicy) {
+        "slotBased" {
+            $haFailoverLevel = 1
+            $Cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$true -HAFailoverLevel $haFailoverLevel -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+            $clusterView = Get-View -Id $Cluster.Id -Server $Script:vCenterName
+            $currentDas = $clusterView.ConfigurationEx.DasConfig
+            $currentVmMonitoring = if ($null -ne $currentDas.VmMonitoring) { $currentDas.VmMonitoring } else { $currentDas.VMMonitoring }
+            if (($currentDas.HostMonitoring -ne "enabled") -or ($currentVmMonitoring -ne "vmMonitoringOnly")) {
+                $configSpec = New-ClusterDasConfigSpec -ClusterView $clusterView
+                $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
+            }
+            Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($HostCount host(s)): HA admission control set to slot-based (host failures tolerated: $haFailoverLevel)."
+        }
+        "reservationBased" {
+            $Cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+            $clusterView = Get-View -Id $Cluster.Id -Server $Script:vCenterName
+            $failoverResourcePercent = if ($HaClusterResourceFailoverPercent -eq 0) { [Int][Math]::Min(100, [Math]::Ceiling(100.0 / $HostCount)) } else { $HaClusterResourceFailoverPercent }
+            $configSpec = New-ClusterDasConfigSpec -ClusterView $clusterView
+            $configSpec.dasConfig.AdmissionControlEnabled = $true
+            $resourcePctPolicy = New-Object VMware.Vim.ClusterFailoverResourcesAdmissionControlPolicy
+            $resourcePctPolicy.CpuFailoverResourcesPercent = $failoverResourcePercent
+            $resourcePctPolicy.MemoryFailoverResourcesPercent = $failoverResourcePercent
+            $configSpec.dasConfig.AdmissionControlPolicy = $resourcePctPolicy
+            $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
+            Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($HostCount host(s)): HA admission control set to cluster resource percentage ($failoverResourcePercent% CPU and memory reserved for failover)."
+        }
+        "disabled" {
+            $Cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+            $clusterView = Get-View -Id $Cluster.Id -Server $Script:vCenterName
+            $configSpec = New-ClusterDasConfigSpec -ClusterView $clusterView
+            $configSpec.dasConfig.AdmissionControlEnabled = $false
+            $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
+            Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" ($HostCount host(s)): HA enabled with admission control disabled (VM restart only; no capacity reservation)."
+        }
+    }
 }
 function Update-Cluster {
 
@@ -404,22 +574,16 @@ function Update-Cluster {
 
     Write-LogMessage -Type DEBUG -Message "Entered Update-Cluster function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     try {
         $cluster = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         if (-not $cluster) {
-            Write-LogMessage -Type ERROR -Message "The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found."
-            throw [VcfDeploymentException]::new("The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found.")
+            $err = "The cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" was not found."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         } else {
-            # VCF PowerCLI 9: Get-VMHost uses -Location for cluster (no -Cluster parameter). Suppress VMHost.DatastoreIdList deprecation when reading host count.
-            $prevWarningPreference = $WarningPreference
-            $WarningPreference = "SilentlyContinue"
-            try {
+            # VCF PowerCLI 9: Get-VMHost uses -Location for cluster (no -Cluster parameter). -WarningAction SilentlyContinue suppresses VMHost.DatastoreIdList deprecation.
             $hostCount = (Get-VMHost -Location $cluster -WarningAction SilentlyContinue -ErrorAction Stop).Count
             Write-LogMessage -Type DEBUG -Message "Update-Cluster: cluster `"$ClusterName`" has $hostCount host(s)."
 
@@ -432,78 +596,24 @@ function Update-Cluster {
                 $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -HAAdmissionControlEnabled $false -DrsAutomationLevel FullyAutomated -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
                 Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" has one host; HA enabled (admission control disabled), DRS enabled."
             } else {
-                switch ($HaPolicy) {
-                    "slotBased" {
-                        $haFailoverLevel = 1
-                        $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$true -HAFailoverLevel $haFailoverLevel -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
-                        $currentDas = $clusterView.ConfigurationEx.DasConfig
-                        $currentVmMonitoring = if ($null -ne $currentDas.VmMonitoring) { $currentDas.VmMonitoring } else { $currentDas.VMMonitoring }
-                        $needHostMonitoring = ($currentDas.HostMonitoring -ne "enabled")
-                        $needVmMonitoring = ($currentVmMonitoring -ne "vmMonitoringOnly")
-                        if ($needHostMonitoring -or $needVmMonitoring) {
-                            $configSpecSb = New-Object VMware.Vim.ClusterConfigSpecEx
-                            $configSpecSb.dasConfig = $clusterView.ConfigurationEx.DasConfig
-                            $configSpecSb.dasConfig.HostMonitoring = "enabled"
-                            $configSpecSb.dasConfig.VmMonitoring = "vmMonitoringOnly"
-                            $clusterView.ReconfigureComputeResource_Task($configSpecSb, $true) | Out-Null
-                        }
-                        Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to slot-based (host failures tolerated: $haFailoverLevel)."
-                    }
-                    "reservationBased" {
-                        $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
-                        if ($HaClusterResourceFailoverPercent -eq 0) {
-                            $failoverResourcePercent = [int][Math]::Ceiling(100.0 / $hostCount)
-                            if ($failoverResourcePercent -gt 100) {
-                                $failoverResourcePercent = 100
-                            }
-                        } else {
-                            $failoverResourcePercent = $HaClusterResourceFailoverPercent
-                        }
-
-                        $configSpec = New-Object VMware.Vim.ClusterConfigSpecEx
-                        $configSpec.dasConfig = $clusterView.ConfigurationEx.DasConfig
-                        $configSpec.dasConfig.HostMonitoring = "enabled"
-                        $configSpec.dasConfig.VmMonitoring = "vmMonitoringOnly"
-                        $configSpec.dasConfig.AdmissionControlEnabled = $true
-                        $resourcePctPolicy = New-Object VMware.Vim.ClusterFailoverResourcesAdmissionControlPolicy
-                        $resourcePctPolicy.CpuFailoverResourcesPercent = $failoverResourcePercent
-                        $resourcePctPolicy.MemoryFailoverResourcesPercent = $failoverResourcePercent
-                        $configSpec.dasConfig.AdmissionControlPolicy = $resourcePctPolicy
-                        $clusterView.ReconfigureComputeResource_Task($configSpec, $true) | Out-Null
-                        Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA admission control set to cluster resource percentage ($failoverResourcePercent% CPU and memory reserved for failover)."
-                    }
-                    "disabled" {
-                        $cluster | Set-Cluster -DrsEnabled:$true -HAEnabled:$true -DrsAutomationLevel FullyAutomated -HAAdmissionControlEnabled:$false -Confirm:$false -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        $clusterView = Get-View -Id $cluster.Id -Server $Script:vCenterName
-                        $configSpecDis = New-Object VMware.Vim.ClusterConfigSpecEx
-                        $configSpecDis.dasConfig = $clusterView.ConfigurationEx.DasConfig
-                        $configSpecDis.dasConfig.HostMonitoring = "enabled"
-                        $configSpecDis.dasConfig.VmMonitoring = "vmMonitoringOnly"
-                        $configSpecDis.dasConfig.AdmissionControlEnabled = $false
-                        $clusterView.ReconfigureComputeResource_Task($configSpecDis, $true) | Out-Null
-                        Write-LogMessage -Type INFO -Message "Cluster `"$ClusterName`" ($hostCount host(s)): HA enabled with admission control disabled (VM restart only; no capacity reservation)."
-                    }
-                }
-            }
-            }
-            finally {
-                $WarningPreference = $prevWarningPreference
+                Set-MultiHostClusterHA -Cluster $cluster -ClusterName $ClusterName -HaClusterResourceFailoverPercent $HaClusterResourceFailoverPercent -HaPolicy $HaPolicy -HostCount $hostCount
             }
         }
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+        $err = "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+        $err = "Cannot update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" : $($_.Exception.Message)")
+        $err = "Failed to update settings on cluster `"$ClusterName`" on `"$Script:vCenterName`" : $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -AppendNewLine -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 }
 function Invoke-ReconfigureClusterHA {
@@ -548,8 +658,9 @@ function Invoke-ReconfigureClusterHA {
 
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Reconfigure HA failed. Connect to vCenter first.")
+        $err = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     if ($DelaySeconds -gt 0) {
         Write-LogMessage -Type DEBUG -Message "Waiting $DelaySeconds seconds for vCenter to see management network on all hosts before applying HA settings."
@@ -581,8 +692,12 @@ function Test-VmkernelVsanAndWitnessTraffic {
         .NOTES
         - VsanWitnessTrafficEnabled may not be exposed in all PowerCLI versions; when absent, only VsanTrafficEnabled is checked.
         - When VsanTrafficEnabled or VsanWitnessTrafficEnabled are not present on VMkernel adapters, PropertiesMissingOnAdapters is true and callers should automatically enable them on vmk0 and inform the user.
+    
+        .EXAMPLE
+        Test-VmkernelVsanAndWitnessTraffic -VMHost $vmHostObject
     #>
 
+    [CmdletBinding()]
     [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $false)] [Bool]$RequireWitnessTraffic = $true,
@@ -666,6 +781,137 @@ function Test-VmkernelVsanAndWitnessTraffic {
         MissingWitness              = $missingWitness
     }
 }
+function Get-VsanTrafficByInterface {
+
+    <#
+    .SYNOPSIS
+        Aggregates vSAN traffic type strings per interface from an esxcli vsan network list result.
+    .DESCRIPTION
+        Iterates the items array returned by esxcli vsan network list, extracting the traffic type
+        and interface name from each item using case-insensitive property lookups. Returns a hashtable
+        keyed by interface name with arrays of traffic-type strings as values.
+    .PARAMETER Items
+        Array of objects from esxcli vsan network list.
+    .EXAMPLE
+        $trafficMap = Get-VsanTrafficByInterface -Items $items
+    .NOTES
+        Called by Test-VmkernelVsanTrafficViaEsxcli. Property names vary by ESXi version.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Hashtable])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$Items
+    )
+
+    # Discover which property name variants are present once using the first item —
+    # esxcli result sets use a consistent schema for all rows, so probing each item is redundant.
+    $trafficPropName = $null
+    $ifacePropName = $null
+    if ($Items.Count -gt 0) {
+        $firstItem = $Items[0]
+        $trafficPropName = @('TrafficType', 'traffictype', 'Traffic type') |
+            Where-Object { $firstItem.PSObject.Properties[$_] } | Select-Object -First 1
+        $ifacePropName = @('Interface', 'interface', 'InterfaceName', 'interfacename', 'VmkNicName', 'vmknicname', 'Name') |
+            Where-Object { $firstItem.PSObject.Properties[$_] } | Select-Object -First 1
+    }
+
+    $trafficByInterface = @{}
+    $itemIndex = 0
+    foreach ($item in $Items) {
+        $trafficType = if ($trafficPropName) { $item.$trafficPropName } else { $item.ToString() }
+        $trafficStr = if ($null -eq $trafficType) { "" }
+                      elseif ($trafficType -is [Array] -or $trafficType -is [System.Collections.IEnumerable]) {
+                          ($trafficType | ForEach-Object { [String]$_ }) -join ","
+                      } else { [String]$trafficType }
+        if ([String]::IsNullOrWhiteSpace($trafficStr)) { $itemIndex++; continue }
+        $ifaceKey = if ($ifacePropName) { [String]$item.$ifacePropName } else { $null }
+        if (-not $ifaceKey) { $ifaceKey = "item_$itemIndex" }
+        if (-not $trafficByInterface[$ifaceKey]) { $trafficByInterface[$ifaceKey] = @() }
+        $trafficByInterface[$ifaceKey] += $trafficStr
+        $itemIndex++
+    }
+    return $trafficByInterface
+}
+function Test-AggregatedVsanTraffic {
+
+    <#
+    .SYNOPSIS
+        Tests whether the aggregated esxcli vsan network list result shows the required traffic types.
+    .DESCRIPTION
+        Checks the per-interface traffic map for vSAN and (optionally) Witness traffic. When the
+        structured check fails, falls back to regex parsing of the raw result string. Returns $true
+        when required traffic is present, $false otherwise with a diagnostic log.
+    .PARAMETER HostName
+        Host name used in log messages.
+    .PARAMETER Items
+        Original items array used to build the diagnostic log on failure.
+    .PARAMETER RequireWitnessTraffic
+        When set, both vSAN and Witness traffic must be present.
+    .PARAMETER Result
+        Raw result from the esxcli vsan network list invocation, used for text fallback parsing.
+    .PARAMETER TrafficByInterface
+        Hashtable built by Get-VsanTrafficByInterface.
+    .EXAMPLE
+        $ok = Test-AggregatedVsanTraffic -HostName "esx1" -Items $items -RequireWitnessTraffic -Result $result -TrafficByInterface $trafficMap
+    .NOTES
+        Called by Test-VmkernelVsanTrafficViaEsxcli.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$Items,
+        [Parameter(Mandatory = $false)] [Switch]$RequireWitnessTraffic,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Result,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$TrafficByInterface
+    )
+
+    $anyVsan = $false
+    $anyWitness = $false
+    foreach ($iface in $TrafficByInterface.Keys) {
+        $combined = ($TrafficByInterface[$iface] | ForEach-Object { $_.Trim() }) -join ","
+        if ([String]::IsNullOrWhiteSpace($combined)) { continue }
+        $hasVsan    = $combined -match 'vsan'
+        $hasWitness = $combined -match 'witness'
+        if ($hasVsan) { $anyVsan = $true }
+        if ($hasWitness) { $anyWitness = $true }
+        if ($hasVsan -and (-not $RequireWitnessTraffic -or $hasWitness)) {
+            Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$HostName`" has required vSAN traffic per esxcli (interface $iface): `"$combined`"."
+            return $true
+        }
+    }
+    if ($RequireWitnessTraffic -and $anyVsan -and $anyWitness) {
+        Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$HostName`" has vSAN on one interface and witness on another per esxcli; treating as compliant."
+        return $true
+    }
+    $resultStr = $Result | Out-String
+    foreach ($match in [Regex]::Matches($resultStr, 'Traffic Type:\s*([^\r\n]+)')) {
+        $trafficStr = $match.Groups[1].Value.Trim()
+        if ([String]::IsNullOrWhiteSpace($trafficStr)) { continue }
+        $hasVsan    = $trafficStr -match 'vsan'
+        $hasWitness = $trafficStr -match 'witness'
+        if ($hasVsan) { $anyVsan = $true }
+        if ($hasWitness) { $anyWitness = $true }
+        if ($hasVsan -and (-not $RequireWitnessTraffic -or $hasWitness)) {
+            Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$HostName`" has required vSAN traffic per esxcli (parsed from text): `"$trafficStr`"."
+            return $true
+        }
+    }
+    if ($RequireWitnessTraffic -and $anyVsan -and $anyWitness) {
+        Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$HostName`" has vSAN and witness (text parse); treating as compliant."
+        return $true
+    }
+    $sampleLog = "none"
+    if ($Items.Count -gt 0) {
+        $keys = @($Items[0].PSObject.Properties.Name)
+        $firstCombined = ($TrafficByInterface.Values | Select-Object -First 1) -join ","
+        $sampleLog = "first item keys: $($keys -join ', '); combined traffic sample: $firstCombined"
+    }
+    Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$HostName`" esxcli vsan network list did not show required traffic (RequireWitnessTraffic=$RequireWitnessTraffic). $sampleLog"
+    return $false
+}
 function Test-VmkernelVsanTrafficViaEsxcli {
 
     <#
@@ -689,13 +935,16 @@ function Test-VmkernelVsanTrafficViaEsxcli {
 
         .NOTES
         Best-effort; returns $false and logs at DEBUG if esxcli is unavailable or output cannot be parsed.
+    
+        .EXAMPLE
+        Test-VmkernelVsanTrafficViaEsxcli -VMHost $vmHostObject
     #>
 
     [CmdletBinding()]
-    [OutputType([System.Boolean])]
+    [OutputType([Bool])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
-        [Parameter(Mandatory = $false)] [Bool]$RequireWitnessTraffic = $true
+        [Parameter(Mandatory = $false)] [Bool]$RequireWitnessTraffic = $true,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
 
     $hostName = $VMHost.Name
@@ -725,94 +974,20 @@ function Test-VmkernelVsanTrafficViaEsxcli {
             }
         }
         Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" vsan network list item count: $($items.Count)."
-        # Aggregate traffic types per interface when possible (some hosts return one row per traffic type for the same interface).
-        $trafficByInterface = @{}
-        $itemIndex = 0
-        foreach ($item in $items) {
-            $trafficType = $null
-            if ($item.PSObject.Properties['TrafficType']) {
-                $trafficType = $item.TrafficType
-            } elseif ($item.PSObject.Properties['traffictype']) {
-                $trafficType = $item.traffictype
-            } elseif ($item.PSObject.Properties['Traffic type']) {
-                $trafficType = $item.'Traffic type'
-            } else {
-                $trafficType = $item.ToString()
-            }
-            # Normalize: API may return [string[]] for multiple traffic types on one interface.
-            $trafficStr = if ($null -eq $trafficType) { "" } elseif ($trafficType -is [Array] -or $trafficType -is [System.Collections.IEnumerable]) {
-                ($trafficType | ForEach-Object { [string]$_ }) -join ","
-            } else {
-                [string]$trafficType
-            }
-            if ([String]::IsNullOrWhiteSpace($trafficStr)) { $itemIndex++; continue }
-            $ifaceKey = $null
-            if ($item.PSObject.Properties['Interface']) { $ifaceKey = $item.Interface }
-            elseif ($item.PSObject.Properties['interface']) { $ifaceKey = $item.interface }
-            elseif ($item.PSObject.Properties['InterfaceName']) { $ifaceKey = $item.InterfaceName }
-            elseif ($item.PSObject.Properties['interfacename']) { $ifaceKey = $item.interfacename }
-            elseif ($item.PSObject.Properties['VmkNicName']) { $ifaceKey = $item.VmkNicName }
-            elseif ($item.PSObject.Properties['vmknicname']) { $ifaceKey = $item.vmknicname }
-            elseif ($item.PSObject.Properties['Name']) { $ifaceKey = $item.Name }
-            if (-not $ifaceKey) { $ifaceKey = "item_$itemIndex" }
-            $ifaceKey = [string]$ifaceKey
-            if (-not $trafficByInterface[$ifaceKey]) { $trafficByInterface[$ifaceKey] = @() }
-            $trafficByInterface[$ifaceKey] += $trafficStr
-            $itemIndex++
-        }
-        $anyVsan = $false
-        $anyWitness = $false
-        foreach ($iface in $trafficByInterface.Keys) {
-            $combined = ($trafficByInterface[$iface] | ForEach-Object { $_.Trim() }) -join ","
-            if ([String]::IsNullOrWhiteSpace($combined)) { continue }
-            $hasVsan = $combined -match 'vsan'
-            $hasWitness = $combined -match 'witness'
-            if ($hasVsan) { $anyVsan = $true }
-            if ($hasWitness) { $anyWitness = $true }
-            if ($hasVsan -and (-not $RequireWitnessTraffic -or $hasWitness)) {
-                Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" has required vSAN traffic per esxcli (interface $iface): `"$combined`"."
-                return $true
-            }
-        }
-        if ($RequireWitnessTraffic -and $anyVsan -and $anyWitness) {
-            Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" has vSAN on one interface and witness on another per esxcli; treating as compliant."
-            return $true
-        }
-        # Fallback: parse result as text (e.g. when Invoke returns a single object or array that stringifies to CLI-style output with one or more "Traffic Type:" lines).
-        $resultStr = $result | Out-String
-        $trafficTypeMatches = [regex]::Matches($resultStr, 'Traffic Type:\s*([^\r\n]+)')
-        foreach ($match in $trafficTypeMatches) {
-            $trafficStr = $match.Groups[1].Value.Trim()
-            if ([String]::IsNullOrWhiteSpace($trafficStr)) { continue }
-            $hasVsan = $trafficStr -match 'vsan'
-            $hasWitness = $trafficStr -match 'witness'
-            if ($hasVsan) { $anyVsan = $true }
-            if ($hasWitness) { $anyWitness = $true }
-            if ($hasVsan -and (-not $RequireWitnessTraffic -or $hasWitness)) {
-                Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" has required vSAN traffic per esxcli (parsed from text): `"$trafficStr`"."
-                return $true
-            }
-        }
-        if ($RequireWitnessTraffic -and $anyVsan -and $anyWitness) {
-            Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" has vSAN and witness (text parse); treating as compliant."
-            return $true
-        }
-        # Log a short sample of what we saw for troubleshooting (avoid logging full object).
-        $sampleLog = "none"
-        if ($items.Count -gt 0) {
-            $first = $items[0]
-            $keys = @($first.PSObject.Properties.Name)
-            $firstCombined = ($trafficByInterface.Values | Select-Object -First 1) -join ","
-            $sampleLog = "first item keys: $($keys -join ', '); combined traffic sample: $firstCombined"
-        }
-        Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Host `"$hostName`" esxcli vsan network list did not show required traffic (RequireWitnessTraffic=$RequireWitnessTraffic). $sampleLog"
-        return $false
+        $trafficByInterface = Get-VsanTrafficByInterface -Items $items
+        return Test-AggregatedVsanTraffic `
+            -HostName $hostName `
+            -Items $items `
+            -RequireWitnessTraffic:$RequireWitnessTraffic `
+            -Result $result `
+            -TrafficByInterface $trafficByInterface
     } catch {
         Write-LogMessage -Type DEBUG -Message "Test-VmkernelVsanTrafficViaEsxcli: Failed on host `"$hostName`": $($_.Exception.Message)."
         return $false
     }
 }
 function Test-VsanTrafficVmkernelHasValidIp {
+
     <#
         .SYNOPSIS
         Returns whether the given host has at least one VMkernel with vSAN traffic enabled and a valid IPv4 or IPv6 address.
@@ -831,8 +1006,13 @@ function Test-VsanTrafficVmkernelHasValidIp {
 
         .NOTES
         Reads VMkernel adapter .IP or .Address property when present. If no VMkernel has vSAN traffic enabled, returns $false.
+    
+        .EXAMPLE
+        Test-VsanTrafficVmkernelHasValidIp -VMHost $vmHostObject
     #>
-    [OutputType([System.Boolean])]
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
@@ -844,10 +1024,251 @@ function Test-VsanTrafficVmkernelHasValidIp {
         if ($adapter.VsanTrafficEnabled -ne $true) { continue }
         $ip = $null
         if ($adapter.PSObject.Properties['IP']) { $ip = $adapter.IP }
-        if ([string]::IsNullOrWhiteSpace($ip) -and $adapter.PSObject.Properties['Address']) { $ip = $adapter.Address }
-        if (-not [string]::IsNullOrWhiteSpace($ip)) { return $true }
+        if ([String]::IsNullOrWhiteSpace($ip) -and $adapter.PSObject.Properties['Address']) { $ip = $adapter.Address }
+        if (-not [String]::IsNullOrWhiteSpace($ip)) { return $true }
     }
     return $false
+}
+function Get-VsanNetworkTrafficByInterface {
+
+    <#
+        .SYNOPSIS
+        Reads esxcli vsan network list and returns a hashtable mapping VMkernel name to traffic-type strings.
+
+        .DESCRIPTION
+        Invokes esxcli.vsan.network.list and normalizes the result regardless of API return shape (array,
+        enumerable, or scalar) into a hashtable keyed by interface name. Values are arrays of traffic-type
+        strings. Returns an empty hashtable when the list command is unavailable.
+
+        .PARAMETER EsxcliInstance
+        The esxcli V2 instance returned by Get-EsxCli.
+
+        .OUTPUTS
+        Hashtable mapping VMkernel name to an array of traffic-type strings.
+
+        .NOTES
+        Callers should wrap in try/catch to handle unexpected Invoke() exceptions.
+    
+        .EXAMPLE
+        $vsanNetworkTrafficByInterface = Get-VsanNetworkTrafficByInterface -EsxcliInstance "value"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Hashtable])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$EsxcliInstance
+    )
+
+    $listCmd = $EsxcliInstance.vsan.network.list
+    if (-not $listCmd) { return @{} }
+    $listResult = $listCmd.Invoke()
+    $items = if ($listResult -is [Array] -or ($listResult -is [System.Collections.IEnumerable] -and $listResult -isnot [string])) {
+        @($listResult)
+    } else {
+        $listProp = $listResult.PSObject.Properties | Where-Object { $_.Value -is [Array] -or $_.Value -is [System.Collections.IEnumerable] } | Select-Object -First 1
+        if ($listProp) { @($listProp.Value) } else { @($listResult) }
+    }
+    $trafficByInterface = @{}
+    foreach ($item in $items) {
+        $trafficPropName = @('TrafficType', 'traffictype') |
+            Where-Object { $null -ne $item.PSObject.Properties[$_] } | Select-Object -First 1
+        $trafficStr = if ($trafficPropName) { $item.$trafficPropName } else { $null }
+        $trafficStr = if ($null -eq $trafficStr) { "" }
+            elseif ($trafficStr -is [Array]) { ($trafficStr | ForEach-Object { [String]$_ }) -join "," }
+            else { [String]$trafficStr }
+        $ifacePropName = @('Interface', 'interface', 'InterfaceName', 'interfacename', 'VmkNicName', 'vmknicname') |
+            Where-Object { $null -ne $item.PSObject.Properties[$_] } | Select-Object -First 1
+        $ifaceKey = if ($ifacePropName) { $item.$ifacePropName } else { $null }
+        if (-not $ifaceKey) { continue }
+        $ifaceKey = [String]$ifaceKey
+        if (-not $trafficByInterface[$ifaceKey]) { $trafficByInterface[$ifaceKey] = @() }
+        $trafficByInterface[$ifaceKey] += $trafficStr
+    }
+    return $trafficByInterface
+}
+function Invoke-EsxcliVsanNetworkVariants {
+
+    <#
+        .SYNOPSIS
+        Tries five known parameter-name variants for an esxcli vsan network ip command.
+
+        .DESCRIPTION
+        Some ESX hosts expose esxcli vsan network ip add/set with different parameter name conventions
+        (e.g. interfacename, interface-name, InterfaceName). This function iterates all known variants
+        until one succeeds or all fail.
+
+        .PARAMETER Command
+        The esxcli vsan network ip add or set command object.
+
+        .PARAMETER TrafficTypes
+        Array of traffic type strings to assign (e.g. @("witness") or @("vsan","witness")).
+
+        .PARAMETER VmkernelName
+        VMkernel adapter name (e.g. vmk0).
+
+        .OUTPUTS
+        PSCustomObject with .Invoked (bool), .AlreadyInUse (bool), .LastError (string).
+    
+        .EXAMPLE
+        Invoke-EsxcliVsanNetworkVariants -Command "value" -TrafficTypes "value" -VmkernelName "resource-name"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Command,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$TrafficTypes,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
+    )
+
+    $paramSets = @(
+        @{ interfacename = $VmkernelName; traffictype = $TrafficTypes },
+        @{ "interface-name" = $VmkernelName; "traffic-type" = $TrafficTypes },
+        @{ interface_name = $VmkernelName; traffic_type = $TrafficTypes },
+        @{ i = $VmkernelName; T = $TrafficTypes },
+        @{ InterfaceName = $VmkernelName; TrafficType = $TrafficTypes }
+    )
+    $lastError = $null
+    $alreadyInUse = $false
+    foreach ($params in $paramSets) {
+        try {
+            $Command.Invoke($params) | Out-Null
+            return [PSCustomObject]@{ Invoked = $true; AlreadyInUse = $false; LastError = $null }
+        } catch {
+            $lastError = $_.Exception.Message
+            if ($lastError -match "already in use|Can't add again|use 'set' command") { $alreadyInUse = $true }
+        }
+    }
+    return [PSCustomObject]@{ Invoked = $false; AlreadyInUse = $alreadyInUse; LastError = $lastError }
+}
+function Invoke-VsanAddWithCreateArgs {
+
+    <#
+        .SYNOPSIS
+        Attempts esxcli vsan network ip add using CreateArgs() parameter introspection.
+
+        .DESCRIPTION
+        Calls AddCommand.CreateArgs() to obtain the host's exact parameter names, then builds the argument
+        object and invokes the command. Handles hashtable, collection, and property-based args objects.
+        Returns a result object so callers can fall back to named-variant iteration if this path fails.
+
+        .PARAMETER AddCommand
+        The esxcli vsan network ip add command object.
+
+        .PARAMETER TrafficTypes
+        Traffic types to assign (e.g. @("vsan","witness")).
+
+        .PARAMETER VmkernelName
+        VMkernel adapter name (e.g. vmk0).
+
+        .OUTPUTS
+        PSCustomObject with .Invoked (bool), .AlreadyInUse (bool), .LastError (string), .ArgNamesLog (string).
+    
+        .EXAMPLE
+        Invoke-VsanAddWithCreateArgs -AddCommand "value" -TrafficTypes "value" -VmkernelName "resource-name"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$AddCommand,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$TrafficTypes,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
+    )
+
+    try {
+        $argsObj = $AddCommand.CreateArgs()
+        if ($null -eq $argsObj) {
+            return [PSCustomObject]@{ Invoked = $false; AlreadyInUse = $false; LastError = $null; ArgNamesLog = $null }
+        }
+        $isHashtable = $argsObj -is [System.Collections.IDictionary]
+        $isCollection = -not $isHashtable -and $argsObj -is [System.Collections.IEnumerable] -and $argsObj -isnot [string]
+        $argNames = if ($isHashtable) {
+            @($argsObj.Keys | ForEach-Object { $_ })
+        } elseif ($isCollection) {
+            @($argsObj | ForEach-Object { if ($_.PSObject.Properties['Name']) { $_.Name } elseif ($_.Key) { $_.Key } else { $_ } })
+        } else {
+            @($argsObj.PSObject.Properties | ForEach-Object { $_.Name })
+        }
+        $argNamesLog = "CreateArgs parameter names: ($($argNames -join ', '))."
+        $interfaceParam = $argNames | Where-Object { $_ -and $_ -match "interface|^i$" } | Select-Object -First 1
+        $trafficParam = $argNames | Where-Object { $_ -and $_ -match "traffic|^T$" } | Select-Object -First 1
+        if (-not ($interfaceParam -and $trafficParam)) {
+            return [PSCustomObject]@{ Invoked = $false; AlreadyInUse = $false; LastError = $null; ArgNamesLog = $argNamesLog }
+        }
+        if ($isHashtable -or $isCollection) {
+            $AddCommand.Invoke(@{ $interfaceParam = $VmkernelName; $trafficParam = $TrafficTypes }) | Out-Null
+        } else {
+            $argsObj.$interfaceParam = $VmkernelName
+            $argsObj.$trafficParam = $TrafficTypes
+            $AddCommand.Invoke($argsObj) | Out-Null
+        }
+        return [PSCustomObject]@{ Invoked = $true; AlreadyInUse = $false; LastError = $null; ArgNamesLog = $argNamesLog }
+    } catch {
+        $errMsg = $_.Exception.Message
+        return [PSCustomObject]@{
+            Invoked      = $false
+            AlreadyInUse = $errMsg -match "already in use|Can't add again|use 'set' command"
+            LastError    = $errMsg
+            ArgNamesLog  = $null
+        }
+    }
+}
+function Invoke-VsanSetPathVerification {
+
+    <#
+        .SYNOPSIS
+        Verifies vSAN witness traffic persisted after using the ip set path, and retries with witness-only add if needed.
+
+        .DESCRIPTION
+        On some hosts, esxcli vsan network ip set does not persist the witness traffic type. After a successful
+        set, this function reads the current vSAN network list and, if only vsan (not witness) is present for the
+        VMkernel, retries with a witness-only add. Non-fatal: failures are logged at DEBUG level.
+
+        .PARAMETER AddCommand
+        The esxcli vsan network ip add command object for the retry attempt.
+
+        .PARAMETER EsxcliInstance
+        The esxcli V2 instance used to read the current vSAN network list.
+
+        .PARAMETER HostName
+        Host name for log messages.
+
+        .PARAMETER PostSuccessDelaySeconds
+        Seconds to sleep after a successful witness-only add retry.
+
+        .PARAMETER VmkernelName
+        VMkernel adapter name being configured.
+    
+        .EXAMPLE
+        Invoke-VsanSetPathVerification -AddCommand "value" -EsxcliInstance "value" -HostName "resource-name" -VmkernelName "resource-name"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$AddCommand,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$EsxcliInstance,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$PostSuccessDelaySeconds = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
+    )
+
+    try {
+        $trafficAfterSet = Get-VsanNetworkTrafficByInterface -EsxcliInstance $EsxcliInstance
+        $listStr = ($trafficAfterSet | Out-String).Trim()
+        Write-LogMessage -Type DEBUG -Message "Invoke-VsanSetPathVerification: After set, vsan network list on `"$HostName`": $listStr"
+        $combinedTraffic = if ($trafficAfterSet[$VmkernelName]) { $trafficAfterSet[$VmkernelName] -join "," } else { "" }
+        if ($combinedTraffic -match 'vsan' -and $combinedTraffic -notmatch 'witness') {
+            Write-LogMessage -Type DEBUG -Message "Invoke-VsanSetPathVerification: List after set shows vsan but not witness; trying add with witness only."
+            $witnessResult = Invoke-EsxcliVsanNetworkVariants -Command $AddCommand -VmkernelName $VmkernelName -TrafficTypes @("witness")
+            if ($witnessResult.Invoked) {
+                Write-LogMessage -Type INFO -Message "Added vSAN witness traffic to $VmkernelName on host `"$HostName`" via add (witness only) after set."
+                if ($PostSuccessDelaySeconds -gt 0) { Start-Sleep -Seconds $PostSuccessDelaySeconds }
+            }
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Invoke-VsanSetPathVerification: Could not run vsan network list after set on `"$HostName`": $($_.Exception.Message)"
+    }
 }
 function Add-VsanWitnessTrafficToVmkViaEsxcli {
 
@@ -880,156 +1301,66 @@ function Add-VsanWitnessTrafficToVmkViaEsxcli {
         Configuration follows: https://techdocs.broadcom.com/us/en/vmware-cis/vsan/vsan/7-0/vsan-planning-and-deployment/working-with-virtual-san-stretched-cluster/configure-network-interface-for-witness-traffic.html
         (esxcli vsan network ip add -i vmkx -T witness on data hosts only; verify with esxcli vsan network list).
         CreateArgs() may return a Hashtable (keys = parameter names e.g. interfacename, traffictype); we use .Keys to get names and build a hashtable for Invoke(). Use -WitnessOnly for vmk0 (mgmt + witness only) or dedicated vmk3 so only witness traffic is set; by default we pass @("vsan", "witness") for a shared vSAN VMkernel that carries both.
+    
+        .EXAMPLE
+        Add-VsanWitnessTrafficToVmkViaEsxcli -VMHost $vmHostObject
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$PostSuccessDelaySeconds = 5,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [VMware.VimAutomation.ViCore.Types.V1.Inventory.VMHost]$VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$VmkernelName = "vmk0",
         [Parameter(Mandatory = $false)] [Switch]$WitnessOnly
     )
 
     $hostName = $VMHost.Name
-    # vmk0 (mgmt + witness only) and dedicated vmk3 get only witness; shared vSAN VMkernel gets both vsan and witness for compliance.
-    $trafficTypesVsanAndWitness = if ($WitnessOnly.IsPresent) { @("witness") } else { @("vsan", "witness") }
+    # vmk0 (mgmt + witness only) and dedicated vmk3 get only witness; shared vSAN VMkernel gets both vsan and witness.
+    $trafficTypes = if ($WitnessOnly.IsPresent) { @("witness") } else { @("vsan", "witness") }
     try {
         $esxcli = Get-EsxCli -VMHost $VMHost -V2 -Server $Script:vCenterName -ErrorAction Stop
-        # Idempotent: if this VMkernel already has witness traffic (per esxcli vsan network list), skip.
-        $listCmd = $esxcli.vsan.network.list
-        if ($listCmd) {
-            try {
-                $listResult = $listCmd.Invoke()
-                $items = @()
-                if ($listResult -is [Array] -or ($listResult -is [System.Collections.IEnumerable] -and $listResult -isnot [string])) { $items = @($listResult) }
-                else {
-                    $listProp = $listResult.PSObject.Properties | Where-Object { $_.Value -is [Array] -or $_.Value -is [System.Collections.IEnumerable] } | Select-Object -First 1
-                    if ($listProp) { $items = @($listProp.Value) } else { $items = @($listResult) }
-                }
-                $trafficByInterface = @{}
-                foreach ($item in $items) {
-                    $trafficStr = if ($item.PSObject.Properties['TrafficType']) { $item.TrafficType } elseif ($item.PSObject.Properties['traffictype']) { $item.traffictype } else { $null }
-                    $trafficStr = if ($null -eq $trafficStr) { "" } elseif ($trafficStr -is [Array]) { ($trafficStr | ForEach-Object { [string]$_ }) -join "," } else { [string]$trafficStr }
-                    $ifaceKey = $null
-                    if ($item.PSObject.Properties['Interface']) { $ifaceKey = $item.Interface }
-                    elseif ($item.PSObject.Properties['interface']) { $ifaceKey = $item.interface }
-                    elseif ($item.PSObject.Properties['InterfaceName']) { $ifaceKey = $item.InterfaceName }
-                    elseif ($item.PSObject.Properties['interfacename']) { $ifaceKey = $item.interfacename }
-                    elseif ($item.PSObject.Properties['VmkNicName']) { $ifaceKey = $item.VmkNicName }
-                    elseif ($item.PSObject.Properties['vmknicname']) { $ifaceKey = $item.vmknicname }
-                    if (-not $ifaceKey) { continue }
-                    $ifaceKey = [string]$ifaceKey
-                    if (-not $trafficByInterface[$ifaceKey]) { $trafficByInterface[$ifaceKey] = @() }
-                    $trafficByInterface[$ifaceKey] += $trafficStr
-                }
-                $existing = if ($trafficByInterface[$VmkernelName]) { ($trafficByInterface[$VmkernelName] | ForEach-Object { $_ }) -join "," } else { "" }
-                if ($existing -match 'witness') {
-                    Write-LogMessage -Type DEBUG -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`". Skipping witness traffic add."
-                    return $true
-                }
-            } catch {
-                Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Could not check vsan network list for idempotency on `"$hostName`": $($_.Exception.Message). Proceeding to add."
+        try {
+            $trafficByInterface = Get-VsanNetworkTrafficByInterface -EsxcliInstance $esxcli
+            $existing = if ($trafficByInterface[$VmkernelName]) { $trafficByInterface[$VmkernelName] -join "," } else { "" }
+            if ($existing -match 'witness') {
+                Write-LogMessage -Type DEBUG -Message "vSAN witness traffic already configured on $VmkernelName on host `"$hostName`". Skipping witness traffic add."
+                return $true
             }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Could not check vsan network list for idempotency on `"$hostName`": $($_.Exception.Message). Proceeding to add."
         }
         $addCmd = $esxcli.vsan.network.ip.add
         if (-not $addCmd) {
-            Write-LogMessage -Type ERROR -Message "esxcli vsan network ip add not available on host `"$hostName`". vSAN witness traffic is required; deployment will roll back."
-            throw [VcfDeploymentException]::new("vSAN witness traffic is required. esxcli vsan network ip add is not available on host `"$hostName`". Enable witness traffic on a VMkernel (e.g. in vCenter UI) or ensure the host supports the command. Deployment will roll back.")
+            $err = "esxcli vsan network ip add not available on host `"$hostName`". vSAN witness traffic is required; deployment will roll back."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
-
-        # Prefer CreateArgs() so we use the host's exact parameter names (e.g. interfacename). Try setting properties on the args object and Invoke; if CreateArgs returns a collection, build a hashtable with those names.
-        $invoked = $false
-        $usedSetPath = $false
-        $lastError = $null
-        $addFailedWithAlreadyInUse = $false
-        $createArgsArgNamesLog = $null
-        try {
-            $argsObj = $addCmd.CreateArgs()
-            if ($null -eq $argsObj) {
-                Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: CreateArgs() returned null; trying fallback parameter sets."
-            } else {
-                $argNames = @()
-                $isHashtable = $argsObj -is [System.Collections.Hashtable] -or $argsObj -is [System.Collections.IDictionary]
-                $isCollection = -not $isHashtable -and $argsObj -is [System.Collections.IEnumerable] -and $argsObj -isnot [string]
-                if ($isHashtable) {
-                    $argNames = @($argsObj.Keys | ForEach-Object { $_ })
-                } elseif ($isCollection) {
-                    $argNames = @($argsObj | ForEach-Object { if ($_.PSObject.Properties['Name']) { $_.Name } elseif ($_.Key) { $_.Key } else { $_ } })
-                } else {
-                    $argNames = @($argsObj.PSObject.Properties | ForEach-Object { $_.Name })
-                }
-                $createArgsArgNamesLog = "CreateArgs parameter names: ($($argNames -join ', '))."
-                $interfaceParam = $argNames | Where-Object { $_ -and $_ -match "interface|^i$" } | Select-Object -First 1
-                $trafficParam = $argNames | Where-Object { $_ -and $_ -match "traffic|^T$" } | Select-Object -First 1
-                if ($interfaceParam -and $trafficParam) {
-                    if ($isHashtable -or $isCollection) {
-                        $paramsFromCreateArgs = @{ $interfaceParam = $VmkernelName; $trafficParam = $trafficTypesVsanAndWitness }
-                        $addCmd.Invoke($paramsFromCreateArgs) | Out-Null
-                    } else {
-                        $argsObj.$interfaceParam = $VmkernelName
-                        $argsObj.$trafficParam = $trafficTypesVsanAndWitness
-                        $addCmd.Invoke($argsObj) | Out-Null
-                    }
-                    $invoked = $true
-                }
-            }
-        } catch {
-            $lastError = $_.Exception.Message
-            Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: CreateArgs/Invoke path failed: $lastError"
-            if ($lastError -match "already in use|Can't add again|use 'set' command") {
-                $addFailedWithAlreadyInUse = $true
-            }
+        $caResult = Invoke-VsanAddWithCreateArgs -AddCommand $addCmd -VmkernelName $VmkernelName -TrafficTypes $trafficTypes
+        $invoked = $caResult.Invoked
+        $addFailedWithAlreadyInUse = $caResult.AlreadyInUse
+        $createArgsArgNamesLog = $caResult.ArgNamesLog
+        $lastError = $caResult.LastError
+        if (-not $invoked -and $caResult.LastError) {
+            Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: CreateArgs/Invoke path failed: $($caResult.LastError)"
         }
-
         if (-not $invoked) {
-            # Fallback: try hash tables with known parameter name variants. Pass both vsan and witness so we do not replace vsan.
-            $paramSets = @(
-                @{ interfacename = $VmkernelName; traffictype = $trafficTypesVsanAndWitness },
-                @{ "interface-name" = $VmkernelName; "traffic-type" = $trafficTypesVsanAndWitness },
-                @{ interface_name = $VmkernelName; traffic_type = $trafficTypesVsanAndWitness },
-                @{ i = $VmkernelName; T = $trafficTypesVsanAndWitness },
-                @{ InterfaceName = $VmkernelName; TrafficType = $trafficTypesVsanAndWitness }
-            )
-            foreach ($params in $paramSets) {
-                try {
-                    $addCmd.Invoke($params) | Out-Null
-                    $invoked = $true
-                    break
-                } catch {
-                    $lastError = $_.Exception.Message
-                    if ($lastError -match "already in use|Can't add again|use 'set' command") {
-                        $addFailedWithAlreadyInUse = $true
-                        Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Add reported interface already in use; trying vsan network ip set."
-                    }
-                    continue
-                }
+            $varResult = Invoke-EsxcliVsanNetworkVariants -Command $addCmd -VmkernelName $VmkernelName -TrafficTypes $trafficTypes
+            if ($varResult.Invoked) { $invoked = $true }
+            if ($varResult.AlreadyInUse) {
+                $addFailedWithAlreadyInUse = $true
+                Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Add reported interface already in use; trying vsan network ip set."
             }
-
-            # If add failed because the interface is already in the vSAN network config, use "set" to add witness while keeping vsan (pass both traffic types).
-            if (-not $invoked -and $addFailedWithAlreadyInUse) {
-                $setCmd = $esxcli.vsan.network.ip.set
-                if ($setCmd) {
-                    $setParamSets = @(
-                        @{ interfacename = $VmkernelName; traffictype = $trafficTypesVsanAndWitness },
-                        @{ "interface-name" = $VmkernelName; "traffic-type" = $trafficTypesVsanAndWitness },
-                        @{ interface_name = $VmkernelName; traffic_type = $trafficTypesVsanAndWitness },
-                        @{ i = $VmkernelName; T = $trafficTypesVsanAndWitness },
-                        @{ InterfaceName = $VmkernelName; TrafficType = $trafficTypesVsanAndWitness }
-                    )
-                    foreach ($setParams in $setParamSets) {
-                        try {
-                            $setCmd.Invoke($setParams) | Out-Null
-                            $invoked = $true
-                            $usedSetPath = $true
-                            break
-                        } catch {
-                            $lastError = $_.Exception.Message
-                            continue
-                        }
-                    }
-                } else {
-                    Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: vsan network ip set command not available on host."
-                }
+            $lastError = $varResult.LastError
+        }
+        if (-not $invoked -and $addFailedWithAlreadyInUse) {
+            $setCmd = $esxcli.vsan.network.ip.set
+            if ($setCmd) {
+                $setResult = Invoke-EsxcliVsanNetworkVariants -Command $setCmd -VmkernelName $VmkernelName -TrafficTypes $trafficTypes
+                if ($setResult.Invoked) { $invoked = $true; $usedSetPath = $true }
+                else { $lastError = $setResult.LastError }
+            } else {
+                Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: vsan network ip set command not available on host."
             }
         }
         if (-not $invoked) {
@@ -1038,66 +1369,108 @@ function Add-VsanWitnessTrafficToVmkViaEsxcli {
                 return $true
             }
             $summary = if ($createArgsArgNamesLog) { " $createArgsArgNamesLog" } else { " CreateArgs returned null or no usable params." }
-            Write-LogMessage -Type ERROR -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: All attempts failed.$summary Last error: $lastError"
-            throw [VcfDeploymentException]::new()
+            $errorMsg = "Add-VsanWitnessTrafficToVmkViaEsxcli: All attempts failed.$summary Last error: $lastError"
+            Write-LogMessage -Type ERROR -Message $errorMsg
+            throw [VcfDeploymentException]::new($errorMsg)
         }
         Write-LogMessage -Type INFO -Message "Added vSAN witness traffic to $VmkernelName on host `"$hostName`"."
-        if ($PostSuccessDelaySeconds -gt 0) {
-            Start-Sleep -Seconds $PostSuccessDelaySeconds
-        }
+        if ($PostSuccessDelaySeconds -gt 0) { Start-Sleep -Seconds $PostSuccessDelaySeconds }
         if ($usedSetPath) {
-            $listCmd = $esxcli.vsan.network.list
-            if ($listCmd) {
-                try {
-                    $listResult = $listCmd.Invoke()
-                    $listStr = if ($listResult) { ($listResult | Out-String).Trim() } else { "null" }
-                    Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: After set, vsan network list on `"$hostName`": $listStr"
-                    # On some hosts set does not persist witness; list may show one row per traffic type (aggregated by VmkNicName in Test-VmkernelVsanTrafficViaEsxcli) or a single row. If list shows only vsan, try add with witness only to add the second traffic type to the existing interface.
-                    $itemsAfterSet = @()
-                    if ($listResult -is [Array] -or ($listResult -is [System.Collections.IEnumerable] -and $listResult -isnot [string])) {
-                        $itemsAfterSet = @($listResult)
-                    } else {
-                        $single = $listResult
-                        $listProp = $single.PSObject.Properties | Where-Object { $_.Value -is [Array] -or $_.Value -is [System.Collections.IEnumerable] } | Select-Object -First 1
-                        if ($listProp) { $itemsAfterSet = @($listProp.Value) } else { $itemsAfterSet = @($single) }
-                    }
-                    $combinedTraffic = ""
-                    foreach ($item in $itemsAfterSet) {
-                        $trafficType = if ($item.PSObject.Properties['TrafficType']) { $item.TrafficType } elseif ($item.PSObject.Properties['traffictype']) { $item.traffictype } else { $null }
-                        $trafficString = if ($null -eq $trafficType) { "" } elseif ($trafficType -is [Array]) { ($trafficType | ForEach-Object { [string]$_ }) -join "," } else { [string]$trafficType }
-                        if (-not [String]::IsNullOrWhiteSpace($trafficString)) { $combinedTraffic += "," + $trafficString }
-                    }
-                    $combinedTraffic = $combinedTraffic.TrimStart(',')
-                    if ($combinedTraffic -match 'vsan' -and $combinedTraffic -notmatch 'witness') {
-                        Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: List after set shows vsan but not witness; trying add with witness only."
-                        $witnessOnly = @("witness")
-                        $addWitnessParamSets = @(
-                            @{ interfacename = $VmkernelName; traffictype = $witnessOnly },
-                            @{ "interface-name" = $VmkernelName; "traffic-type" = $witnessOnly },
-                            @{ InterfaceName = $VmkernelName; TrafficType = $witnessOnly }
-                        )
-                        foreach ($addParams in $addWitnessParamSets) {
-                            try {
-                                $addCmd.Invoke($addParams) | Out-Null
-                                Write-LogMessage -Type INFO -Message "Added vSAN witness traffic to $VmkernelName on host `"$hostName`" via add (witness only) after set."
-                                if ($PostSuccessDelaySeconds -gt 0) { Start-Sleep -Seconds $PostSuccessDelaySeconds }
-                                break
-                            } catch {
-                                Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Add witness only failed: $($_.Exception.Message)"
-                            }
-                        }
-                    }
-                } catch {
-                    Write-LogMessage -Type DEBUG -Message "Add-VsanWitnessTrafficToVmkViaEsxcli: Could not run vsan network list after set on `"$hostName`": $($_.Exception.Message)"
-                }
-            }
+            Invoke-VsanSetPathVerification -AddCommand $addCmd -EsxcliInstance $esxcli -HostName $hostName -PostSuccessDelaySeconds $PostSuccessDelaySeconds -VmkernelName $VmkernelName
         }
         return $true
     } catch [VcfDeploymentException] {
-        throw  # already logged and typed — propagate without re-wrapping
+        throw
     } catch {
-        Write-LogMessage -Type ERROR -Message "Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). vSAN witness traffic is required; deployment will roll back."
-        throw [VcfDeploymentException]::new("vSAN witness traffic is required. Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). Enable witness traffic on a VMkernel (e.g. in vCenter UI) or retry. Deployment will roll back.")
+        $err = "Could not add vSAN witness traffic to $VmkernelName on host `"$hostName`" via esxcli: $($_.Exception.Message). vSAN witness traffic is required; deployment will roll back."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+}
+function Invoke-EsxcliIpv4SetViaCreateArgs {
+
+    <#
+    .SYNOPSIS
+        Attempts to invoke esxcli network ip interface ipv4 set using the CreateArgs introspection path.
+    .DESCRIPTION
+        Calls CreateArgs() on the esxcli set command to discover parameter names at runtime, then
+        populates and invokes the command. Returns $true when the invocation succeeds. Returns $false
+        when the CreateArgs object is null, required parameters are missing, or any exception occurs.
+        On failure, writes the error to LastErrorRef so the caller can fall through to a static
+        fallback parameter set.
+    .PARAMETER GatewayAddress
+        Cleaned IPv4 gateway address (no prefix suffix).
+    .PARAMETER HostName
+        ESX host name, used in log messages.
+    .PARAMETER Ipv4Address
+        Static IPv4 address to assign to the VMkernel.
+    .PARAMETER LastErrorRef
+        Reference variable updated with the last exception message when the path fails.
+    .PARAMETER SetCmd
+        The esxcli network ip interface ipv4 set command object.
+    .PARAMETER SubnetMask
+        IPv4 netmask for the VMkernel.
+    .PARAMETER VmkernelName
+        VMkernel device name (e.g. vmk3).
+    .EXAMPLE
+        $ok = Invoke-EsxcliIpv4SetViaCreateArgs -GatewayAddress "10.30.12.1" -HostName "esx1" -Ipv4Address "10.30.12.5" -LastErrorRef ([Ref]$lastError) -SetCmd $setCmd -SubnetMask "255.255.255.0" -VmkernelName "vmk3"
+    .NOTES
+        Returns $true on success; $false on any failure (error is written to LastErrorRef).
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$GatewayAddress,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Ipv4Address,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Ref]$LastErrorRef,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$SetCmd,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SubnetMask,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
+    )
+
+    try {
+        $argsObj = $SetCmd.CreateArgs()
+        if ($null -eq $argsObj) { return $false }
+
+        $isHashtable = $argsObj -is [System.Collections.IDictionary]
+        $isCollection = -not $isHashtable -and $argsObj -is [System.Collections.IEnumerable] -and $argsObj -isnot [string]
+        $argNames = if ($isHashtable) {
+            @($argsObj.Keys | ForEach-Object { $_ })
+        } elseif ($isCollection) {
+            @($argsObj | ForEach-Object { if ($_.PSObject.Properties["Name"]) { $_.Name } elseif ($_.Key) { $_.Key } else { $_ } })
+        } else {
+            @($argsObj.PSObject.Properties | ForEach-Object { $_.Name })
+        }
+
+        $ifaceParam = $argNames | Where-Object { $_ -and ($_ -match "^i$|^interfacename$|interface-name|interface_name") } | Select-Object -First 1
+        $ipParam    = $argNames | Where-Object { $_ -and ($_ -match "^ipv4$|^I$|^-I$") } | Select-Object -First 1
+        $maskParam  = $argNames | Where-Object { $_ -and ($_ -match "netmask|^N$") } | Select-Object -First 1
+        $gwParam    = $argNames | Where-Object { $_ -and ($_ -match "gateway|^g$") } | Select-Object -First 1
+        $typeParam  = $argNames | Where-Object { $_ -and ($_ -match "^type$|^t$") } | Select-Object -First 1
+
+        if (-not ($ifaceParam -and $ipParam -and $maskParam -and $typeParam)) { return $false }
+
+        if ($isHashtable -or $isCollection) {
+            $invokeTable = @{ $ifaceParam = $VmkernelName; $ipParam = $Ipv4Address; $maskParam = $SubnetMask; $typeParam = "static" }
+            if ($gwParam) { $invokeTable[$gwParam] = $GatewayAddress }
+            $SetCmd.Invoke($invokeTable) | Out-Null
+        } else {
+            $argsObj.$ifaceParam = $VmkernelName
+            $argsObj.$ipParam    = $Ipv4Address
+            $argsObj.$maskParam  = $SubnetMask
+            if ($gwParam) { $argsObj.$gwParam = $GatewayAddress }
+            $argsObj.$typeParam  = "static"
+            $SetCmd.Invoke($argsObj) | Out-Null
+        }
+
+        Write-LogMessage -Type INFO -Message "Set default gateway $GatewayAddress on $VmkernelName on host `"$HostName`" (esxcli network ip interface ipv4 set)."
+        return $true
+    } catch {
+        $LastErrorRef.Value = $_.Exception.Message
+        Write-LogMessage -Type DEBUG -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: CreateArgs path failed: $($_.Exception.Message)"
+        return $false
     }
 }
 function Set-VmkernelIpv4StaticGatewayViaEsxcli {
@@ -1130,6 +1503,9 @@ function Set-VmkernelIpv4StaticGatewayViaEsxcli {
 
         .NOTES
         Uses **Get-EsxCli** V2. Non-fatal mismatches are not expected; failure throws so deployment can roll back or be retried after fixing networking.
+    
+        .EXAMPLE
+        Set-VmkernelIpv4StaticGatewayViaEsxcli -GatewayAddress "10.0.0.1" -Ipv4Address "10.0.0.1" -SubnetMask "10.0.0.0/24" -VMHost $vmHostObject
     #>
 
     [CmdletBinding()]
@@ -1142,14 +1518,15 @@ function Set-VmkernelIpv4StaticGatewayViaEsxcli {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VmkernelName
     )
 
-    $hostName = if ($VMHost.Name) { $VMHost.Name } else { [string]$VMHost }
+    $hostName = if ($VMHost.Name) { $VMHost.Name } else { [String]$VMHost }
     $gw = $GatewayAddress.Trim()
     if ($gw -match "/") {
         $gw = ($gw -split "/")[0].Trim()
     }
     if (-not (Test-ValidIPv4Address -IpAddress $gw)) {
-        Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: gateway `"$gw`" is not a valid IPv4 address for host `"$hostName`"."
-        throw [VcfDeploymentException]::new("Invalid gateway address for witness VMkernel gateway: `"$gw`".")
+        $err = "Set-VmkernelIpv4StaticGatewayViaEsxcli: gateway `"$gw`" is not a valid IPv4 address for host `"$hostName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     try {
@@ -1164,61 +1541,14 @@ function Set-VmkernelIpv4StaticGatewayViaEsxcli {
         $setCmd = $esxcli.network.ip.interface.ipv4.set
     }
     if (-not $setCmd) {
-        Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: esxcli network ip interface ipv4 set is not available on host `"$hostName`"."
-        throw [VcfDeploymentException]::new("Could not set VMkernel gateway: esxcli network ip interface ipv4 set is not available on host `"$hostName`".")
+        $err = "Set-VmkernelIpv4StaticGatewayViaEsxcli: esxcli network ip interface ipv4 set is not available on host `"$hostName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     $lastError = $null
-    try {
-        $argsObj = $setCmd.CreateArgs()
-        if ($null -ne $argsObj) {
-            $argNames = @()
-            $isHashtable = $argsObj -is [System.Collections.Hashtable] -or $argsObj -is [System.Collections.IDictionary]
-            $isCollection = -not $isHashtable -and $argsObj -is [System.Collections.IEnumerable] -and $argsObj -isnot [string]
-            if ($isHashtable) {
-                $argNames = @($argsObj.Keys | ForEach-Object { $_ })
-            }
-            elseif ($isCollection) {
-                $argNames = @($argsObj | ForEach-Object { if ($_.PSObject.Properties["Name"]) { $_.Name } elseif ($_.Key) { $_.Key } else { $_ } })
-            }
-            else {
-                $argNames = @($argsObj.PSObject.Properties | ForEach-Object { $_.Name })
-            }
-            $ifaceParam = $argNames | Where-Object { $_ -and ($_ -match "^i$|^interfacename$|interface-name|interface_name") } | Select-Object -First 1
-            $ipParam = $argNames | Where-Object { $_ -and ($_ -match "^ipv4$|^I$|^-I$") } | Select-Object -First 1
-            $maskParam = $argNames | Where-Object { $_ -and ($_ -match "netmask|^N$") } | Select-Object -First 1
-            $gwParam = $argNames | Where-Object { $_ -and ($_ -match "gateway|^g$") } | Select-Object -First 1
-            $typeParam = $argNames | Where-Object { $_ -and ($_ -match "^type$|^t$") } | Select-Object -First 1
-            if ($ifaceParam -and $ipParam -and $maskParam -and $typeParam) {
-                if ($isHashtable -or $isCollection) {
-                    $invokeTable = @{
-                        $ifaceParam = $VmkernelName
-                        $ipParam    = $Ipv4Address
-                        $maskParam  = $SubnetMask
-                        $typeParam  = "static"
-                    }
-                    if ($gwParam) {
-                        $invokeTable[$gwParam] = $gw
-                    }
-                    $setCmd.Invoke($invokeTable) | Out-Null
-                }
-                else {
-                    $argsObj.$ifaceParam = $VmkernelName
-                    $argsObj.$ipParam = $Ipv4Address
-                    $argsObj.$maskParam = $SubnetMask
-                    if ($gwParam) {
-                        $argsObj.$gwParam = $gw
-                    }
-                    $argsObj.$typeParam = "static"
-                    $setCmd.Invoke($argsObj) | Out-Null
-                }
-                Write-LogMessage -Type INFO -Message "Set default gateway $gw on $VmkernelName on host `"$hostName`" (esxcli network ip interface ipv4 set)."
-                return
-            }
-        }
-    } catch {
-        $lastError = $_.Exception.Message
-        Write-LogMessage -Type DEBUG -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: CreateArgs path failed: $lastError"
+    if (Invoke-EsxcliIpv4SetViaCreateArgs -GatewayAddress $gw -HostName $hostName -Ipv4Address $Ipv4Address -LastErrorRef ([Ref]$lastError) -SetCmd $setCmd -SubnetMask $SubnetMask -VmkernelName $VmkernelName) {
+        return
     }
 
     $paramSets = @(
@@ -1226,9 +1556,9 @@ function Set-VmkernelIpv4StaticGatewayViaEsxcli {
         @{ "interface-name" = $VmkernelName; ipv4 = $Ipv4Address; netmask = $SubnetMask; gateway = $gw; type = "static" },
         @{ interface_name = $VmkernelName; ipv4 = $Ipv4Address; netmask = $SubnetMask; gateway = $gw; type = "static" }
     )
-    foreach ($ps in $paramSets) {
+    foreach ($paramSet in $paramSets) {
         try {
-            $setCmd.Invoke($ps) | Out-Null
+            $setCmd.Invoke($paramSet) | Out-Null
             Write-LogMessage -Type INFO -Message "Set default gateway $gw on $VmkernelName on host `"$hostName`" (esxcli fallback parameter set)."
             return
         } catch {
@@ -1236,8 +1566,84 @@ function Set-VmkernelIpv4StaticGatewayViaEsxcli {
             continue
         }
     }
-    Write-LogMessage -Type ERROR -Message "Set-VmkernelIpv4StaticGatewayViaEsxcli: all attempts failed on `"$hostName`" for $VmkernelName. Last error: $lastError"
-    throw [VcfDeploymentException]::new("Could not set default gateway on VMkernel `"$VmkernelName`" on host `"$hostName`" via esxcli. Last error: $lastError")
+    $err = "Set-VmkernelIpv4StaticGatewayViaEsxcli: all attempts failed on `"$hostName`" for $VmkernelName. Last error: $lastError"
+    Write-LogMessage -Type ERROR -Message $err
+    throw [VcfDeploymentException]::new($err)
+}
+function Invoke-HostVdsCleanupForClusterMove {
+
+    <#
+        .SYNOPSIS
+        Removes non-management VMkernel adapters, restores vmk0 to a standard switch, and detaches pNICs from all VDSes on a host.
+
+        .DESCRIPTION
+        Executes the three-step VDS cleanup sequence required before moving a host to a different cluster
+        when vmk0 is on a VDS: (1) removes non-management VMkernel interfaces; (2) calls
+        Restore-ManagementToVssBeforeVdsRemoval to migrate vmk0 to vSwitch0-restore; (3) removes all
+        physical NIC uplinks from every VDS on the host. Throws VcfDeploymentException when management
+        restore fails. Non-fatal warnings are logged for VMkernel or pNIC removal failures.
+
+        .PARAMETER EsxHostName
+        FQDN or IP address of the host, used in log messages.
+
+        .PARAMETER MgmtVdsName
+        Name of the management VDS (where vmk0 currently resides), passed to Restore-ManagementToVssBeforeVdsRemoval.
+
+        .PARAMETER Server
+        vCenter server name for PowerCLI cmdlet calls.
+
+        .PARAMETER VMHost
+        The VMHost object for the host to clean up.
+
+        .EXAMPLE
+        Invoke-HostVdsCleanupForClusterMove -EsxHostName "esx01.lab" -MgmtVdsName "vds-mgmt" -VMHost $vmh -Server "vc.lab"
+
+        .NOTES
+        Called by Invoke-PrepareHostForClusterMove when vmk0 is on a VDS with dual uplinks.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MgmtVdsName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
+    )
+
+    $vmkAdapters      = @(Get-NonMgmtVmkernelAdaptersOnHost -VMHost $VMHost -Server $Server)
+    $vmkRemovalFailed = $false
+    foreach ($vmk in $vmkAdapters) {
+        try {
+            Remove-VMHostNetworkAdapter -Nic $vmk -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type DEBUG -Message "Removed VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`"."
+        } catch {
+            Write-LogMessage -Type WARNING -Message "Could not remove VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`": $($_.Exception.Message). Proceeding with management restore; verify host state after move."
+            $vmkRemovalFailed = $true
+        }
+    }
+    if ($vmkRemovalFailed) {
+        Write-LogMessage -Type WARNING -Message "One or more non-management VMkernel adapters could not be removed from host `"$EsxHostName`". Verify and clean up stale VMkernel adapters manually after the cluster move."
+    }
+
+    $restoreResult = Restore-ManagementToVssBeforeVdsRemoval -VMHost $VMHost -VdsNameWithMgmt $MgmtVdsName -Server $Server
+    if ($restoreResult.RestoreAttempted -and -not $restoreResult.Success) {
+        $err = "Could not restore management to standard switch on host `"$EsxHostName`": $($restoreResult.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    $allVdsOnHost = @(Get-VdsListOnHost -VMHost $VMHost -Server $Server)
+    foreach ($vds in $allVdsOnHost) {
+        $pnicsOnVds = @(Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vds -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
+        foreach ($pnic in $pnicsOnVds) {
+            try {
+                $pnic | Remove-VDSwitchPhysicalNetworkAdapter -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
+                Write-LogMessage -Type DEBUG -Message "Detached pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`"."
+            } catch {
+                Write-LogMessage -Type WARNING -Message "Could not detach pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`": $($_.Exception.Message)."
+            }
+        }
+    }
 }
 function Invoke-PrepareHostForClusterMove {
 
@@ -1293,8 +1699,9 @@ function Invoke-PrepareHostForClusterMove {
     } else {
         # vmk0 is on a VDS — verify dual uplinks before committing to the automated restore path.
         if (-not $dualUplinkCheck.HasDualUplink) {
-            Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" management VDS `"$($dualUplinkCheck.MgmtVdsName)`" has fewer than two physical NIC uplinks. Manually move vmk0 to a standard vSwitch in vCenter before re-running deployment to reclaim this host."
-            throw [VcfDeploymentException]::new("Host `"$EsxHostName`" management VDS does not have two physical uplinks. Move vmk0 to a standard vSwitch manually, then re-run.")
+            $err = "Host `"$EsxHostName`" management VDS `"$($dualUplinkCheck.MgmtVdsName)`" has fewer than two physical NIC uplinks. Manually move vmk0 to a standard vSwitch in vCenter before re-running deployment to reclaim this host."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 
@@ -1310,8 +1717,9 @@ function Invoke-PrepareHostForClusterMove {
                     $confirmed = $true
                 }
                 '^$|^[nN](o)?$' {
-                    Write-LogMessage -Type ERROR -Message "Deployment aborted. User declined to move host `"$EsxHostName`" from cluster `"$SourceClusterName`" to `"$DestinationClusterName`"."
-                    throw [VcfDeploymentException]::new()
+                    $errorMsg = "Deployment aborted. User declined to move host `"$EsxHostName`" from cluster `"$SourceClusterName`" to `"$DestinationClusterName`"."
+                    Write-LogMessage -Type ERROR -Message $errorMsg
+                    throw [VcfDeploymentException]::new($errorMsg)
                 }
                 default { Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)." }
             }
@@ -1320,7 +1728,7 @@ function Invoke-PrepareHostForClusterMove {
         throw
     } catch {
         Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Treating as N."
-        throw [VcfDeploymentException]::new()
+        throw [VcfDeploymentException]::new("User confirmation failed (non-interactive mode): $($_.Exception.Message)")
     }
 
     # When vmk0 is already on a standard switch, the host is ready to move — no VDS cleanup needed.
@@ -1331,39 +1739,11 @@ function Invoke-PrepareHostForClusterMove {
 
     # vmk0 is on a VDS with dual uplinks — remove non-management VMkernel adapters, restore vmk0
     # to a standard switch, then detach all pNICs from every VDS on the host.
-    $vmkAdapters = @(Get-NonMgmtVmkernelAdaptersOnHost -VMHost $VMHost -Server $Server)
-    $vmkRemovalFailed = $false
-    foreach ($vmk in $vmkAdapters) {
-        try {
-            Remove-VMHostNetworkAdapter -Nic $vmk -Confirm:$false -ErrorAction Stop
-            Write-LogMessage -Type DEBUG -Message "Removed VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`"."
-        } catch {
-            Write-LogMessage -Type WARNING -Message "Could not remove VMkernel `"$($vmk.Name)`" from host `"$EsxHostName`": $($_.Exception.Message). Proceeding with management restore; verify host state after move."
-            $vmkRemovalFailed = $true
-        }
-    }
-    if ($vmkRemovalFailed) {
-        Write-LogMessage -Type WARNING -Message "One or more non-management VMkernel adapters could not be removed from host `"$EsxHostName`". Verify and clean up stale VMkernel adapters manually after the cluster move."
-    }
-
-    $restoreResult = Restore-ManagementToVssBeforeVdsRemoval -VMHost $VMHost -VdsNameWithMgmt $dualUplinkCheck.MgmtVdsName -Server $Server
-    if ($restoreResult.RestoreAttempted -and -not $restoreResult.Success) {
-        Write-LogMessage -Type ERROR -Message "Could not restore management to standard switch on host `"$EsxHostName`": $($restoreResult.Message)"
-        throw [VcfDeploymentException]::new("Management restore failed on host `"$EsxHostName`". $($restoreResult.Message)")
-    }
-
-    $allVdsOnHost = @(Get-VdsListOnHost -VMHost $VMHost -Server $Server)
-    foreach ($vds in $allVdsOnHost) {
-        $pnicsOnVds = @(Get-VMHostNetworkAdapter -VMHost $VMHost -Physical -VirtualSwitch $vds -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue)
-        foreach ($pnic in $pnicsOnVds) {
-            try {
-                $pnic | Remove-VDSwitchPhysicalNetworkAdapter -Confirm:$false -ErrorAction Stop
-                Write-LogMessage -Type DEBUG -Message "Detached pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`"."
-            } catch {
-                Write-LogMessage -Type WARNING -Message "Could not detach pNIC `"$($pnic.Name)`" from VDS `"$($vds.Name)`" on host `"$EsxHostName`": $($_.Exception.Message)."
-            }
-        }
-    }
+    Invoke-HostVdsCleanupForClusterMove `
+        -EsxHostName  $EsxHostName `
+        -MgmtVdsName  $dualUplinkCheck.MgmtVdsName `
+        -Server       $Server `
+        -VMHost       $VMHost
 
     Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" VDS cleanup complete. Proceeding to add to cluster `"$DestinationClusterName`"."
 }
@@ -1383,6 +1763,8 @@ function Get-RunningVmsOnHost {
         Get-RunningVmsOnHost -VMHost $vmhostObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
+    [OutputType([Object[]])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
@@ -1407,6 +1789,7 @@ function Get-NonMgmtVmkernelAdaptersOnHost {
         Get-NonMgmtVmkernelAdaptersOnHost -VMHost $vmhostObj -Server "vc.lab"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
@@ -1478,14 +1861,14 @@ function Test-HostHasRequiredNics {
 
         .EXAMPLE
         $check = Test-HostHasRequiredNics -EsxHostName "esx01.lab" -NicList $nicList -VMHost $vmhostObj
-        if (-not $check.IsValid) { throw "Missing NICs: $($check.MissingNics -join ', ')" }
+        if (-not $check.IsValid) { throw [VcfDeploymentException]::new("Missing NICs: $($check.MissingNics -join ', ')") }
     #>
 
     [CmdletBinding()]
     [OutputType([PSObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
-        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Array]$NicList,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$NicList,
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$VMHost
     )
@@ -1659,6 +2042,7 @@ function Invoke-AddVMHostToCluster {
     Add-VMHost -Name $Name -Credential $Credential -Location $Location -Force -Server $Server -ErrorAction Stop | Out-Null
 }
 function Invoke-AddHostToClusterRunningVmSafetyCheck {
+
     <#
         .SYNOPSIS
         Stops Add-HostToCluster when the host has powered-on VMs unless the operator confirms.
@@ -1677,6 +2061,9 @@ function Invoke-AddHostToClusterRunningVmSafetyCheck {
 
         .PARAMETER VMHost
         The VMHost object to query for VMs.
+    
+        .EXAMPLE
+        Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName "edge-cluster-1" -EsxHostName "resource-name" -VMHost $vmHostObject
     #>
     [CmdletBinding()]
     Param (
@@ -1689,7 +2076,7 @@ function Invoke-AddHostToClusterRunningVmSafetyCheck {
     $inventoryLocation = "n/a"
     try {
         if ($VMHost.Parent -and $VMHost.Parent.Name) {
-            $inventoryLocation = [string]$VMHost.Parent.Name
+            $inventoryLocation = [String]$VMHost.Parent.Name
         }
     } catch {
         $inventoryLocation = "(unknown)"
@@ -1709,7 +2096,7 @@ function Invoke-AddHostToClusterRunningVmSafetyCheck {
     foreach ($vm in ($runningVms | Sort-Object -Property Name)) {
         $guestOs = "n/a"
         try {
-            if ($vm.Guest -and $vm.Guest.OSFullName) { $guestOs = [string]$vm.Guest.OSFullName }
+            if ($vm.Guest -and $vm.Guest.OSFullName) { $guestOs = [String]$vm.Guest.OSFullName }
         } catch {
             $guestOs = "n/a"
         }
@@ -1737,8 +2124,9 @@ function Invoke-AddHostToClusterRunningVmSafetyCheck {
     }
 
     if (-not $continueAnyway) {
-        Write-LogMessage -Type ERROR -Message "Deployment aborted. Host `"$EsxHostName`" has $($runningVms.Count) powered-on VM(s) on vCenter `"$Server`". Power off or migrate the VMs, then re-run."
-        throw [VcfDeploymentException]::new()
+        $errorMsg = "Deployment aborted. Host `"$EsxHostName`" has $($runningVms.Count) powered-on VM(s) on vCenter `"$Server`". Power off or migrate the VMs, then re-run."
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
     }
 }
 function Invoke-MoveVMHostToDestination {
@@ -1776,6 +2164,650 @@ function Invoke-MoveVMHostToDestination {
     )
 
     Move-VMHost -VMHost $VMHost -Destination $Destination -Server $Server -Confirm:$false -ErrorAction Stop | Out-Null
+}
+function Wait-AddVMHostTask {
+
+    <#
+        .SYNOPSIS
+        Polls an async Add-VMHost task until it succeeds, errors, or times out.
+
+        .DESCRIPTION
+        Calls Get-Task in a loop until the task reaches Success or Error state, or until
+        the deadline is exceeded. Returns a result object indicating success and any error message.
+
+        .PARAMETER AddHostTaskPollIntervalSeconds
+        Seconds between Get-Task polls. Default is 5.
+
+        .PARAMETER Deadline
+        The DateTime after which the function considers the wait timed out.
+
+        .PARAMETER Server
+        vCenter server name used in the Get-Task call.
+
+        .PARAMETER Task
+        The task object returned by the async Add-VMHost call.
+
+        .PARAMETER WaitForAddHostTaskTimeoutSeconds
+        Original timeout value; used only to build the timeout error message.
+
+        .OUTPUTS
+        PSCustomObject with Succeeded ([Bool]) and ErrorMessage ([String]) properties.
+
+        .EXAMPLE
+        $result = Wait-AddVMHostTask -Task $task -Deadline $deadline -Server $Script:vCenterName -AddHostTaskPollIntervalSeconds 5 -WaitForAddHostTaskTimeoutSeconds 300
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
+        [Parameter(Mandatory = $true)] [DateTime]$Deadline,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Task,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300
+    )
+
+    $succeeded = $false
+    $errorMessage = $null
+
+    while ((Get-Date) -lt $Deadline) {
+        $currentTask = Get-Task -Id $Task.Id -Server $Server -ErrorAction SilentlyContinue
+        if ($currentTask) {
+            $state = if ($currentTask.PSObject.Properties['State']) { $currentTask.State } else { $currentTask.Status }
+            if ($state -eq 'Success') {
+                $succeeded = $true
+                break
+            }
+            if ($state -eq 'Error') {
+                if ($currentTask.ExtensionData -and $currentTask.ExtensionData.Info -and $currentTask.ExtensionData.Info.Error) {
+                    if ($currentTask.ExtensionData.Info.Error.LocalizedMessage) {
+                        $errorMessage = $currentTask.ExtensionData.Info.Error.LocalizedMessage
+                    } elseif ($currentTask.ExtensionData.Info.Error.Fault) {
+                        $errorMessage = $currentTask.ExtensionData.Info.Error.Fault.ToString()
+                    } else {
+                        $errorMessage = "Add host task failed."
+                    }
+                } else {
+                    $errorMessage = "Add host task failed."
+                }
+                break
+            }
+        }
+        Start-Sleep -Seconds $AddHostTaskPollIntervalSeconds
+    }
+
+    if (-not $succeeded -and -not $errorMessage) {
+        $errorMessage = "Add host task did not complete within $WaitForAddHostTaskTimeoutSeconds seconds."
+    }
+
+    return [PSCustomObject]@{ Succeeded = $succeeded; ErrorMessage = $errorMessage }
+}
+function Invoke-AddVMHostWithRetry {
+
+    <#
+        .SYNOPSIS
+        Adds an ESX host to a cluster via Add-VMHost with automatic retry on transient errors.
+
+        .DESCRIPTION
+        Calls Invoke-AddVMHostToCluster (with or without -RunAsync based on WaitForAddHostTaskTimeoutSeconds)
+        and retries on "already exists", "current state of the object", or task-timeout errors.
+        Throws VcfDeploymentException on all non-retryable errors or when all retry attempts are exhausted.
+        This helper implements only the Add-VMHost path; use Move-VMHost for hosts already managed by this vCenter.
+
+        .PARAMETER AddHostRetryCount
+        Maximum number of Add-VMHost attempts before failing.
+
+        .PARAMETER AddHostRetryDelaySeconds
+        Seconds to wait between retry attempts.
+
+        .PARAMETER AddHostTaskPollIntervalSeconds
+        Seconds between Get-Task polls when waiting for the async add task.
+
+        .PARAMETER ClusterName
+        Destination cluster name; used in exception messages.
+
+        .PARAMETER ClusterObject
+        The cluster object (from Get-Cluster) used as the -Location for Add-VMHost.
+
+        .PARAMETER EsxCredential
+        Credentials for authenticating with the ESX host.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the ESX host to add.
+
+        .PARAMETER HostAppearanceRecheckDelaySeconds
+        Seconds to wait after an "already exists" error before re-querying the cluster inventory.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .PARAMETER WaitForAddHostTaskTimeoutSeconds
+        When greater than 0, uses -RunAsync and polls the task for completion. Set to 0 for synchronous Add-VMHost.
+
+        .EXAMPLE
+        Invoke-AddVMHostWithRetry -EsxHostName "esx01.example.com" -EsxCredential $credential -ClusterObject $cluster -ClusterName "cl0" -Server $Script:vCenterName
+
+        .NOTES
+        This function is intentionally narrow: it does not handle the Move-VMHost (relocation) path or
+        post-add verification. Those are handled by the caller (Add-HostToCluster).
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$AddHostRetryCount = 3,
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$AddHostRetryDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$EsxCredential,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$HostAppearanceRecheckDelaySeconds = 5,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300
+    )
+
+    Write-LogMessage -Type INFO -NoNewline -Message "Adding ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
+    $addHostSucceeded = $false
+    $addHostAttempt = 1
+
+    do {
+        $errorMessage = $null
+        $task = $null
+
+        if ($WaitForAddHostTaskTimeoutSeconds -gt 0) {
+            try {
+                $task = Invoke-AddVMHostToCluster -Name $EsxHostName -Credential $EsxCredential -Location $ClusterObject -RunAsync -Server $Server
+            } catch [System.UnauthorizedAccessException] {
+                $err = "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`" due to authorization issues: $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [System.TimeoutException] {
+                $err = "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`" due to network/timeout issues: $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+                $err = "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+                $err = "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch {
+                $errorMessage = $_.Exception.Message
+            }
+
+            if ($task -and -not $errorMessage) {
+                $deadline = (Get-Date).AddSeconds($WaitForAddHostTaskTimeoutSeconds)
+                $taskResult = Wait-AddVMHostTask -AddHostTaskPollIntervalSeconds $AddHostTaskPollIntervalSeconds -Deadline $deadline -Server $Server -Task $task -WaitForAddHostTaskTimeoutSeconds $WaitForAddHostTaskTimeoutSeconds
+                $addHostSucceeded = $taskResult.Succeeded
+                $errorMessage = $taskResult.ErrorMessage
+                if (-not $addHostSucceeded) {
+                    Write-LogMessage -Type DEBUG -Message "Add-VMHost task did not succeed (attempt $addHostAttempt): $errorMessage"
+                }
+            }
+        } else {
+            try {
+                Invoke-AddVMHostToCluster -Name $EsxHostName -Credential $EsxCredential -Location $ClusterObject -Server $Server
+                $addHostSucceeded = $true
+                break
+            } catch [System.UnauthorizedAccessException] {
+                $err = "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`" due to authorization issues: $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [System.TimeoutException] {
+                $err = "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`" due to network/timeout issues: $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+                $err = "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+                $err = "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            } catch {
+                $errorMessage = $_.Exception.Message
+            }
+        }
+
+        if ($addHostSucceeded) { break }
+        if (-not $errorMessage) { $errorMessage = "Add host failed (no task or error details)." }
+
+        if ($errorMessage -match "already being managed|already managed by this vSphere server") {
+            Write-LogMessage -Type DEBUG -Message "Add-VMHost threw (attempt $addHostAttempt): $errorMessage"
+            $hostInVc = Get-VMHost -Name $EsxHostName -Server $Server -ErrorAction SilentlyContinue
+            if ($hostInVc -and $hostInVc.Parent.Name -eq $ClusterName -and $addHostAttempt -gt 1) {
+                Write-LogMessage -Type INFO -Message "Normal: Host `"$EsxHostName`" is in cluster `"$ClusterName`" (vCenter reported already managed on retry; likely added on previous attempt this run). Proceeding."
+                $addHostSucceeded = $true
+                break
+            }
+            if ($hostInVc -and $hostInVc.Parent.Name -eq $ClusterName -and $addHostAttempt -eq 1) {
+                Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is already in cluster `"$ClusterName`" (vCenter reported already managed). Skipping host add (idempotent)."
+                $addHostSucceeded = $true
+                break
+            }
+            $otherCluster = if ($hostInVc) { $hostInVc.Parent.Name } else { "another cluster" }
+            $err = "Host `"$EsxHostName`" is already managed by vCenter `"$Server`" (in cluster: `"$otherCluster`"). Remove the host from that cluster in vCenter, or remove it from vCenter, then re-run the deployment."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+
+        if ($errorMessage -match "vSAN cluster UUID mismatch|vSAN host cannot be moved to the destination cluster") {
+            $err = "Host `"$EsxHostName`" belongs to a different vSAN cluster (vSAN cluster UUID mismatch). Remove the host from the other vSAN cluster in vCenter, or remove it from vCenter, then re-run the deployment. Moving a vSAN host between clusters requires removing it first."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+
+        if ($errorMessage -match "already exists|current state of the object|did not complete within") {
+            Write-LogMessage -Type DEBUG -Message "Add-VMHost threw (attempt $addHostAttempt): $errorMessage"
+            $hostNowInCluster = $ClusterObject | Get-VMHost -Name $EsxHostName -Server $Server -ErrorAction SilentlyContinue
+            if ($hostNowInCluster) {
+                Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in cluster `"$ClusterName`" (add completed despite error; host may still be connecting). Proceeding."
+                $addHostSucceeded = $true
+                break
+            }
+            if ($addHostAttempt -lt $AddHostRetryCount) {
+                Write-LogMessage -Type WARNING -Message "Add-VMHost failed (attempt $addHostAttempt of $AddHostRetryCount). Error: $errorMessage. Waiting $HostAppearanceRecheckDelaySeconds seconds to recheck cluster, then retry."
+                Start-Sleep -Seconds $HostAppearanceRecheckDelaySeconds
+                $hostNowInCluster = $ClusterObject | Get-VMHost -Name $EsxHostName -Server $Server -ErrorAction SilentlyContinue
+                if ($hostNowInCluster) {
+                    Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in cluster `"$ClusterName`" after recheck (add completed on first attempt; host appeared in inventory). Proceeding."
+                    $addHostSucceeded = $true
+                    break
+                }
+                Write-LogMessage -Type WARNING -Message "Host not in cluster after recheck. Waiting $AddHostRetryDelaySeconds seconds before retry."
+                Start-Sleep -Seconds $AddHostRetryDelaySeconds
+                $addHostAttempt++
+                continue
+            }
+            $err = "Add-VMHost failed after $AddHostRetryCount attempt(s). If the host is in another cluster, remove it from vCenter and re-run. Otherwise check vCenter logs and re-run."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+
+        if ($errorMessage -match "session|logged out|expired|InvalidLogin|Authentication failed") {
+            $err = "The vCenter session may have been logged out during the operation. Do not log out the vCenter user session while deployment tasks are in progress. Re-run the deployment to reconnect."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+
+        $err = "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`": $errorMessage"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    } while ($addHostAttempt -le $AddHostRetryCount -and -not $addHostSucceeded)
+}
+function Invoke-HostRelocationPrecheck {
+
+    <#
+        .SYNOPSIS
+        Checks whether an ESX host is already in vCenter inventory and resolves cross-datacenter move metadata.
+
+        .DESCRIPTION
+        Queries vCenter for the host. When found: runs the running-VM safety check; when no running VMs exist,
+        looks up the source cluster, validates the destination NIC list, calls Invoke-PrepareHostForClusterMove,
+        and detects whether the source and destination datacenters differ. Returns a PSCustomObject with the
+        resolved HostForRunningVmCheck, IsCrossDatacenterMove, SourceDatacenterName, and DestDatacenterName.
+
+        .PARAMETER ClusterName
+        Destination cluster name; used to compare against the host's current parent cluster.
+
+        .PARAMETER ClusterObject
+        Cluster object for the destination cluster; passed to Get-DatacenterForCluster.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the ESX host.
+
+        .PARAMETER NicList
+        Required NICs for the destination cluster. When non-empty and the host is being taken from another
+        cluster, each NIC must be present on the host or the function throws VcfDeploymentException.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .EXAMPLE
+        $precheck = Invoke-HostRelocationPrecheck -ClusterName "dest-cl" -ClusterObject $clObj -EsxHostName "esx01.lab" -Server $Script:vCenterName
+
+        .NOTES
+        Called exclusively by Add-HostToCluster before any disruptive vCenter operations.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [AllowNull()] [Object[]]$NicList = $null,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server
+    )
+
+    $isCrossDatacenterMove = $false
+    $sourceDatacenterName = ""
+    $destDatacenterName = ""
+    $hostForRunningVmCheck = Get-VMHostByName -Name $EsxHostName -Server $Server
+    if ($hostForRunningVmCheck) {
+        $runningVms = Get-RunningVmsOnHost -VMHost $hostForRunningVmCheck -Server $Server
+        if ($runningVms.Count -gt 0) {
+            Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName $ClusterName -EsxHostName $EsxHostName -Server $Server -VMHost $hostForRunningVmCheck
+        } else {
+            $sourceCluster = $null
+            try {
+                if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) {
+                    $sourceCluster = Get-ClusterObjectByName -ClusterName $hostForRunningVmCheck.Parent.Name -Server $Server
+                }
+            } catch {
+                $sourceCluster = $null
+            }
+            if ($null -ne $sourceCluster -and $sourceCluster.Name -ne $ClusterName) {
+                # Validate that the host has every physical NIC required by the destination cluster's NIC list
+                # before taking any disruptive action. A host missing one or more required NICs cannot support
+                # the vSS-to-VDS migration and must not be taken over.
+                if ($null -ne $NicList -and $NicList.Count -gt 0) {
+                    $nicCheck = Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $NicList -Server $Server -VMHost $hostForRunningVmCheck
+                    if (-not $nicCheck.IsValid) {
+                        $missingStr = $nicCheck.MissingNics -join ", "
+                        $err = "Host `"$EsxHostName`" is missing required physical NIC(s) [$missingStr] from the configured NIC list. The vSS-to-VDS migration cannot proceed without these NICs. Remove this host from the deployment configuration or install the required NIC hardware and re-run."
+                        Write-LogMessage -Type ERROR -Message $err
+                        throw [VcfDeploymentException]::new($err)
+                    }
+                }
+                Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName -Server $Server -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
+                try {
+                    $srcDc = Get-DatacenterForVMHost -VMHost $hostForRunningVmCheck -Server $Server
+                    $dstDc = Get-DatacenterForCluster -Cluster $ClusterObject -Server $Server
+                    if ($null -ne $srcDc -and $null -ne $dstDc -and $srcDc.Id -ne $dstDc.Id) {
+                        $isCrossDatacenterMove = $true
+                        $sourceDatacenterName = $srcDc.Name
+                        $destDatacenterName = $dstDc.Name
+                        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in datacenter `"$sourceDatacenterName`" but destination cluster `"$ClusterName`" is in datacenter `"$destDatacenterName`". Move-VMHost cannot cross datacenter boundaries; will disconnect, remove from source inventory, and re-add to destination cluster."
+                    }
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Datacenter lookup for host `"$EsxHostName`" or cluster `"$ClusterName`" failed: $($_.Exception.Message). Assuming same datacenter."
+                }
+            } else {
+                $parentDisplayName = if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) { $hostForRunningVmCheck.Parent.Name } else { "(no cluster parent)" }
+                Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" is in vCenter inventory with no powered-on VMs and no cluster move required (parent: `"$parentDisplayName`"). Proceeding to add."
+            }
+        }
+    } else {
+        Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" not in vCenter inventory before add; skipping powered-on VM check (VMs are not enumerable until the host is managed by this vCenter)."
+    }
+
+    return [PSCustomObject]@{
+        HostForRunningVmCheck = $hostForRunningVmCheck
+        IsCrossDatacenterMove = $isCrossDatacenterMove
+        SourceDatacenterName  = $sourceDatacenterName
+        DestDatacenterName    = $destDatacenterName
+    }
+}
+function Invoke-ManagedHostMoveOrAdd {
+
+    <#
+        .SYNOPSIS
+        Moves a managed host to the destination cluster or adds an unmanaged host via Add-VMHost.
+
+        .DESCRIPTION
+        When HostForRunningVmCheck is non-null (host is already in vCenter inventory):
+          - Ensures the host is in maintenance mode before relocation.
+          - Cross-datacenter: disconnects and removes from source inventory so Add-VMHost can re-add it.
+          - Same-datacenter: calls Invoke-MoveVMHostToDestination and returns; the Add-VMHost path is skipped.
+        When HostForRunningVmCheck is null (new host, or cross-DC after remove): delegates to Invoke-AddVMHostWithRetry.
+        Manages ProgressPreference suppression internally via try/finally.
+
+        .PARAMETER AddHostRetryCount
+        Number of Add-VMHost retries on transient errors.
+
+        .PARAMETER AddHostRetryDelaySeconds
+        Seconds between Add-VMHost retry attempts.
+
+        .PARAMETER AddHostTaskPollIntervalSeconds
+        Poll interval for async Add-VMHost task completion.
+
+        .PARAMETER ClusterName
+        Destination cluster name; used in log messages and passed to Invoke-AddVMHostWithRetry.
+
+        .PARAMETER ClusterObject
+        Destination cluster object; used as the Move-VMHost destination and Add-VMHost location.
+
+        .PARAMETER EsxCredential
+        Credentials for authenticating with the ESX host via Add-VMHost.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the ESX host.
+
+        .PARAMETER HostAppearanceRecheckDelaySeconds
+        Seconds to wait before rechecking cluster after an Add-VMHost "already exists" error.
+
+        .PARAMETER HostForRunningVmCheck
+        Host object returned from a prior Get-VMHostByName call; null means the host is not yet managed by this vCenter.
+
+        .PARAMETER IsCrossDatacenterMove
+        When true, the host must be disconnected and removed before re-adding to the destination datacenter.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .PARAMETER SourceDatacenterName
+        Name of the source datacenter; used in log messages during cross-datacenter disconnect.
+
+        .PARAMETER WaitForAddHostTaskTimeoutSeconds
+        Timeout for the async Add-VMHost task; 0 uses synchronous Add-VMHost.
+
+        .EXAMPLE
+        Invoke-ManagedHostMoveOrAdd -ClusterName "dest-cl" -ClusterObject $clObj -EsxCredential $cred -EsxHostName "esx01.lab" -HostForRunningVmCheck $hostObj -IsCrossDatacenterMove:$false -Server $Script:vCenterName
+
+        .NOTES
+        Called exclusively by Add-HostToCluster after Invoke-HostRelocationPrecheck.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$AddHostRetryCount = 3,
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$AddHostRetryDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$ClusterObject,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$EsxCredential,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$HostAppearanceRecheckDelaySeconds = 5,
+        [Parameter(Mandatory = $false)] [AllowNull()] [PSObject]$HostForRunningVmCheck = $null,
+        [Parameter(Mandatory = $false)] [Switch]$IsCrossDatacenterMove,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $false)] [String]$SourceDatacenterName = "",
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300
+    )
+
+    $savedProgress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        if ($null -ne $HostForRunningVmCheck) {
+            # vSphere requires the host to be in maintenance mode before an inter-cluster relocation.
+            if ($HostForRunningVmCheck.ConnectionState -ne "Maintenance") {
+                Write-LogMessage -Type INFO -NoNewline -Message "Entering maintenance mode on host `"$EsxHostName`" before cluster move... "
+                try {
+                    Set-VMHostState -VMHost $EsxHostName -State "Maintenance" -Server $Server
+                    $hostStateRefresh = Get-VMHostByName -Name $EsxHostName -Server $Server
+                    if ($null -eq $hostStateRefresh -or $hostStateRefresh.ConnectionState -ne "Maintenance") {
+                        $actualState = if ($hostStateRefresh) { $hostStateRefresh.ConnectionState } else { "not found in vCenter" }
+                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                        $err = "Host `"$EsxHostName`" state is `"$actualState`" after maintenance mode request (expected: Maintenance). Place the host in maintenance mode manually in vCenter and re-run the deployment."
+                        Write-LogMessage -Type ERROR -Message $err
+                        throw [VcfDeploymentException]::new($err)
+                    }
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch [VcfDeploymentException] {
+                    throw
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    $err = "Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message). To recover: place `"$EsxHostName`" in maintenance mode manually in vCenter and re-run the deployment."
+                    Write-LogMessage -Type ERROR -Message $err
+                    throw [VcfDeploymentException]::new($err)
+                }
+            } else {
+                Write-LogMessage -Type DEBUG -Message "Host `"$EsxHostName`" is already in maintenance mode; skipping maintenance mode entry before cluster move."
+            }
+            if ($IsCrossDatacenterMove) {
+                # Move-VMHost cannot relocate a host between virtual datacenters. Disconnect and
+                # remove from the source datacenter's inventory, then re-add via Add-VMHost below.
+                Write-LogMessage -Type INFO -NoNewline -Message "Disconnecting host `"$EsxHostName`" from source datacenter `"$SourceDatacenterName`"... "
+                try {
+                    Set-VMHostState -VMHost $EsxHostName -State "Disconnected" -Server $Server
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    $err = "Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)"
+                    Write-LogMessage -Type ERROR -Message $err
+                    throw [VcfDeploymentException]::new($err)
+                }
+                Write-LogMessage -Type INFO -NoNewline -Message "Removing host `"$EsxHostName`" from source vCenter inventory (cross-datacenter re-add)... "
+                try {
+                    Remove-VMHostFromVCenter -VMHost $EsxHostName -Server $Server
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    $err = "Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)"
+                    Write-LogMessage -Type ERROR -Message $err
+                    throw [VcfDeploymentException]::new($err)
+                }
+            } else {
+                Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
+                try {
+                    Invoke-MoveVMHostToDestination -VMHost $HostForRunningVmCheck -Destination $ClusterObject -Server $Server
+                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
+                } catch [VcfDeploymentException] {
+                    throw
+                } catch {
+                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
+                    $err = "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`": $($_.Exception.Message)"
+                    Write-LogMessage -Type ERROR -Message $err
+                    throw [VcfDeploymentException]::new($err)
+                }
+                return  # Same-datacenter Move-VMHost path complete; skip Add-VMHost.
+            }
+        }
+        # Host is new or cross-datacenter path after remove; use Add-VMHost.
+        Invoke-AddVMHostWithRetry `
+            -AddHostRetryCount $AddHostRetryCount `
+            -AddHostRetryDelaySeconds $AddHostRetryDelaySeconds `
+            -AddHostTaskPollIntervalSeconds $AddHostTaskPollIntervalSeconds `
+            -ClusterName $ClusterName `
+            -ClusterObject $ClusterObject `
+            -EsxCredential $EsxCredential `
+            -EsxHostName $EsxHostName `
+            -HostAppearanceRecheckDelaySeconds $HostAppearanceRecheckDelaySeconds `
+            -Server $Server `
+            -WaitForAddHostTaskTimeoutSeconds $WaitForAddHostTaskTimeoutSeconds
+    } finally {
+        $ProgressPreference = $savedProgress
+    }
+}
+function Confirm-VMHostAddedToCluster {
+
+    <#
+        .SYNOPSIS
+        Verifies that an ESX host was successfully added or moved to the destination cluster and sets it to Connected.
+
+        .DESCRIPTION
+        Optionally waits for the Add-VMHost async operation to settle (IsAddPath = true), verifies the vCenter
+        connection, queries the host in inventory, confirms it is in the correct cluster, and sets its
+        ConnectionState to Connected when needed.
+
+        .PARAMETER ClusterName
+        Destination cluster name; verified against the host's Parent.Name after the add/move.
+
+        .PARAMETER EsxHostName
+        FQDN or IP of the ESX host to verify.
+
+        .PARAMETER HostStateChangeDelaySeconds
+        Seconds to sleep before querying the host when IsAddPath is true (async Add-VMHost settling period).
+
+        .PARAMETER IsAddPath
+        When true, the host was added via Add-VMHost (async) and a settling delay is applied before verification.
+
+        .PARAMETER Server
+        vCenter server name used for all queries.
+
+        .EXAMPLE
+        Confirm-VMHostAddedToCluster -ClusterName "dest-cl" -EsxHostName "esx01.lab" -IsAddPath -Server $Script:vCenterName
+
+        .NOTES
+        Called exclusively by Add-HostToCluster after Invoke-ManagedHostMoveOrAdd completes.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, [Int]::MaxValue)] [Int]$HostStateChangeDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [Switch]$IsAddPath,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
+    )
+
+    # Add-VMHost is async; allow state to settle before querying.
+    if ($IsAddPath) {
+        Start-Sleep $HostStateChangeDelaySeconds
+    }
+    $connectionAfterAdd = Test-VcenterConnection
+    if (-not $connectionAfterAdd.IsConnected) {
+        $err = "vCenter session is no longer valid after host add/move (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    try {
+        $verifyHost = Get-VMHostByName -Name $EsxHostName -Server $Server
+        if (-not $verifyHost) {
+            throw [VcfDeploymentException]::new("Host `"$EsxHostName`" was not found in vCenter `"$Server`" after the add/move operation. Re-run the deployment to verify the operation succeeded.")
+        }
+    } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+        $err = "vCenter session was logged out or expired. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+        $err = "vCenter connection was lost. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
+    } catch {
+        $err = "Failed to verify host `"$EsxHostName`" in vCenter `"$Server`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    if ($verifyHost.Parent.Name -ne $ClusterName) {
+        $err = "Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Server`". Host is in cluster: `"$($verifyHost.Parent.Name)`""
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
+
+    # Set host to Connected: for the Move path this exits maintenance mode; for the Add path this handles
+    # a newly added host coming up Disconnected.
+    if ($verifyHost.ConnectionState -ne "Connected") {
+        Write-LogMessage -Type INFO -NoNewline -Message "Setting host `"$EsxHostName`" to connected state (current state: `"$($verifyHost.ConnectionState)`")... "
+        try {
+            Set-VMHostState -VMHost $EsxHostName -State "Connected" -Server $Server
+            Write-LogMessage -Type INFO -CompletePending -Message "Set"
+        } catch [System.UnauthorizedAccessException] {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authorization): $($_.Exception.Message)")
+        } catch [System.TimeoutException] {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (timeout).")
+        } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authentication error): $($_.Exception.Message)")
+        } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (server connection error): $($_.Exception.Message)")
+        } catch {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state: $($_.Exception.Message)")
+        }
+    }
 }
 function Add-HostToCluster {
 
@@ -1846,412 +2878,86 @@ function Add-HostToCluster {
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$AddHostRetryCount = 3,
         [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$AddHostRetryDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$AddHostTaskPollIntervalSeconds = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$EsxCredential,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$HostAppearanceRecheckDelaySeconds = 5,
-        [Parameter(Mandatory = $false)] [ValidateRange(0, [int]::MaxValue)] [Int]$HostStateChangeDelaySeconds = 10,
-        [Parameter(Mandatory = $false)] [AllowNull()] [Array]$NicList = $null,
-        [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300,
-        [Parameter(Mandatory = $false)] [ValidateSet("VMFS", "vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType = "VMFS"
+        [Parameter(Mandatory = $false)] [ValidateRange(0, [Int]::MaxValue)] [Int]$HostStateChangeDelaySeconds = 10,
+        [Parameter(Mandatory = $false)] [AllowNull()] [Object[]]$NicList = $null,
+        [Parameter(Mandatory = $false)] [ValidateSet("VMFS", "vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType = "VMFS",
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 900)] [Int]$WaitForAddHostTaskTimeoutSeconds = 300
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Add-HostToCluster function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
+    $isAddPath = $false
     try {
-        # Retrieve the target cluster object from vCenter.
-    try {
-        $clusterObject = Get-ClusterObjectByName -ClusterName $ClusterName -Server $Script:vCenterName
-    } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
-    }
-    catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
-    }
-    catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-        Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired. Do not log out the vCenter user session during deployment. Re-run the deployment to reconnect."
-        throw [VcfDeploymentException]::new("vCenter session was logged out or expired. Do not log out the vCenter user session during deployment. Re-run the deployment to reconnect.")
-    }
-    catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-        Write-LogMessage -Type ERROR -Message "vCenter connection was lost (session logged out, vCenter restart, or network). Re-run the deployment to reconnect."
-        throw [VcfDeploymentException]::new("vCenter connection was lost (session logged out, vCenter restart, or network). Re-run the deployment to reconnect.")
-    } catch [VcfDeploymentException] {
-        throw  # already logged and typed — propagate without re-wrapping
-    } catch {
-        Write-LogMessage -Type ERROR -AppendNewLine -Message "Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" : $($_.Exception.Message)")
-    }
-
-    # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
-
-    # Check if the host is already in the cluster.
-    try {
-        $existingHost = Get-VMHost -Name $EsxHostName -Location $clusterObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
-    } catch {
-        # If Get-VMHost fails, continue to add the host.
-        $existingHost = $null
-    }
-
-    if ($existingHost) {
-        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is already in cluster `"$ClusterName`". Skipping host add."
-        return
-    }
-
-    $isCrossDatacenterMove = $false
-    $sourceDatacenterName = ""
-    $destDatacenterName = ""
-    $hostForRunningVmCheck = Get-VMHostByName -Name $EsxHostName -Server $Script:vCenterName
-    if ($hostForRunningVmCheck) {
-        $runningVms = Get-RunningVmsOnHost -VMHost $hostForRunningVmCheck -Server $Script:vCenterName
-        if ($runningVms.Count -gt 0) {
-            Invoke-AddHostToClusterRunningVmSafetyCheck -ClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
-        } else {
-            # No running VMs. Check if the host is in a different cluster on the same vCenter; if so, offer to migrate it.
-            $sourceCluster = $null
-            try {
-                if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) {
-                    $sourceCluster = Get-ClusterObjectByName -ClusterName $hostForRunningVmCheck.Parent.Name -Server $Script:vCenterName
-                }
-            } catch {
-                $sourceCluster = $null
-            }
-            if ($null -ne $sourceCluster -and $sourceCluster.Name -ne $ClusterName) {
-                # Validate that the host has every physical NIC required by the destination cluster's NIC list
-                # before taking any disruptive action. A host missing one or more required NICs cannot support
-                # the vSS-to-VDS migration and must not be taken over.
-                if ($null -ne $NicList -and $NicList.Count -gt 0) {
-                    $nicCheck = Test-HostHasRequiredNics -EsxHostName $EsxHostName -NicList $NicList -Server $Script:vCenterName -VMHost $hostForRunningVmCheck
-                    if (-not $nicCheck.IsValid) {
-                        $missingStr = $nicCheck.MissingNics -join ", "
-                        Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" is missing required physical NIC(s) [$missingStr] from the configured NIC list. The vSS-to-VDS migration cannot proceed without these NICs. Remove this host from the deployment configuration or install the required NIC hardware and re-run."
-                        throw [VcfDeploymentException]::new("Host `"$EsxHostName`" is missing required NIC(s): $missingStr. Cannot take over from cluster `"$($sourceCluster.Name)`". Check logs for details.")
-                    }
-                }
-                Invoke-PrepareHostForClusterMove -DestinationClusterName $ClusterName -EsxHostName $EsxHostName -Server $Script:vCenterName -SourceClusterName $sourceCluster.Name -VMHost $hostForRunningVmCheck
-                try {
-                    $srcDc = Get-DatacenterForVMHost -VMHost $hostForRunningVmCheck -Server $Script:vCenterName
-                    $dstDc = Get-DatacenterForCluster -Cluster $clusterObject -Server $Script:vCenterName
-                    if ($null -ne $srcDc -and $null -ne $dstDc -and $srcDc.Id -ne $dstDc.Id) {
-                        $isCrossDatacenterMove = $true
-                        $sourceDatacenterName = $srcDc.Name
-                        $destDatacenterName = $dstDc.Name
-                        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in datacenter `"$sourceDatacenterName`" but destination cluster `"$ClusterName`" is in datacenter `"$destDatacenterName`". Move-VMHost cannot cross datacenter boundaries; will disconnect, remove from source inventory, and re-add to destination cluster."
-                    }
-                } catch {
-                    Write-LogMessage -Type DEBUG -Message "Datacenter lookup for host `"$EsxHostName`" or cluster `"$ClusterName`" failed: $($_.Exception.Message). Assuming same datacenter."
-                }
-            } else {
-                $parentDisplayName = if ($hostForRunningVmCheck.Parent -and $hostForRunningVmCheck.Parent.Name) { $hostForRunningVmCheck.Parent.Name } else { "(no cluster parent)" }
-                Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" is in vCenter inventory with no powered-on VMs and no cluster move required (parent: `"$parentDisplayName`"). Proceeding to add."
-            }
-        }
-    } else {
-        Write-LogMessage -Type DEBUG -Message "Add-HostToCluster: host `"$EsxHostName`" not in vCenter inventory before add; skipping powered-on VM check (VMs are not enumerable until the host is managed by this vCenter)."
-    }
-
-    # When the host is already managed by this vCenter, use Move-VMHost to relocate it within
-    # the vCenter hierarchy. Add-VMHost only works for externally unmanaged hosts; calling it
-    # against an already-managed host fails with "already being managed by this vSphere server".
-    $savedProgress = $ProgressPreference
-    $ProgressPreference = 'SilentlyContinue'
-    try {
-        if ($null -ne $hostForRunningVmCheck) {
-            # vSphere requires the host to be in maintenance mode before an inter-cluster relocation.
-            if ($hostForRunningVmCheck.ConnectionState -ne "Maintenance") {
-                Write-LogMessage -Type INFO -NoNewline -Message "Entering maintenance mode on host `"$EsxHostName`" before cluster move... "
-                try {
-                    Set-VMHostState -VMHost $EsxHostName -State "Maintenance" -Server $Script:vCenterName
-                    $hostStateRefresh = Get-VMHostByName -Name $EsxHostName -Server $Script:vCenterName
-                    if ($null -eq $hostStateRefresh -or $hostStateRefresh.ConnectionState -ne "Maintenance") {
-                        $actualState = if ($hostStateRefresh) { $hostStateRefresh.ConnectionState } else { "not found in vCenter" }
-                        Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                        Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" state is `"$actualState`" after maintenance mode request (expected: Maintenance). Place the host in maintenance mode manually in vCenter and re-run the deployment."
-                        throw [VcfDeploymentException]::new("Host `"$EsxHostName`" did not enter maintenance mode (state: `"$actualState`"). Place the host in maintenance mode manually in vCenter and re-run.")
-                    }
-                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
-                } catch [VcfDeploymentException] {
-                    throw
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message). To recover: place `"$EsxHostName`" in maintenance mode manually in vCenter and re-run the deployment."
-                    throw [VcfDeploymentException]::new("Failed to enter maintenance mode on host `"$EsxHostName`" before cluster move: $($_.Exception.Message)")
-                }
-            } else {
-                Write-LogMessage -Type DEBUG -Message "Host `"$EsxHostName`" is already in maintenance mode; skipping maintenance mode entry before cluster move."
-            }
-            if ($isCrossDatacenterMove) {
-                # Move-VMHost cannot relocate a host between virtual datacenters. Disconnect and
-                # remove from the source datacenter's inventory, then re-add via Add-VMHost below.
-                Write-LogMessage -Type INFO -NoNewline -Message "Disconnecting host `"$EsxHostName`" from source datacenter `"$sourceDatacenterName`"... "
-                try {
-                    Set-VMHostState -VMHost $EsxHostName -State "Disconnected" -Server $Script:vCenterName
-                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to disconnect host `"$EsxHostName`" before cross-datacenter re-add: $($_.Exception.Message)")
-                }
-                Write-LogMessage -Type INFO -NoNewline -Message "Removing host `"$EsxHostName`" from source vCenter inventory (cross-datacenter re-add)... "
-                try {
-                    Remove-VMHostFromVCenter -VMHost $EsxHostName -Server $Script:vCenterName
-                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to remove host `"$EsxHostName`" from source vCenter inventory: $($_.Exception.Message)")
-                }
-                $hostForRunningVmCheck = $null
-            } else {
-                Write-LogMessage -Type INFO -NoNewline -Message "Moving ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
-                try {
-                    Invoke-MoveVMHostToDestination -VMHost $hostForRunningVmCheck -Destination $clusterObject -Server $Script:vCenterName
-                    Write-LogMessage -Type INFO -CompletePending -Message "Done."
-                } catch [System.UnauthorizedAccessException] {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
-                } catch [System.TimeoutException] {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
-                } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter session was logged out or expired while moving host `"$EsxHostName`". Re-run the deployment to reconnect and retry.")
-                } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter connection was lost while moving host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
-                } catch [VcfDeploymentException] {
-                    throw
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message "Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Failed to move host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
-                }
-            }
-        }
-        if ($null -eq $hostForRunningVmCheck) {
-            # Host is not yet managed by this vCenter (new host, or cross-datacenter re-add after remove); use Add-VMHost.
-            Write-LogMessage -Type INFO -NoNewline -Message "Adding ESX host `"$EsxHostName`" to cluster `"$ClusterName`"... "
-            $addHostSucceeded = $false
-            $addHostAttempt = 1
-            do {
-            $errorMessage = $null
-            $task = $null
-            if ($WaitForAddHostTaskTimeoutSeconds -gt 0) {
-                try {
-                    $task = Invoke-AddVMHostToCluster -Name $EsxHostName -Credential $EsxCredential -Location $clusterObject -RunAsync -Server $Script:vCenterName
-                } catch [System.UnauthorizedAccessException] {
-                    Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
-                } catch [System.TimeoutException] {
-                    Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
-                } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-                    Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry.")
-                } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-                    Write-LogMessage -Type ERROR -Message "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
-                } catch {
-                    $errorMessage = $_.Exception.Message
-                }
-                if ($task -and -not $errorMessage) {
-                    $deadline = (Get-Date).AddSeconds($WaitForAddHostTaskTimeoutSeconds)
-                    while ((Get-Date) -lt $deadline) {
-                        $currentTask = Get-Task -Id $task.Id -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                        if ($currentTask) {
-                            $state = if ($currentTask.PSObject.Properties['State']) { $currentTask.State } else { $currentTask.Status }
-                            if ($state -eq 'Success') {
-                                $addHostSucceeded = $true
-                                break
-                            }
-                            if ($state -eq 'Error') {
-                                if ($currentTask.ExtensionData -and $currentTask.ExtensionData.Info -and $currentTask.ExtensionData.Info.Error) {
-                                    if ($currentTask.ExtensionData.Info.Error.LocalizedMessage) {
-                                        $errorMessage = $currentTask.ExtensionData.Info.Error.LocalizedMessage
-                                    } elseif ($currentTask.ExtensionData.Info.Error.Fault) {
-                                        $errorMessage = $currentTask.ExtensionData.Info.Error.Fault.ToString()
-                                    } else {
-                                        $errorMessage = "Add host task failed."
-                                    }
-                                } else {
-                                    $errorMessage = "Add host task failed."
-                                }
-                                Write-LogMessage -Type DEBUG -Message "Add-VMHost task failed (attempt $addHostAttempt): $errorMessage"
-                                break
-                            }
-                        }
-                        Start-Sleep -Seconds $AddHostTaskPollIntervalSeconds
-                    }
-                    if (-not $addHostSucceeded -and -not $errorMessage) {
-                        $errorMessage = "Add host task did not complete within $WaitForAddHostTaskTimeoutSeconds seconds."
-                        Write-LogMessage -Type DEBUG -Message "Add-VMHost task timeout (attempt $addHostAttempt)."
-                    }
-                }
-            } else {
-                try {
-                    Invoke-AddVMHostToCluster -Name $EsxHostName -Credential $EsxCredential -Location $clusterObject -Server $Script:vCenterName
-                    $addHostSucceeded = $true
-                    break
-                } catch [System.UnauthorizedAccessException] {
-                    Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
-                } catch [System.TimeoutException] {
-                    Write-LogMessage -Type ERROR -Message "Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Cannot add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
-                } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-                    Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter session was logged out or expired while adding host `"$EsxHostName`". Do not log out the vCenter user session while Add-VMHost or other deployment tasks are in progress. Re-run the deployment to reconnect and retry.")
-                } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-                    Write-LogMessage -Type ERROR -Message "vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry."
-                    throw [VcfDeploymentException]::new("vCenter connection was lost while adding host `"$EsxHostName`" (session logged out, vCenter restart, or network issue). Re-run the deployment to reconnect and retry.")
-                } catch {
-                    $errorMessage = $_.Exception.Message
-                }
-            }
-            if ($addHostSucceeded) { break }
-            if (-not $errorMessage) { $errorMessage = "Add host failed (no task or error details)." }
-            if ($errorMessage -match "already being managed|already managed by this vSphere server") {
-                Write-LogMessage -Type DEBUG -Message "Add-VMHost threw (attempt $addHostAttempt): $errorMessage"
-                $hostInVc = Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                if ($hostInVc -and $hostInVc.Parent.Name -eq $ClusterName -and $addHostAttempt -gt 1) {
-                    Write-LogMessage -Type INFO -Message "Normal: Host `"$EsxHostName`" is in cluster `"$ClusterName`" (vCenter reported already managed on retry; likely added on previous attempt this run). Proceeding."
-                    $addHostSucceeded = $true
-                    break
-                }
-                if ($hostInVc -and $hostInVc.Parent.Name -eq $ClusterName -and $addHostAttempt -eq 1) {
-                    Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is already in cluster `"$ClusterName`" (vCenter reported already managed). Skipping host add (idempotent)."
-                    $addHostSucceeded = $true
-                    break
-                }
-                $otherCluster = if ($hostInVc) { $hostInVc.Parent.Name } else { "another cluster" }
-                Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" is already managed by vCenter `"$Script:vCenterName`" (in cluster: `"$otherCluster`"). Remove the host from that cluster in vCenter, or remove it from vCenter, then re-run the deployment."
-                throw [VcfDeploymentException]::new("Host `"$EsxHostName`" is already managed by vCenter `"$Script:vCenterName`" (in cluster: `"$otherCluster`"). Remove the host from that cluster in vCenter, or remove it from vCenter, then re-run the deployment.")
-            }
-            if ($errorMessage -match "vSAN cluster UUID mismatch|vSAN host cannot be moved to the destination cluster") {
-                Write-LogMessage -Type ERROR -Message "Host `"$EsxHostName`" belongs to a different vSAN cluster (vSAN cluster UUID mismatch). Remove the host from the other vSAN cluster in vCenter, or remove it from vCenter, then re-run the deployment. Moving a vSAN host between clusters requires removing it first."
-                throw [VcfDeploymentException]::new("Host `"$EsxHostName`" belongs to a different vSAN cluster (vSAN cluster UUID mismatch). Remove the host from the other vSAN cluster in vCenter, or remove it from vCenter, then re-run the deployment. Moving a vSAN host between clusters requires removing it first.")
-            }
-            if ($errorMessage -match "already exists|current state of the object|did not complete within") {
-                Write-LogMessage -Type DEBUG -Message "Add-VMHost threw (attempt $addHostAttempt): $errorMessage"
-                $hostNowInCluster = $clusterObject | Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                if ($hostNowInCluster) {
-                    Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in cluster `"$ClusterName`" (add completed despite error; host may still be connecting). Proceeding."
-                    $addHostSucceeded = $true
-                    break
-                }
-                if ($addHostAttempt -lt $AddHostRetryCount) {
-                    Write-LogMessage -Type WARNING -Message "Add-VMHost failed (attempt $addHostAttempt of $AddHostRetryCount). Error: $errorMessage. Waiting $HostAppearanceRecheckDelaySeconds seconds to recheck cluster, then retry."
-                    Start-Sleep -Seconds $HostAppearanceRecheckDelaySeconds
-                    $hostNowInCluster = $clusterObject | Get-VMHost -Name $EsxHostName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                    if ($hostNowInCluster) {
-                        Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is in cluster `"$ClusterName`" after recheck (add completed on first attempt; host appeared in inventory). Proceeding."
-                        $addHostSucceeded = $true
-                        break
-                    }
-                    Write-LogMessage -Type WARNING -Message "Host not in cluster after recheck. Waiting $AddHostRetryDelaySeconds seconds before retry."
-                    Start-Sleep -Seconds $AddHostRetryDelaySeconds
-                    $addHostAttempt++
-                    continue
-                }
-                Write-LogMessage -Type ERROR -Message "Add-VMHost failed after $AddHostRetryCount attempt(s). If the host is in another cluster, remove it from vCenter and re-run. Otherwise check vCenter logs and re-run."
-                throw [VcfDeploymentException]::new("Add-VMHost failed after $AddHostRetryCount attempt(s). If the host is in another cluster, remove it from vCenter and re-run. Otherwise check vCenter logs and re-run.")
-            }
-            if ($errorMessage -match "session|logged out|expired|InvalidLogin|Authentication failed") {
-                Write-LogMessage -Type ERROR -Message "The vCenter session may have been logged out during the operation. Do not log out the vCenter user session while deployment tasks are in progress. Re-run the deployment to reconnect."
-                throw [VcfDeploymentException]::new("The vCenter session may have been logged out during the operation. Do not log out the vCenter user session while deployment tasks are in progress. Re-run the deployment to reconnect.")
-            }
-            Write-LogMessage -Type ERROR -Message "Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage"
-            throw [VcfDeploymentException]::new("Failed to add host `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`": $errorMessage")
-        } while ($addHostAttempt -le $AddHostRetryCount -and -not $addHostSucceeded)
-        }
-    } finally {
-        $ProgressPreference = $savedProgress
-    }
-
-    # Verify that the host was successfully added or moved to the target cluster.
-    # Move-VMHost is a synchronous inventory operation; Add-VMHost is async and may need a
-    # settling period before the host state stabilises. Only sleep for the Add path.
-    if ($null -eq $hostForRunningVmCheck) {
-        Start-Sleep $HostStateChangeDelaySeconds
-    }
-    $connectionAfterAdd = Test-VcenterConnection
-    if (-not $connectionAfterAdd.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "vCenter session is no longer valid after host add/move (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added."
-        throw [VcfDeploymentException]::new("vCenter session is no longer valid after host add/move (session may have been logged out while the task was in progress): $($connectionAfterAdd.ErrorMessage). Re-run the deployment to reconnect and verify the host was added.")
-    }
-    try {
-        $verifyHost = Get-VMHostByName -Name $EsxHostName -Server $Script:vCenterName
-        if (-not $verifyHost) {
-            throw [VcfDeploymentException]::new("Host `"$EsxHostName`" was not found in vCenter `"$Script:vCenterName`" after the add/move operation. Re-run the deployment to verify the operation succeeded.")
-        }
-    } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-        Write-LogMessage -Type ERROR -Message "vCenter session was logged out or expired. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
-        throw [VcfDeploymentException]::new("vCenter session was logged out or expired. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added.")
-    } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-        Write-LogMessage -Type ERROR -Message "vCenter connection was lost. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added."
-        throw [VcfDeploymentException]::new("vCenter connection was lost. Re-run the deployment to reconnect and verify host `"$EsxHostName`" was added.")
-    } catch [VcfDeploymentException] {
-        throw  # already logged and typed — propagate without re-wrapping
-    } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to verify host `"$EsxHostName`" in vCenter `"$Script:vCenterName`" : $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to verify host `"$EsxHostName`" in vCenter `"$Script:vCenterName`" : $($_.Exception.Message)")
-    }
-
-    # Check if host is in the correct cluster.
-    if ($verifyHost.Parent.Name -ne $ClusterName) {
-        Write-LogMessage -Type ERROR -Message "Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`". Host is in cluster: `"$($verifyHost.Parent.Name)`""
-        throw [VcfDeploymentException]::new("Failed to add `"$EsxHostName`" to cluster `"$ClusterName`" in vCenter `"$Script:vCenterName`". Host is in cluster: `"$($verifyHost.Parent.Name)`"")
-    }
-
-    # vSAN/vSAN witness VMkernel traffic is ensured after Set-VirtualDistributedSwitch (once mgmt vmk0 is on VDS). See post-VDS step in main deployment.
-
-    # Set host to Connected: for the Move path this exits maintenance mode (ConnectionState = "Maintenance"
-    # after the cluster relocation); for the Add path this handles a newly added host coming up Disconnected.
-    if ($verifyHost.ConnectionState -ne "Connected") {
-        Write-LogMessage -Type INFO -NoNewline -Message "Setting host `"$EsxHostName`" to connected state (current state: `"$($verifyHost.ConnectionState)`")... "
         try {
-            Set-VMHostState -VMHost $EsxHostName -State "Connected" -Server $Script:vCenterName
-            Write-LogMessage -Type INFO -CompletePending -Message "Set"
+            $clusterObject = Get-ClusterObjectByName -ClusterName $ClusterName -Server $Script:vCenterName
         } catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authorization): $($_.Exception.Message)")
-        }
-        catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (timeout).")
-        }
-        catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (authentication error): $($_.Exception.Message)")
-        }
-        catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state (server connection error): $($_.Exception.Message)")
+            $err = "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } catch [System.TimeoutException] {
+            $err = "Cannot perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } catch [VMware.VimAutomation.ViCore.Types.V1.ErrorHandling.InvalidLogin] {
+            $err = "vCenter session was logged out or expired. Do not log out the vCenter user session during deployment. Re-run the deployment to reconnect."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } catch [VMware.VimAutomation.Sdk.Types.V1.ErrorHandling.VimException.ViServerConnectionException] {
+            $err = "vCenter connection was lost (session logged out, vCenter restart, or network). Re-run the deployment to reconnect."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } catch [VcfDeploymentException] {
+            throw  # already logged and typed — propagate without re-wrapping
         } catch {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Failed to set host `"$EsxHostName`" to Connected state: $($_.Exception.Message)")
+            $err = "Failed to perform Get-Cluster operation for cluster `"$ClusterName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -AppendNewLine -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
-    }
 
-        if ($null -eq $hostForRunningVmCheck) {
+        try {
+            $existingHost = Get-VMHost -Name $EsxHostName -Location $clusterObject -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        } catch {
+            $existingHost = $null
+        }
+        if ($existingHost) {
+            Write-LogMessage -Type INFO -Message "Host `"$EsxHostName`" is already in cluster `"$ClusterName`". Skipping host add."
+            return
+        }
+
+        $precheckResult = Invoke-HostRelocationPrecheck -ClusterName $ClusterName -ClusterObject $clusterObject `
+            -EsxHostName $EsxHostName -NicList $NicList -Server $Script:vCenterName
+        $isAddPath = (-not $precheckResult.HostForRunningVmCheck) -or $precheckResult.IsCrossDatacenterMove
+
+        Invoke-ManagedHostMoveOrAdd `
+            -AddHostRetryCount $AddHostRetryCount `
+            -AddHostRetryDelaySeconds $AddHostRetryDelaySeconds `
+            -AddHostTaskPollIntervalSeconds $AddHostTaskPollIntervalSeconds `
+            -ClusterName $ClusterName -ClusterObject $clusterObject `
+            -EsxCredential $EsxCredential -EsxHostName $EsxHostName `
+            -HostAppearanceRecheckDelaySeconds $HostAppearanceRecheckDelaySeconds `
+            -HostForRunningVmCheck $precheckResult.HostForRunningVmCheck `
+            -IsCrossDatacenterMove:$precheckResult.IsCrossDatacenterMove `
+            -Server $Script:vCenterName -SourceDatacenterName $precheckResult.SourceDatacenterName `
+            -WaitForAddHostTaskTimeoutSeconds $WaitForAddHostTaskTimeoutSeconds
+
+        Confirm-VMHostAddedToCluster -ClusterName $ClusterName -EsxHostName $EsxHostName `
+            -HostStateChangeDelaySeconds $HostStateChangeDelaySeconds -IsAddPath:$isAddPath `
+            -Server $Script:vCenterName
+
+        if ($isAddPath) {
             Write-LogMessage -Type INFO -CompletePending -Message "Success"
         }
     } catch {
-        if ($null -eq $hostForRunningVmCheck) {
+        if ($isAddPath) {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
         }
         if ($StoragePolicyType -eq "vSAN-ESA" -or $StoragePolicyType -eq "vSAN-OSA") {
@@ -2300,17 +3006,15 @@ function Get-ClusterId {
         - The returned ID format is "domain-cXXXX" without the "ClusterComputeResource-" prefix
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-ClusterId function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     try {
         $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
@@ -2323,17 +3027,20 @@ function Get-ClusterId {
         return $clusterId
 
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+        $err = "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+        $err = "Cannot get cluster id for `"$ClusterName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get cluster id for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to get cluster id for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)")
+        $err = "Failed to get cluster id for `"$ClusterName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 }
 function Get-VcenterSupervisorCount {
@@ -2369,6 +3076,7 @@ function Get-VcenterSupervisorCount {
     #>
 
     [CmdletBinding()]
+    [OutputType([Int])]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$IncludeDetails
     )
@@ -2377,8 +3085,9 @@ function Get-VcenterSupervisorCount {
 
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter. Connect first (e.g. Connect-Vcenter), then run Get-VcenterSupervisorCount.")
+        $err = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     try {
@@ -2388,7 +3097,7 @@ function Get-VcenterSupervisorCount {
         $result = [PSCustomObject]@{ Count = $count }
 
         if ($IncludeDetails -and $count -gt 0) {
-            $clusterIds = @($softwareClusters | ForEach-Object { $_.Cluster })
+            $clusterIds = @($softwareClusters | Select-Object -ExpandProperty Cluster)
             $clusterNames = [System.Collections.Generic.List[String]]::new()
             foreach ($clusterId in $clusterIds) {
                 $clusterObj = Get-Cluster -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.ExtensionData.MoRef.Value -eq $clusterId } | Select-Object -First 1
@@ -2406,8 +3115,9 @@ function Get-VcenterSupervisorCount {
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to list supervisors in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to get supervisor count. Check logs for details.")
+        $err = "Failed to list supervisors in vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 }
 function Get-ClusterNameFromPrefix {
@@ -2434,6 +3144,8 @@ function Get-ClusterNameFromPrefix {
         # Returns: "cl0-site1".
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterNamePrefix,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite
@@ -2465,6 +3177,8 @@ function Get-DatastoreNameFromPrefix {
         # Returns: "datastore-site1".
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreNamePrefix,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite
@@ -2496,9 +3210,11 @@ function Get-VdsNameFromPrefix {
         # Returns: "VDS-site1".
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsNamePrefix,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VdsNamePrefix
     )
 
     return "$VdsNamePrefix-$EdgeSite"
@@ -2529,9 +3245,11 @@ function Get-SupervisorNameFromPrefix {
         # Returns: "supervisor-OSA"
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorNamePrefix,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorNamePrefix
     )
 
     return "$SupervisorNamePrefix-$EdgeSite"
@@ -2565,36 +3283,196 @@ function Get-PortGroupId {
         - Returns the ExtensionData.Key property which is the unique identifier used by vSphere APIs
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PortGroupName
     )
     Write-LogMessage -Type DEBUG -Message "Entered Get-PortGroupId function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     try {
-        # Get VDS Port group ID from name.
 
         $pgObject = Get-VDPortgroup -Name $PortGroupName -Server $Script:vCenterName -WarningAction SilentlyContinue -ErrorAction Stop
         $pgId = $pgObject.ExtensionData.Key
         return $pgId
 
     } catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+        $err = "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+        $err = "Cannot get port group id for `"$PortGroupName`" on `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     } catch [VcfDeploymentException] {
         throw  # already logged and typed — propagate without re-wrapping
     } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get port group id for `"$PortGroupName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to get port group id for `"$PortGroupName`" on `"$Script:vCenterName`": $($_.Exception.Message)")
+        $err = "Failed to get port group id for `"$PortGroupName`" on `"$Script:vCenterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+}
+function Invoke-DatastoreCreationAndWait {
+
+    <#
+        .SYNOPSIS
+        Creates a VMFS datastore on an ESX host and waits for it to reach Available state.
+
+        .DESCRIPTION
+        Calls New-Datastore, then polls until the datastore state is Available or the wait
+        timeout expires. Throws VcfDeploymentException on creation failure, auth error,
+        timeout, or any other error.
+
+        .PARAMETER CheckInterval
+        Seconds between availability polls. Default is 5.
+
+        .PARAMETER DatastoreName
+        Name of the datastore to create.
+
+        .PARAMETER DiskCanonicalName
+        Canonical name of the disk device (e.g. "naa:xxxxx").
+
+        .PARAMETER EsxHost
+        FQDN or name of the ESX host on which to create the datastore.
+
+        .PARAMETER TotalWaitTime
+        Maximum seconds to wait for Available state. Default is 120.
+
+        .EXAMPLE
+        Invoke-DatastoreCreationAndWait -DatastoreName "ds0" -DiskCanonicalName "naa:abc" -EsxHost "esx01.example.com" -CheckInterval 5 -TotalWaitTime 120
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [Int]::MaxValue)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DiskCanonicalName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHost,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [Int]::MaxValue)] [Int]$TotalWaitTime = 120
+    )
+
+    try {
+        Write-LogMessage -Type INFO -NoNewline -Message "Creating the new datastore `"$DatastoreName`" on ESX host `"$EsxHost`"... "
+        New-Datastore -VMHost $EsxHost -Name $DatastoreName -Path $DiskCanonicalName -Vmfs -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+
+        $elapsedTime = 0
+        $maxChecks = $TotalWaitTime / $CheckInterval
+        $currentCheck = 0
+        $datastoreReady = $false
+
+        do {
+            $currentCheck++
+            $datastoreState = (Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue).State
+
+            if ($datastoreState -eq 'Available') {
+                Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
+                $datastoreReady = $true
+                break
+            } else {
+                $statusMessage = "Check $currentCheck of $maxChecks - State: $datastoreState"
+                $currentStatus = "Elapsed: $elapsedTime seconds"
+                Write-Progress -Activity "Waiting for Datastore to become Available" -Status $statusMessage -CurrentOperation $currentStatus
+                Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Waiting for datastore `"$DatastoreName`" to settle into a connected state... $elapsedTime seconds elapsed)"
+                Start-Sleep $CheckInterval
+                $elapsedTime += $CheckInterval
+            }
+        } while ($elapsedTime -lt $TotalWaitTime)
+
+        Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
+
+        if (-not $datastoreReady) {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
+            throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" did not reach a ready state within the timeout period.")
+        }
+        Write-LogMessage -Type INFO -CompletePending -Message " Success"
+    } catch [System.UnauthorizedAccessException] {
+        Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
+        throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`" (authorization): $($_.Exception.Message)")
+    } catch [System.TimeoutException] {
+        Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
+        throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" on `"$Script:vCenterName`" timed out.")
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
+    } catch {
+        Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+        throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`": $($_.Exception.Message)")
+    }
+}
+function Invoke-DatastoreTagAssignment {
+
+    <#
+        .SYNOPSIS
+        Assigns a tag to a datastore, with cardinality-violation guidance on error.
+
+        .DESCRIPTION
+        Retrieves the named datastore from vCenter, checks whether the tag is already
+        assigned, and assigns it if not. Throws VcfDeploymentException on any error,
+        including cardinality violations (with actionable guidance logged).
+
+        .PARAMETER DatastoreAlreadyExisted
+        When $true the "already existed" variant of the success message is logged.
+
+        .PARAMETER DatastoreName
+        Name of the datastore to tag.
+
+        .PARAMETER TagName
+        Tag to assign to the datastore.
+
+        .EXAMPLE
+        Invoke-DatastoreTagAssignment -DatastoreAlreadyExisted $false -DatastoreName "ds0" -TagName "supervisor-OSA"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [Bool]$DatastoreAlreadyExisted,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName
+    )
+
+    try {
+        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
+    } catch {
+        $err = "Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    try {
+        $existingTagAssignment = Get-TagAssignment -Entity $datastoreObject -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Tag.Name -eq $TagName }
+        if ($existingTagAssignment) {
+            Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" already has tag `"$TagName`" assigned. Skipping tag assignment."
+        } else {
+            New-TagAssignment -Tag $TagName -Entity $datastoreObject -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+            if ($DatastoreAlreadyExisted) {
+                Write-LogMessage -Type INFO -Message "Successfully tagged existing datastore `"$DatastoreName`" with tag `"$TagName`"."
+            } else {
+                Write-LogMessage -Type INFO -Message "Successfully tagged datastore `"$DatastoreName`" with tag `"$TagName`"."
+            }
+        }
+    } catch {
+        $errorMessage = $_.Exception.Message
+        if ($errorMessage -match "cardinality violation") {
+            Write-LogMessage -Type ERROR -Message "Cannot assign tag `"$TagName`" to datastore `"$DatastoreName`" due to a cardinality violation."
+            Write-LogMessage -Type ERROR -Message "This error occurs when:"
+            Write-LogMessage -Type ERROR -Message "  - The tag has a `"single`" cardinality and is already assigned to another datastore"
+            Write-LogMessage -Type ERROR -Message "  - The tag has a `"many`" cardinality but has reached its maximum assignment limit"
+            Write-LogMessage -Type INFO -Message ""
+            Write-LogMessage -Type ERROR -Message "SOLUTION:"
+            Write-LogMessage -Type ERROR -Message "  1. Check the tag category cardinality in vCenter: Menu > Tags & Custom Attributes > Tags"
+            Write-LogMessage -Type ERROR -Message "  2. If the tag is `"single`" cardinality, remove it from the other datastore first"
+            Write-LogMessage -Type ERROR -Message "  3. If the tag is `"many`" cardinality, check if it has reached its limit"
+            $err = "  4. Consider using a different tag or modifying the tag category cardinality."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } else {
+            $err = "Error tagging datastore `"$DatastoreName`" with tag `"$TagName`": $errorMessage"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
     }
 }
 function Set-NewDatastore {
@@ -2660,22 +3538,19 @@ function Set-NewDatastore {
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$CheckInterval=5,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [Int]::MaxValue)] [Int]$CheckInterval = 5,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DiskCanonicalName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHost,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, [int]::MaxValue)] [Int]$TotalWaitTime=120
+        [Parameter(Mandatory = $false)] [ValidateRange(1, [Int]::MaxValue)] [Int]$TotalWaitTime = 120
     )
 
     Write-LogMessage -Type DEBUG -Message "Entered Set-NewDatastore function..."
 
-    $connectionTest = Test-VcenterConnection
-    if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-    }
+    Assert-VcenterConnected
 
     $existingDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
     $datastoreFoundOnVcenter = ($existingDatastore -and $existingDatastore.State -eq 'Available')
@@ -2700,22 +3575,26 @@ function Set-NewDatastore {
             }
         }
         catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $($_.Exception.Message)"
-            throw [VcfDeploymentException]::new("Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $($_.Exception.Message)")
+            $err = "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to authorization issues: $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
         catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -Message "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $($_.Exception.Message)"
-            throw [VcfDeploymentException]::new("Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $($_.Exception.Message)")
+            $err = "Cannot access datastore `"$DatastoreName`" on ESX host `"$EsxHost`" due to network/timeout issues: $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         } catch [VcfDeploymentException] {
             throw  # already logged and typed — propagate without re-wrapping
         } catch {
-            Write-LogMessage -Type ERROR -Message "Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $($_.Exception.Message)"
-            throw [VcfDeploymentException]::new("Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $($_.Exception.Message)")
+            $err = "Error checking datastore `"$DatastoreName`" on ESX host `"$EsxHost`": $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
         if ($conflictingDatastore) {
-            Write-LogMessage -Type ERROR -Message "The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:vCenterName`". Exiting."
-            throw [VcfDeploymentException]::new("The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:vCenterName`". Exiting.")
+            $err = "The datastore `"$DatastoreName`" name is already being used by another server on vCenter `"$Script:vCenterName`". Exiting."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 
@@ -2726,99 +3605,9 @@ function Set-NewDatastore {
         # Still need to tag the existing datastore, so continue to tagging section.
 
     } else {
-        try {
-            Write-LogMessage -Type INFO -NoNewline -Message "Creating the new datastore `"$DatastoreName`" on ESX host `"$EsxHost`"... "
-            New-Datastore -VMHost $EsxHost -Name $DatastoreName -Path $DiskCanonicalName -Vmfs -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-
-            $elapsedTime = 0
-            $maxChecks = $TotalWaitTime / $CheckInterval
-            $currentCheck = 0
-            $datastoreReady = $false
-
-            do {
-                $currentCheck++
-                $datastoreState = (Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue).State
-
-                if ($datastoreState -eq 'Available') {
-                    Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
-                    $datastoreReady = $true
-                    break
-                } else {
-                    $statusMessage = "Check $currentCheck of $maxChecks - State: $datastoreState"
-                    $currentStatus = "Elapsed: $elapsedTime seconds"
-                    Write-Progress -Activity "Waiting for Datastore to become Available" -Status $statusMessage -CurrentOperation $currentStatus
-                    Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Waiting for datastore `"$DatastoreName`" to settle into a connected state... $elapsedTime seconds elapsed)"
-                    Start-Sleep $CheckInterval
-                    $elapsedTime += $CheckInterval
-                }
-            } while ($elapsedTime -lt $TotalWaitTime)
-
-            # Clear progress indicator and check final status.
-
-            Write-Progress -Activity "Waiting for Datastore to become Available" -Status "Complete" -Completed
-
-            if (-not $datastoreReady) {
-                Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-                throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" did not reach a ready state within the timeout period.")
-            }
-            Write-LogMessage -Type INFO -CompletePending -Message " Success"
-        } catch [System.UnauthorizedAccessException] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed (authorization)."
-            throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`" (authorization): $($_.Exception.Message)")
-        }
-        catch [System.TimeoutException] {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed (timeout)."
-            throw [VcfDeploymentException]::new("Datastore `"$DatastoreName`" on `"$Script:vCenterName`" timed out.")
-        } catch {
-            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-            throw [VcfDeploymentException]::new("Datastore wait failed for `"$DatastoreName`": $($_.Exception.Message)")
-        }
+        Invoke-DatastoreCreationAndWait -CheckInterval $CheckInterval -DatastoreName $DatastoreName -DiskCanonicalName $DiskCanonicalName -EsxHost $EsxHost -TotalWaitTime $TotalWaitTime
     }
-    try {
-        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-    } catch [VcfDeploymentException] {
-        throw  # already logged and typed — propagate without re-wrapping
-    } catch {
-        Write-LogMessage -Type ERROR -Message "Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to get datastore `"$DatastoreName`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
-    }
-    # Tag the datastore.
-    try {
-        # Check if the tag is already assigned to this datastore.
-        $existingTagAssignment = Get-TagAssignment -Entity $datastoreObject -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Tag.Name -eq $TagName }
-        if ($existingTagAssignment) {
-            Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" already has tag `"$TagName`" assigned. Skipping tag assignment."
-        } else {
-            # Tag is not assigned, try to assign it.
-            New-TagAssignment -Tag $TagName -Entity $datastoreObject -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-            if ($datastoreAlreadyExisted) {
-                Write-LogMessage -Type INFO -Message "Successfully tagged existing datastore `"$DatastoreName`" with tag `"$TagName`"."
-            } else {
-                Write-LogMessage -Type INFO -Message "Successfully tagged datastore `"$DatastoreName`" with tag `"$TagName`"."
-            }
-        }
-    } catch {
-        $errorMessage = $_.Exception.Message
-
-        # Check for cardinality violation errors.
-        if ($errorMessage -match "cardinality violation") {
-            Write-LogMessage -Type ERROR -Message "Cannot assign tag `"$TagName`" to datastore `"$DatastoreName`" due to a cardinality violation."
-            Write-LogMessage -Type ERROR -Message "This error occurs when:"
-            Write-LogMessage -Type ERROR -Message "  - The tag has a `"single`" cardinality and is already assigned to another datastore"
-            Write-LogMessage -Type ERROR -Message "  - The tag has a `"many`" cardinality but has reached its maximum assignment limit"
-            Write-Host ""
-            Write-LogMessage -Type ERROR -Message "SOLUTION:"
-            Write-LogMessage -Type ERROR -Message "  1. Check the tag category cardinality in vCenter: Menu > Tags & Custom Attributes > Tags"
-            Write-LogMessage -Type ERROR -Message "  2. If the tag is `"single`" cardinality, remove it from the other datastore first"
-            Write-LogMessage -Type ERROR -Message "  3. If the tag is `"many`" cardinality, check if it has reached its limit"
-            Write-LogMessage -Type ERROR -Message "  4. Consider using a different tag or modifying the tag category cardinality."
-            throw [VcfDeploymentException]::new("  4. Consider using a different tag or modifying the tag category cardinality.")
-        }
-        else {
-            Write-LogMessage -Type ERROR -Message "Error tagging datastore `"$DatastoreName`" with tag `"$TagName`": $errorMessage"
-            throw [VcfDeploymentException]::new("Error tagging datastore `"$DatastoreName`" with tag `"$TagName`": $errorMessage")
-        }
-    }
+    Invoke-DatastoreTagAssignment -DatastoreAlreadyExisted $datastoreAlreadyExisted -DatastoreName $DatastoreName -TagName $TagName
     return $datastoreAlreadyExisted
 }
 #vSAN ESA Storage Pool Helper Functions
@@ -2834,6 +3623,7 @@ $Script:VsanOsaEligibleDisksDelaySeconds = 15
 $Script:HaNetworkStabilizationDelaySeconds = 10
 $Script:HaPostVsanStabilizationDelaySeconds = 30
 function Group-DisksByHost {
+
     <#
         .SYNOPSIS
         Groups an array of disk objects by their host name.
@@ -2852,13 +3642,13 @@ function Group-DisksByHost {
         $disksByHost = Group-DisksByHost -Disks $selectedDisks
         foreach ($hostName in $disksByHost.Keys) {
             $hostDisks = $disksByHost[$hostName]
-            # Process disks for this host
         }
     #>
 
     [CmdletBinding()]
+    [OutputType([Hashtable])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$Disks
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$Disks
     )
 
     $disksByHost = @{}
@@ -2873,6 +3663,7 @@ function Group-DisksByHost {
     return $disksByHost
 }
 function Get-VsanDatastoreForCluster {
+
     <#
         .SYNOPSIS
         Finds vSAN datastores accessible by hosts in a cluster.
@@ -2893,10 +3684,10 @@ function Get-VsanDatastoreForCluster {
         $vsanDatastores = Get-VsanDatastoreForCluster -ClusterHostIds $clusterHostIds
     #>
 
-    [OutputType([System.Object[]])]
     [CmdletBinding()]
+    [OutputType([System.Object[]])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClusterHostIds
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$ClusterHostIds
     )
 
     # Normalize cluster host IDs by removing "HostSystem-" prefix if present for comparison.
@@ -2912,7 +3703,6 @@ function Get-VsanDatastoreForCluster {
         if ($_.Type -ne "vsan") {
             return $false
         }
-        # Check if datastore is accessible by any host in the cluster.
         if ($_.ExtensionData.Host) {
             $hostIds = $_.ExtensionData.Host | Select-Object -ExpandProperty Key | Select-Object -ExpandProperty Value
             if ($hostIds) {
@@ -2928,6 +3718,90 @@ function Get-VsanDatastoreForCluster {
         return @($vsanDatastores)
     }
     return @()
+}
+function Invoke-AsyncWaitAndCollect {
+
+    <#
+    .SYNOPSIS
+        Monitors a running async PowerShell operation and collects its results.
+    .DESCRIPTION
+        Polls the IAsyncResult until the operation completes or times out, writing progress output.
+        On timeout: stops and disposes the PowerShell instance and runspace, then returns an error
+        result. On completion: calls EndInvoke, disposes resources, and returns a success result.
+    .PARAMETER ActivityName
+        Display name shown in Write-Progress and error log messages.
+    .PARAMETER AsyncResult
+        IAsyncResult handle from BeginInvoke.
+    .PARAMETER CheckInterval
+        Seconds to sleep between progress polls.
+    .PARAMETER MinTimeoutSeconds
+        Minimum remaining timeout when adjusting for overall elapsed time.
+    .PARAMETER OperationStartTime
+        DateTime when this specific operation started, used for elapsed-time calculation.
+    .PARAMETER OverallStartTime
+        Optional overall start time; when supplied, the timeout is adjusted by overall elapsed time.
+    .PARAMETER PsInstance
+        PowerShell instance running the operation.
+    .PARAMETER Runspace
+        Runspace hosting the PowerShell instance.
+    .PARAMETER TimeoutSeconds
+        Maximum seconds to wait for the operation.
+    .EXAMPLE
+        $result = Invoke-AsyncWaitAndCollect -ActivityName "Disk scan" -AsyncResult $ar -CheckInterval 5 -MinTimeoutSeconds 30 -OperationStartTime (Get-Date) -PsInstance $ps -Runspace $rs -TimeoutSeconds 300
+    .NOTES
+        Called by Invoke-AsyncPowerShellOperation. Always disposes PsInstance and Runspace.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ActivityName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$AsyncResult,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 3600)] [Int]$MinTimeoutSeconds = 30,
+        [Parameter(Mandatory = $true)] [DateTime]$OperationStartTime,
+        [Parameter(Mandatory = $false)] [Nullable[DateTime]]$OverallStartTime,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$PsInstance,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Runspace,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 86400)] [Int]$TimeoutSeconds = 900
+    )
+
+    while (-not $AsyncResult.IsCompleted) {
+        $operationElapsed = [Math]::Floor(((Get-Date) - $OperationStartTime).TotalSeconds)
+        $remainingTimeout = $TimeoutSeconds
+        if ($OverallStartTime) {
+            $overallElapsed = [Math]::Floor(((Get-Date) - $OverallStartTime).TotalSeconds)
+            $remainingTimeout = [Math]::Max($MinTimeoutSeconds, $TimeoutSeconds - $overallElapsed)
+        }
+        if ($operationElapsed -ge $remainingTimeout) {
+            try { $PsInstance.Stop() } catch { Write-LogMessage -Type DEBUG -Message "Suppressed when stopping runspace: $($_.Exception.Message)" }
+            finally { $PsInstance.Dispose(); $Runspace.Close(); $Runspace.Dispose() }
+            Write-Progress -Activity $ActivityName -Status "Timeout" -Completed
+            [Console]::Out.Flush()
+            $timeoutMsg = "Operation timed out after $operationElapsed seconds."
+            Write-LogMessage -Type ERROR -Message "$ActivityName - $timeoutMsg"
+            return [PSCustomObject]@{ Result = $null; Error = $timeoutMsg; Success = $false }
+        }
+        Write-Progress -Activity $ActivityName -Status "Elapsed: $operationElapsed seconds..."
+        [Console]::Out.Flush()
+        Start-Sleep -Seconds $CheckInterval
+    }
+
+    $operationResult = $null
+    $operationError  = $null
+    try {
+        $operationResult = $PsInstance.EndInvoke($AsyncResult)
+        if ($PsInstance.Streams.Error.Count -gt 0) { $operationError = $PsInstance.Streams.Error[0].Exception.Message }
+    } catch {
+        $operationError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+    }
+    finally { $PsInstance.Dispose(); $Runspace.Close(); $Runspace.Dispose() }
+
+    if ($operationError) {
+        Write-LogMessage -Type ERROR -Message "$ActivityName failed: $operationError"
+        return [PSCustomObject]@{ Result = $null; Error = $operationError; Success = $false }
+    }
+    return [PSCustomObject]@{ Result = $operationResult; Error = $null; Success = $true }
 }
 function Invoke-AsyncPowerShellOperation {
 
@@ -2995,6 +3869,7 @@ function Invoke-AsyncPowerShellOperation {
     #>
 
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ActivityName,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$CheckInterval = 5,
@@ -3025,14 +3900,13 @@ function Invoke-AsyncPowerShellOperation {
     }
     $psImport.Dispose()
 
-    $ps = [PowerShell]::Create()
-    $ps.Runspace = $runspace
-    $ps.AddScript($ScriptBlock) | Out-Null
+    $psInstance = [PowerShell]::Create()
+    $psInstance.Runspace = $runspace
+    $psInstance.AddScript($ScriptBlock) | Out-Null
 
     $operationStartTime = Get-Date
 
     try {
-        # Set variables in runspace session state.
         foreach ($varName in $Variables.Keys) {
             $runspace.SessionStateProxy.SetVariable($varName, $Variables[$varName])
         }
@@ -3048,84 +3922,95 @@ function Invoke-AsyncPowerShellOperation {
     }
 
     Write-LogMessage -Type DEBUG -Message "Starting operation `"$ActivityName`" in runspace (progress and timeout monitored) at $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
-    $asyncResult = $ps.BeginInvoke()
+    $asyncResult = $psInstance.BeginInvoke()
     Write-LogMessage -Type DEBUG -Message "Operation `"$ActivityName`" BeginInvoke() returned. IsCompleted: $($asyncResult.IsCompleted)"
 
-    # Monitor progress while operation runs.
-    while (-not $asyncResult.IsCompleted) {
-        $operationElapsed = [math]::Floor(((Get-Date) - $operationStartTime).TotalSeconds)
+    return Invoke-AsyncWaitAndCollect `
+        -ActivityName $ActivityName `
+        -AsyncResult $asyncResult `
+        -CheckInterval $CheckInterval `
+        -MinTimeoutSeconds $MinTimeoutSeconds `
+        -OperationStartTime $operationStartTime `
+        -OverallStartTime $OverallStartTime `
+        -PsInstance $psInstance `
+        -Runspace $runspace `
+        -TimeoutSeconds $TimeoutSeconds
+}
+function Get-EsaEligibleDisksFromHosts {
 
-        # Calculate timeout: use overall start time if provided, otherwise use simple timeout.
-        $remainingTimeout = $TimeoutSeconds
-        if ($OverallStartTime) {
-            $overallElapsed = [math]::Floor(((Get-Date) - $OverallStartTime).TotalSeconds)
-            $remainingTimeout = [math]::Max($MinTimeoutSeconds, $TimeoutSeconds - $overallElapsed)
+    <#
+    .SYNOPSIS
+        Retrieves vSAN ESA eligible disks from all hosts in a cluster using async + sync fallback.
+    .DESCRIPTION
+        For each host, runs Get-VsanEsaEligibleDisk asynchronously via Invoke-AsyncPowerShellOperation.
+        If the async result is empty, retries synchronously in case VMware type serialization across the
+        runspace boundary produced an empty list. Returns a generic List of all disk objects collected.
+    .PARAMETER CheckInterval
+        Seconds between async progress polls.
+    .PARAMETER ClusterName
+        Cluster display name used in log messages.
+    .PARAMETER HostsToQuery
+        Array of VMHost objects to query.
+    .PARAMETER TimeoutSeconds
+        Per-host maximum async wait time.
+    .EXAMPLE
+        $disks = Get-EsaEligibleDisksFromHosts -CheckInterval 5 -ClusterName "cl1" -HostsToQuery $hosts -TimeoutSeconds 900
+    .NOTES
+        Called by Get-VsanEsaEligibleDisksFromCluster. Uses $Script:MinHostDiskRetrievalTimeoutSeconds.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[PSObject]])]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$HostsToQuery,
+        [Parameter(Mandatory = $false)] [ValidateRange(30, 86400)] [Int]$TimeoutSeconds = 900
+    )
+
+    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
+    $overallStartTime = Get-Date
+    $activityName     = "Retrieving vSAN ESA eligible disks for cluster `"$ClusterName`""
+    foreach ($vmHost in $HostsToQuery) {
+        $hostName = $vmHost.Name
+        Write-LogMessage -Type DEBUG -Message "Retrieving vSAN ESA eligible disks from host `"$hostName`"..."
+        $result = Invoke-AsyncPowerShellOperation `
+            -ActivityName $activityName `
+            -CheckInterval $CheckInterval `
+            -MinTimeoutSeconds $Script:MinHostDiskRetrievalTimeoutSeconds `
+            -OverallStartTime $overallStartTime `
+            -ScriptBlock "Get-VsanEsaEligibleDisk -VMHost `$vmHost -ErrorAction Stop" `
+            -TimeoutSeconds $TimeoutSeconds `
+            -Variables @{ vmHost = $vmHost }
+        if (-not $result.Success) {
+            Write-LogMessage -Type WARNING -Message "Failed to retrieve vSAN ESA eligible disks from host `"$hostName`": $($result.Error). Continuing with other hosts..."
+            continue
         }
-
-        if ($operationElapsed -ge $remainingTimeout) {
+        $hostEligibleDisks = if ($null -eq $result.Result) { @() } else { @($result.Result) }
+        $addedCount = 0
+        foreach ($disk in $hostEligibleDisks) { if ($null -ne $disk) { $allEligibleDisks.Add($disk); $addedCount++ } }
+        if ($addedCount -eq 0) {
             try {
-                $ps.Stop()
+                foreach ($disk in @(Get-VsanEsaEligibleDisk -VMHost $vmHost -ErrorAction Stop)) {
+                    if ($null -ne $disk) { $allEligibleDisks.Add($disk); $addedCount++ }
+                }
+                if ($addedCount -gt 0) {
+                    Write-LogMessage -Type INFO -Message "Async returned no disks from host `"$hostName`" but synchronous Get-VsanEsaEligibleDisk found $addedCount disk(s). Using synchronous result."
+                }
             } catch {
-                Write-LogMessage -Type DEBUG -Message "Suppressed when stopping runspace: $($_.Exception.Message)"
-            }
-            finally {
-                $ps.Dispose()
-                $runspace.Close()
-                $runspace.Dispose()
-            }
-            Write-Progress -Activity $ActivityName -Status "Timeout" -Completed
-            [Console]::Out.Flush()
-            $errorMessage = "Operation timed out after $operationElapsed seconds."
-            Write-LogMessage -Type ERROR -Message "$ActivityName - $errorMessage"
-            return [PSCustomObject]@{
-                Result = $null
-                Error = $errorMessage
-                Success = $false
+                Write-LogMessage -Type DEBUG -Message "Synchronous Get-VsanEsaEligibleDisk fallback for host `"$hostName`" failed: $($_.Exception.Message)."
             }
         }
-
-        $statusMessage = "Elapsed: $operationElapsed seconds..."
-        Write-Progress -Activity $ActivityName -Status $statusMessage
-        [Console]::Out.Flush()
-        Start-Sleep -Seconds $CheckInterval
-    }
-
-    # Get results.
-    $operationResult = $null
-    $operationError = $null
-    try {
-        $operationResult = $ps.EndInvoke($asyncResult)
-        if ($ps.Streams.Error.Count -gt 0) {
-            $operationError = $ps.Streams.Error[0].Exception.Message
-        }
-    } catch {
-        # EndInvoke throws a MethodInvocationException that wraps the actual runspace error.
-        # Use InnerException when present so the logged message is the real error, not the
-        # "Exception calling EndInvoke with 1 argument(s): ..." wrapper.
-        $operationError = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
-    }
-    finally {
-        $ps.Dispose()
-        $runspace.Close()
-        $runspace.Dispose()
-    }
-
-    if ($operationError) {
-        Write-LogMessage -Type ERROR -Message "$ActivityName failed: $operationError"
-        return [PSCustomObject]@{
-            Result = $null
-            Error = $operationError
-            Success = $false
+        if ($addedCount -gt 0) {
+            Write-LogMessage -Type DEBUG -Message "Found $addedCount eligible disk(s) from host `"$hostName`"."
+        } else {
+            Write-LogMessage -Type DEBUG -Message "No eligible disks found on host `"$hostName`"."
         }
     }
-
-    return [PSCustomObject]@{
-        Result = $operationResult
-        Error = $null
-        Success = $true
-    }
+    return $allEligibleDisks
 }
 function Get-VsanEsaEligibleDisksFromCluster {
+
     <#
         .SYNOPSIS
         Retrieves all vSAN ESA eligible disks from all hosts in a cluster.
@@ -3160,92 +4045,37 @@ function Get-VsanEsaEligibleDisksFromCluster {
     #>
 
     [CmdletBinding()]
+    [OutputType([PSObject[]])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$CheckInterval = 5,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$ClusterHosts,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClusterHosts,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$TimeoutSeconds = 900
     )
 
     Write-LogMessage -Type INFO -Message "Retrieving vSAN ESA eligible disks for cluster `"$ClusterName`" from all hosts..."
 
     if (-not $ClusterHosts -or $ClusterHosts.Count -eq 0) {
-        Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-        throw [VcfDeploymentException]::new("Cluster `"$ClusterName`" does not contain any hosts.")
+        $err = "Cluster `"$ClusterName`" does not contain any hosts."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" contains $($ClusterHosts.Count) host(s): $($ClusterHosts.Name -join ', ')"
     Write-LogMessage -Type DEBUG -Message "Retrieving eligible disks from $($ClusterHosts.Count) host(s) in cluster `"$ClusterName`"."
 
-    # Collect eligible disks from all hosts. Force array so a single VMHost is still enumerated once per host.
-    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
-    $overallStartTime = Get-Date
     $hostsToQuery = @($ClusterHosts)
-
-    foreach ($vmHost in $hostsToQuery) {
-        $hostName = $vmHost.Name
-        Write-LogMessage -Type DEBUG -Message "Retrieving vSAN ESA eligible disks from host `"$hostName`"..."
-
-        $scriptBlock = "Get-VsanEsaEligibleDisk -VMHost `$vmHost -ErrorAction Stop"
-        $variables = @{ vmHost = $vmHost }
-        $activityName = "Retrieving vSAN ESA eligible disks for cluster `"$ClusterName`""
-
-        $result = Invoke-AsyncPowerShellOperation `
-            -ActivityName $activityName `
-            -CheckInterval $CheckInterval `
-            -MinTimeoutSeconds $Script:MinHostDiskRetrievalTimeoutSeconds `
-            -OverallStartTime $overallStartTime `
-            -ScriptBlock $scriptBlock `
-            -TimeoutSeconds $TimeoutSeconds `
-            -Variables $variables
-
-        if (-not $result.Success) {
-            Write-LogMessage -Type WARNING -Message "Failed to retrieve vSAN ESA eligible disks from host `"$hostName`": $($result.Error). Continuing with other hosts..."
-            continue
-        }
-
-        # Force array so runspace output of a single object is still enumerated (avoids losing disks when pipeline returns one object).
-        $hostEligibleDisks = if ($null -eq $result.Result) { @() } else { @($result.Result) }
-        $addedCount = 0
-        foreach ($disk in $hostEligibleDisks) {
-            if ($null -ne $disk) {
-                $allEligibleDisks.Add($disk)
-                $addedCount++
-            }
-        }
-
-        # If async returned no disks, retry synchronously as a safety net. VMware.VimAutomation types may not
-        # deserialize correctly across a runspace boundary even when VCF.PowerCLI is imported; this fallback
-        # ensures disk retrieval always succeeds even if the async path produces an empty result.
-        if ($addedCount -eq 0) {
-            try {
-                $syncDisks = @(Get-VsanEsaEligibleDisk -VMHost $vmHost -ErrorAction Stop)
-                foreach ($disk in $syncDisks) {
-                    if ($null -ne $disk) {
-                        $allEligibleDisks.Add($disk)
-                        $addedCount++
-                    }
-                }
-                if ($addedCount -gt 0) {
-                    Write-LogMessage -Type INFO -Message "Async returned no disks from host `"$hostName`" but synchronous Get-VsanEsaEligibleDisk found $addedCount disk(s). Using synchronous result."
-                }
-            } catch {
-                Write-LogMessage -Type DEBUG -Message "Synchronous Get-VsanEsaEligibleDisk fallback for host `"$hostName`" failed: $($_.Exception.Message)."
-                # Intentional: use async result (empty); no rethrow so we continue with other hosts.
-            }
-        }
-
-        if ($addedCount -gt 0) {
-            Write-LogMessage -Type DEBUG -Message "Found $addedCount eligible disk(s) from host `"$hostName`"."
-        } else {
-            Write-LogMessage -Type DEBUG -Message "No eligible disks found on host `"$hostName`"."
-        }
-    }
+    $allEligibleDisks = Get-EsaEligibleDisksFromHosts `
+        -CheckInterval $CheckInterval `
+        -ClusterName $ClusterName `
+        -HostsToQuery $hostsToQuery `
+        -TimeoutSeconds $TimeoutSeconds
 
     Write-Progress -Activity "Retrieving vSAN ESA eligible disks for cluster `"$ClusterName`"" -Status "Completed" -Completed
     [Console]::Out.Flush()
 
-    $eligibleDisks = $allEligibleDisks.ToArray()
+    # Use @() to safely convert; pipeline unwraps List to $null when empty.
+    $eligibleDisks = @($allEligibleDisks)
 
     if (-not $eligibleDisks -or $eligibleDisks.Count -eq 0) {
         # Check if cluster hosts already have vSAN ESA storage pool disks (disks already claimed are not "eligible").
@@ -3263,11 +4093,13 @@ function Get-VsanEsaEligibleDisksFromCluster {
         }
         if ($existingPoolDiskCountByHost.Count -gt 0) {
             $poolSummary = ($existingPoolDiskCountByHost.GetEnumerator() | ForEach-Object { "`"$($_.Key)`": $($_.Value) disk(s)" } | Sort-Object) -join "; "
-            Write-LogMessage -Type ERROR -Message "No vSAN ESA eligible (unclaimed) disks found for cluster `"$ClusterName`". Hosts already have vSAN ESA storage pool disks: $poolSummary. Eligible disks are only unclaimed disks; disks already in a storage pool are not returned by Get-VsanEsaEligibleDisk. If the vSAN datastore exists under a different name, use that name in your configuration or check vCenter for the current datastore name."
-            throw [VcfDeploymentException]::new("Deployment failed. No eligible disks; cluster hosts already have vSAN storage pool disks ($poolSummary). Check logs for details.")
+            $err = "No vSAN ESA eligible (unclaimed) disks found for cluster `"$ClusterName`". Hosts already have vSAN ESA storage pool disks: $poolSummary. Eligible disks are only unclaimed disks; disks already in a storage pool are not returned by Get-VsanEsaEligibleDisk. If the vSAN datastore exists under a different name, use that name in your configuration or check vCenter for the current datastore name."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
-        Write-LogMessage -Type ERROR -Message "No vSAN ESA eligible disks found for cluster `"$ClusterName`"."
-        throw [VcfDeploymentException]::new("No vSAN ESA eligible disks found for cluster `"$ClusterName`".")
+        $err = "No vSAN ESA eligible disks found for cluster `"$ClusterName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     Write-LogMessage -Type INFO -Message "Found $($eligibleDisks.Count) eligible disk(s) for cluster `"$ClusterName`"."
@@ -3287,6 +4119,7 @@ function Get-VsanEsaEligibleDisksFromCluster {
     return $eligibleDisks
 }
 function Get-VsanOsaDiskGroupsOnHost {
+
     <#
         .SYNOPSIS
         Returns whether a host (including a standalone witness) has vSAN OSA disk groups, using the HostVsanSystem API.
@@ -3318,9 +4151,10 @@ function Get-VsanOsaDiskGroupsOnHost {
     #>
 
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] $VMHost,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] $VMHost
     )
 
     $hasValidOsaGroup = $false
@@ -3396,6 +4230,7 @@ function Get-VsanOsaDiskGroupsOnHost {
     return [PSCustomObject]@{ HasValidOsaGroup = $hasValidOsaGroup; DiskGroupCount = $diskGroupCount }
 }
 function Test-VsanOsaDiskGroupPresentViaEsxcli {
+
     <#
         .SYNOPSIS
         Detects whether a host has vSAN disks in a disk group using esxcli vsan storage list (fallback when HostVsanSystem.config has no mappings).
@@ -3416,11 +4251,15 @@ function Test-VsanOsaDiskGroupPresentViaEsxcli {
 
         .NOTES
         A single witness may be used for many clusters; we skip creating the disk group when one already exists.
+    
+        .EXAMPLE
+        Test-VsanOsaDiskGroupPresentViaEsxcli -VMHost $vmHostObject
     #>
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] $VMHost,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] $VMHost
     )
 
     try {
@@ -3439,7 +4278,7 @@ function Test-VsanOsaDiskGroupPresentViaEsxcli {
             if ($item.PSObject.Properties['VsanDiskGroupUuid']) { $uuid = $item.VsanDiskGroupUuid }
             elseif ($item.PSObject.Properties['vsanDiskGroupUuid']) { $uuid = $item.vsanDiskGroupUuid }
             elseif ($item.PSObject.Properties['VSANDiskGroupUUID']) { $uuid = $item.VSANDiskGroupUUID }
-            if (-not [String]::IsNullOrWhiteSpace([string]$uuid)) {
+            if (-not [String]::IsNullOrWhiteSpace([String]$uuid)) {
                 return $true
             }
         }
@@ -3453,7 +4292,80 @@ function Test-VsanOsaDiskGroupPresentViaEsxcli {
     }
     return $false
 }
+function Get-OsaEligibleDisksFromHosts {
+
+    <#
+    .SYNOPSIS
+        Queries vSAN OSA eligible disks from each host in a list using HostVsanSystem.QueryDisksForVsan.
+    .DESCRIPTION
+        Iterates the provided host list, queries each host's VsanSystem via the vSphere API, and
+        returns all disks whose state is "eligible" as a PSObject array. Hosts that cannot be
+        queried (no VsanSystem, API error) emit a warning and are skipped.
+    .PARAMETER ClusterName
+        Cluster name for log messages.
+    .PARAMETER HostsToQuery
+        Array of VMHost objects to query.
+    .EXAMPLE
+        $disks = Get-OsaEligibleDisksFromHosts -ClusterName "cl1" -HostsToQuery $clusterHosts
+    .OUTPUTS
+        [PSObject[]] Array of eligible disk objects (VMHost, CanonicalName, CapacityGB, Model, IsSsd).
+    .NOTES
+        Called by Get-VsanOsaEligibleDisksFromCluster.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject[]])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$HostsToQuery
+    )
+
+    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
+    foreach ($vmHost in $HostsToQuery) {
+        $hostName = $vmHost.Name
+        Write-LogMessage -Type DEBUG -Message "Retrieving vSAN OSA eligible disks from host `"$hostName`"..."
+        try {
+            $hostView = Get-View -Id $vmHost.Id -Server $Script:vCenterName -Property ConfigManager -ErrorAction Stop
+            $vsanSystemRef = $hostView.ConfigManager.VsanSystem
+            if (-not $vsanSystemRef) { Write-LogMessage -Type WARNING -Message "Host `"$hostName`" has no VsanSystem. Skipping."; continue }
+            $vsanSystem = Get-View -Id $vsanSystemRef -Server $Script:vCenterName -ErrorAction Stop
+            $diskResults = $vsanSystem.QueryDisksForVsan($null)
+        } catch {
+            Write-LogMessage -Type WARNING -Message "Failed to retrieve vSAN OSA eligible disks from host `"$hostName`": $($_.Exception.Message). Continuing with other hosts..."
+            continue
+        }
+        if (-not $diskResults) { Write-LogMessage -Type DEBUG -Message "No disk results from host `"$hostName`"."; continue }
+        $eligibleCountThisHost = 0
+        $rawStatesThisHost = [System.Collections.Generic.List[String]]::new()
+        foreach ($resultItem in $diskResults) {
+            $state = if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) { $resultItem.state } else { "(no state)" }
+            $canonical = if ($resultItem -and $resultItem.disk -and $resultItem.disk.canonicalName) { $resultItem.disk.canonicalName } else { "(no canonical)" }
+            Write-LogMessage -Type DEBUG -Message "QueryDisksForVsan host `"$hostName`" disk $canonical state=$state."
+            if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) { $rawStatesThisHost.Add($resultItem.state) }
+            if ($null -eq $resultItem -or $resultItem.state -ne "eligible") { continue }
+            $rawDisk = $resultItem.disk
+            if (-not $rawDisk -or -not $rawDisk.canonicalName) { continue }
+            $capacityBytes = 0
+            if ($rawDisk.capacity -and $rawDisk.capacity.block -and $rawDisk.capacity.blockSize) { $capacityBytes = $rawDisk.capacity.block * $rawDisk.capacity.blockSize }
+            $capacityGB = [Math]::Round($capacityBytes / 1GB, 2)
+            $model = if ($rawDisk.model) { $rawDisk.model } else { "" }
+            if ($rawDisk.vendor -and $model) { $model = "$($rawDisk.vendor) $model" } elseif ($rawDisk.vendor) { $model = $rawDisk.vendor }
+            $isSsd = ($null -ne $rawDisk.PSObject.Properties['ssd'] -and $rawDisk.ssd -eq $true)
+            $allEligibleDisks.Add([PSCustomObject]@{ VMHost = $vmHost; CanonicalName = $rawDisk.canonicalName; CapacityGB = $capacityGB; Model = $model; IsSsd = $isSsd })
+            $eligibleCountThisHost++
+        }
+        if ($eligibleCountThisHost -gt 0) {
+            Write-LogMessage -Type DEBUG -Message "Found $eligibleCountThisHost eligible disk(s) from host `"$hostName`"."
+        } else {
+            $rawCount = if ($diskResults) { @($diskResults).Count } else { 0 }
+            $statesSummary = if ($rawStatesThisHost.Count -gt 0) { ($rawStatesThisHost | Sort-Object) -join ", " } else { "(none)" }
+            Write-LogMessage -Type DEBUG -Message "No eligible disks found on host `"$hostName`". QueryDisksForVsan returned $rawCount raw item(s); state(s): $statesSummary."
+        }
+    }
+    return @($allEligibleDisks)
+}
 function Get-VsanOsaEligibleDisksFromCluster {
+
     <#
         .SYNOPSIS
         Retrieves all vSAN OSA (Original Storage Architecture) eligible disks from all hosts in a cluster.
@@ -3484,9 +4396,10 @@ function Get-VsanOsaEligibleDisksFromCluster {
     #>
 
     [CmdletBinding()]
+    [OutputType([PSObject[]])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClusterHosts
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
 
     $hostCount = if ($ClusterHosts) { @($ClusterHosts).Count } else { 0 }
@@ -3497,105 +4410,25 @@ function Get-VsanOsaEligibleDisksFromCluster {
     }
 
     if (-not $ClusterHosts -or $hostCount -eq 0) {
-        Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-        throw [VcfDeploymentException]::new("Cluster `"$ClusterName`" does not contain any hosts.")
+        $err = "Cluster `"$ClusterName`" does not contain any hosts."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     Write-LogMessage -Type DEBUG -Message "Cluster `"$ClusterName`" contains $($ClusterHosts.Count) host(s): $($ClusterHosts.Name -join ', ')"
     Write-LogMessage -Type DEBUG -Message "Retrieving eligible disks from $($ClusterHosts.Count) host(s) in cluster `"$ClusterName`" (HostVsanSystem.QueryDisksForVsan)."
 
-    # Collect eligible disks from each host via HostVsanSystem.QueryDisksForVsan (vSphere API).
-    $allEligibleDisks = [System.Collections.Generic.List[PSObject]]::new()
     $hostsToQuery = @($ClusterHosts)
-
-    foreach ($vmHost in $hostsToQuery) {
-        $hostName = $vmHost.Name
-        Write-LogMessage -Type DEBUG -Message "Retrieving vSAN OSA eligible disks from host `"$hostName`"..."
-
-        try {
-            $hostView = Get-View -Id $vmHost.Id -Server $Script:vCenterName -Property ConfigManager -ErrorAction Stop
-            $vsanSystemRef = $hostView.ConfigManager.VsanSystem
-            if (-not $vsanSystemRef) {
-                Write-LogMessage -Type WARNING -Message "Host `"$hostName`" has no VsanSystem. Skipping."
-                continue
-            }
-            $vsanSystem = Get-View -Id $vsanSystemRef -Server $Script:vCenterName -ErrorAction Stop
-            # QueryDisksForVsan(optional canonicalName[]) returns items with .state and .disk; pass $null to query all disks.
-            $diskResults = $vsanSystem.QueryDisksForVsan($null)
-        } catch {
-            Write-LogMessage -Type WARNING -Message "Failed to retrieve vSAN OSA eligible disks from host `"$hostName`": $($_.Exception.Message). Continuing with other hosts..."
-            continue
-        }
-
-        if (-not $diskResults) {
-            Write-LogMessage -Type DEBUG -Message "No disk results from host `"$hostName`"."
-            continue
-        }
-
-        # Each result item has .state ("eligible" etc.) and .disk (capacity, canonicalName, model, ssd).
-        $eligibleCountThisHost = 0
-        $rawStatesThisHost = [System.Collections.Generic.List[String]]::new()
-        # Log every disk and its state from QueryDisksForVsan so we can see why some disks (e.g. boot) are not eligible.
-        foreach ($resultItem in $diskResults) {
-            $state = if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) { $resultItem.state } else { "(no state)" }
-            $canonical = if ($resultItem -and $resultItem.disk -and $resultItem.disk.canonicalName) { $resultItem.disk.canonicalName } else { "(no canonical)" }
-            Write-LogMessage -Type DEBUG -Message "QueryDisksForVsan host `"$hostName`" disk $canonical state=$state."
-            if ($null -ne $resultItem -and $resultItem.PSObject.Properties['state']) {
-                $rawStatesThisHost.Add($resultItem.state)
-            }
-            if ($null -eq $resultItem -or $resultItem.state -ne "eligible") {
-                continue
-            }
-            $rawDisk = $resultItem.disk
-            if (-not $rawDisk -or -not $rawDisk.canonicalName) {
-                continue
-            }
-            $capacityBytes = 0
-            if ($rawDisk.capacity -and $rawDisk.capacity.block -and $rawDisk.capacity.blockSize) {
-                $capacityBytes = $rawDisk.capacity.block * $rawDisk.capacity.blockSize
-            }
-            $capacityGB = [math]::Round($capacityBytes / 1GB, 2)
-            $model = if ($rawDisk.model) { $rawDisk.model } else { "" }
-            if ($rawDisk.vendor -and $model) {
-                $model = "$($rawDisk.vendor) $model"
-            } elseif ($rawDisk.vendor) {
-                $model = $rawDisk.vendor
-            }
-            $isSsd = $false
-            if ($null -ne $rawDisk.PSObject.Properties['ssd'] -and $rawDisk.ssd -eq $true) {
-                $isSsd = $true
-            }
-            $eligibleDiskObject = [PSCustomObject]@{
-                VMHost       = $vmHost
-                CanonicalName = $rawDisk.canonicalName
-                CapacityGB   = $capacityGB
-                Model        = $model
-                IsSsd        = $isSsd
-            }
-            $allEligibleDisks.Add($eligibleDiskObject)
-            $eligibleCountThisHost++
-        }
-        if ($eligibleCountThisHost -gt 0) {
-            Write-LogMessage -Type DEBUG -Message "Found $eligibleCountThisHost eligible disk(s) from host `"$hostName`"."
-        } else {
-            $rawCount = if ($diskResults) { @($diskResults).Count } else { 0 }
-            $statesSummary = if ($rawStatesThisHost.Count -gt 0) { ($rawStatesThisHost | Sort-Object) -join ", " } else { "(none)" }
-            Write-LogMessage -Type DEBUG -Message "No eligible disks found on host `"$hostName`". QueryDisksForVsan returned $rawCount raw item(s); state(s): $statesSummary."
-        }
-    }
-
-    $eligibleDisks = $allEligibleDisks.ToArray()
+    $eligibleDisks = @(Get-OsaEligibleDisksFromHosts -ClusterName $ClusterName -HostsToQuery $hostsToQuery)
 
     if (-not $eligibleDisks -or $eligibleDisks.Count -eq 0) {
-        $queriedHostNames = ($hostsToQuery | ForEach-Object { $_.Name }) -join ", "
-        $queriedHostIds = ($hostsToQuery | ForEach-Object { $_.Id }) -join "; "
+        $queriedHostNames = ($hostsToQuery | Select-Object -ExpandProperty Name) -join ", "
+        $queriedHostIds = ($hostsToQuery | Select-Object -ExpandProperty Id) -join "; "
         Write-LogMessage -Type DEBUG -Message "Get-VsanOsaEligibleDisksFromCluster: total eligible disks=0. Queried host(s): $queriedHostNames. Host Id(s): $queriedHostIds."
-        $errorDetail = "No vSAN OSA eligible disks found for cluster `"$ClusterName`" (queried host(s): $queriedHostNames)."
-        if ($hostsToQuery.Count -eq 1) {
-            $errorDetail += " The host may have no local disks, or disks may already be in use (e.g. in a disk group or VMFS). For a vSAN witness host, ensure it has at least one SSD for cache and at least one disk for capacity (capacity can be HDD or SSD)."
-        }
-        Write-LogMessage -Type ERROR -Message $errorDetail
-        throw $errorDetail
+        $singleHostHint = " The host may have no local disks, or disks may already be in use (e.g. in a disk group or VMFS). For a vSAN witness host, ensure it has at least one SSD for cache and at least one disk for capacity (capacity can be HDD or SSD)."
+        $err = "No vSAN OSA eligible disks found for cluster `"$ClusterName`" (queried host(s): $queriedHostNames).$(if ($hostsToQuery.Count -eq 1) { $singleHostHint })"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     Write-LogMessage -Type INFO -Message "Found $($eligibleDisks.Count) eligible disk(s) for cluster `"$ClusterName`"."
@@ -3628,14 +4461,232 @@ function Get-VsanOsaEligibleDisksFromCluster {
 
     return $eligibleDisks
 }
+function New-DiskDisplayList {
+
+    <#
+        .SYNOPSIS
+        Builds a numbered display object list from eligible disk objects.
+
+        .DESCRIPTION
+        Pure transformation — no I/O. Converts vSAN eligible disk objects into PSCustomObjects
+        with a sequential Id, VMHostName, CanonicalName, CapacityGB, Model, and the original
+        DiskObject. Used by Get-UserDiskSelection and testable without mocking any I/O.
+
+        .PARAMETER EligibleDisks
+        Array of vSAN eligible disk objects to transform.
+
+        .OUTPUTS
+        System.Collections.Generic.List[PSObject] with sequential integer Id starting at 1.
+
+        .EXAMPLE
+        $displayList = New-DiskDisplayList -EligibleDisks $eligibleDisks
+    #>
+
+    [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[PSObject]])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$EligibleDisks
+    )
+
+    $list = [System.Collections.Generic.List[PSObject]]::new()
+    $id = 1
+    foreach ($disk in $EligibleDisks) {
+        $list.Add([PSCustomObject]@{
+            Id            = $id++
+            VMHostName    = $disk.VMHost.Name
+            CanonicalName = $disk.CanonicalName
+            CapacityGB    = $disk.CapacityGB
+            Model         = $disk.Model
+            DiskObject    = $disk
+        })
+    }
+    return $list
+}
+function Show-EligibleDiskTable {
+
+    <#
+        .SYNOPSIS
+        Displays the eligible disk list as a formatted console table.
+
+        .DESCRIPTION
+        Writes a header line and a Format-Table | Out-String table to the console via Write-Host.
+        Display only — no return value.
+
+        .PARAMETER ClusterName
+        Name of the cluster, used in the header line.
+
+        .PARAMETER DiskDisplayList
+        Array of disk display objects (output of New-DiskDisplayList).
+
+        .PARAMETER StorageType
+        Storage architecture label for the header: "ESA" or "OSA".
+
+        .EXAMPLE
+        Show-EligibleDiskTable -DiskDisplayList $list -ClusterName "cl01" -StorageType "ESA"
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$DiskDisplayList,
+        [Parameter(Mandatory = $false)] [ValidateSet("ESA", "OSA")] [String]$StorageType = "ESA"
+    )
+
+    Write-Host ""
+    Write-Host "vSAN $StorageType Eligible Disks for cluster `"$ClusterName`":"
+    $tableOutput = ($DiskDisplayList | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize | Out-String).TrimEnd()
+    Write-Host $tableOutput
+    Write-Host ""
+}
+function Show-DiskSelectionSummary {
+
+    <#
+        .SYNOPSIS
+        Displays included and excluded disk tables after a deselection operation.
+
+        .DESCRIPTION
+        Writes a summary section with separate tables for included and excluded disks.
+        Display only — no return value. Called only when the user deselected at least one disk.
+
+        .PARAMETER ExcludedDisks
+        Array of disk display objects that were excluded.
+
+        .PARAMETER SelectedDisks
+        Array of disk display objects that remain selected.
+
+        .EXAMPLE
+        Show-DiskSelectionSummary -SelectedDisks $selected -ExcludedDisks $excluded
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [AllowEmptyCollection()] [Object[]]$ExcludedDisks,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [AllowEmptyCollection()] [Object[]]$SelectedDisks
+    )
+
+    Write-Host ""
+    Write-Host "Disk Selection Summary:"
+    Write-Host ""
+    Write-Host "Included Disks:"
+    if ($SelectedDisks.Count -gt 0) {
+        $SelectedDisks | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize | Out-Host
+    } else {
+        Write-Host "  (No disks included)"
+    }
+    Write-Host ""
+    Write-Host "Excluded Disks:"
+    if ($ExcludedDisks.Count -gt 0) {
+        $ExcludedDisks | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize | Out-Host
+    } else {
+        Write-Host "  (No disks excluded)"
+    }
+    Write-Host ""
+}
+function Read-DiskDeselectionInput {
+
+    <#
+        .SYNOPSIS
+        Prompts the user to optionally deselect disks from the displayed list.
+
+        .DESCRIPTION
+        Asks whether the user wants to deselect any disks. If yes, collects a comma-separated list
+        of integer IDs to exclude, validates each ID, and returns the remaining selected IDs.
+        Input collection only — no display formatting.
+
+        .PARAMETER DiskDisplayList
+        Array of disk display objects (output of New-DiskDisplayList). Used for ID range validation.
+
+        .OUTPUTS
+        PSCustomObject with:
+          SelectedDiskIds     — int[] of IDs that remain selected (1-based).
+          DisksWereDeselected — $true when the user actively removed at least one disk.
+
+        .EXAMPLE
+        $input = Read-DiskDeselectionInput -DiskDisplayList $list
+
+        .NOTES
+        Throws [RollbackSkippedException] when the user enters "C" to cancel.
+        Throws [VcfDeploymentException] when a non-numeric or out-of-range ID is entered, or
+        when all disks are deselected.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$DiskDisplayList
+    )
+
+    $selectedDiskIds = 1..$DiskDisplayList.Count
+    $deselectResponse = Read-Host "Would you like to de-select any disks? (Y/N, default: N)"
+    Write-Host ""
+
+    if ($deselectResponse -ne "Y" -and $deselectResponse -ne "y") {
+        return [PSCustomObject]@{ SelectedDiskIds = $selectedDiskIds; DisksWereDeselected = $false }
+    }
+
+    Write-Host ""
+    Write-Host "Enter the IDs of disks to de-select (comma-separated, e.g., 1,3,5) or 'C' to cancel:"
+    $deselectInput = Read-Host "Disk IDs to de-select"
+
+    if ($deselectInput -ieq "C") {
+        Write-LogMessage -Type INFO -Message "User cancelled disk selection workflow."
+        throw [RollbackSkippedException]::new()
+    }
+
+    $idsToDeselect = [System.Collections.Generic.List[Int]]::new()
+    if ($deselectInput -and $deselectInput.Trim()) {
+        foreach ($part in ($deselectInput -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+            $parsedId = 0
+            if ([Int]::TryParse($part, [Ref]$parsedId)) {
+                $idsToDeselect.Add($parsedId)
+            } else {
+                $errorMsg = "Invalid disk ID format: `"$part`". Expected numeric value."
+                Write-LogMessage -Type ERROR -Message $errorMsg
+                throw [VcfDeploymentException]::new($errorMsg)
+            }
+        }
+    }
+
+    $idsToDeselectArray = $idsToDeselect.ToArray()
+    $invalidIds = $idsToDeselectArray | Where-Object { $_ -lt 1 -or $_ -gt $DiskDisplayList.Count }
+    if ($invalidIds) {
+        $errorMsg = "Invalid disk ID(s) provided: $($invalidIds -join ', '). Valid range is 1-$($DiskDisplayList.Count)."
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
+    }
+
+    $selectedDiskIds = $selectedDiskIds | Where-Object { $idsToDeselectArray -notcontains $_ }
+    if ($selectedDiskIds.Count -eq 0) {
+        $errorMsg = "No disks selected. At least one disk must be selected."
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
+    }
+
+    Write-Host ""
+    Write-LogMessage -Type INFO -Message "User de-selected disk ID(s): $($idsToDeselectArray -join ', '). $($selectedDiskIds.Count) disk(s) remain selected."
+    return [PSCustomObject]@{ SelectedDiskIds = $selectedDiskIds; DisksWereDeselected = $true }
+}
 function Get-UserDiskSelection {
+
     <#
         .SYNOPSIS
         Displays eligible disks to the user and collects their selection.
 
         .DESCRIPTION
-        Creates display objects for eligible disks with IDs, displays them in a formatted table,
-        and allows the user to de-select specific disks. By default, all disks are selected.
+        Coordinator: builds the display list via New-DiskDisplayList, shows the eligible disk
+        table via Show-EligibleDiskTable, collects deselection input via Read-DiskDeselectionInput,
+        logs the result, optionally shows a summary via Show-DiskSelectionSummary, and returns
+        the selected and excluded disk objects.
 
         .PARAMETER ClusterName
         Name of the cluster (for display purposes).
@@ -3644,178 +4695,76 @@ function Get-UserDiskSelection {
         Array of vSAN eligible disk objects to display and select from.
 
         .PARAMETER StorageType
-        Type of vSAN storage architecture: "ESA" (Express Storage Architecture) or "OSA" (Original Storage Architecture).
-        Default is "ESA". This parameter is used in display messages to indicate the storage type.
+        Type of vSAN storage architecture: "ESA" or "OSA". Default is "ESA".
 
         .OUTPUTS
         PSCustomObject with properties:
-        - SelectedDisks: Array of disk display objects that were selected
-        - ExcludedDisks: Array of disk display objects that were excluded
-        - DisksWereDeselected: Boolean indicating if user actively deselected any disks
-        - DiskDisplayList: Array of all disk display objects with IDs
+        - SelectedDisks: Array of disk display objects that were selected.
+        - ExcludedDisks: Array of disk display objects that were excluded.
+        - DisksWereDeselected: Boolean indicating if the user actively deselected any disks.
+        - DiskDisplayList: Array of all disk display objects with IDs.
 
         .EXAMPLE
         $selection = Get-UserDiskSelection -ClusterName "MyCluster" -EligibleDisks $eligibleDisks -StorageType "ESA"
         $selectedDisks = $selection.SelectedDisks
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
     #>
 
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$EligibleDisks,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$EligibleDisks,
         [Parameter(Mandatory = $false)] [ValidateSet("ESA", "OSA")] [String]$StorageType = "ESA"
     )
 
-    # Create display objects with IDs.
-    $diskDisplayList = [System.Collections.Generic.List[PSObject]]::new()
-    $diskIdCounter = 1
+    $diskDisplayList = @(New-DiskDisplayList -EligibleDisks $EligibleDisks)
+    Show-EligibleDiskTable -DiskDisplayList $diskDisplayList -ClusterName $ClusterName -StorageType $StorageType
 
-    foreach ($disk in $EligibleDisks) {
-        $hostName = $disk.VMHost.Name
+    $inputResult    = Read-DiskDeselectionInput -DiskDisplayList $diskDisplayList
+    $selectedDiskIds     = $inputResult.SelectedDiskIds
+    $disksWereDeselected = $inputResult.DisksWereDeselected
 
-        $diskDisplayObject = [PSCustomObject]@{
-            Id = $diskIdCounter
-            VMHostName = $hostName
-            CanonicalName = $disk.CanonicalName
-            CapacityGB = $disk.CapacityGB
-            Model = $disk.Model
-            DiskObject = $disk
-        }
+    $selectedDisks = @($diskDisplayList | Where-Object { $selectedDiskIds -contains $_.Id })
+    $excludedDisks = @($diskDisplayList | Where-Object { $selectedDiskIds -notcontains $_.Id })
 
-        $diskDisplayList.Add($diskDisplayObject)
-        $diskIdCounter++
-    }
-
-    # Display all disks in a single table.
-    Write-Host ""
-    Write-Output "vSAN $StorageType Eligible Disks for cluster `"$ClusterName`":"
-    $tableOutput = $diskDisplayList | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize | Out-String
-    # Remove trailing newlines from Out-String, then write table.
-    $tableOutput = $tableOutput.TrimEnd()
-    # Table and blank line use Write-Host so interactive table renders correctly; Write-Output can introduce regression.
-    Write-Host $tableOutput
-    Write-Host ""
-
-    # By default, select all disks.
-    $selectedDiskIds = 1..$diskDisplayList.Count
-    $disksWereDeselected = $false
-
-    # Ask user if they want to de-select any disks.
-    # Remove colon from prompt message as Read-Host adds it automatically.
-    $deselectPrompt = "Would you like to de-select any disks? (Y/N, default: N)"
-    $deselectResponse = Read-Host $deselectPrompt
-    Write-Host ""
-
-    if ($deselectResponse -eq "Y" -or $deselectResponse -eq "y") {
-        Write-Host ""
-        Write-Output "Enter the IDs of disks to de-select (comma-separated, e.g., 1,3,5) or 'C' to cancel:"
-        $deselectInput = Read-Host "Disk IDs to de-select"
-
-        if ($deselectInput -eq "C" -or $deselectInput -eq "c") {
-            Write-LogMessage -Type INFO -Message "User cancelled disk selection workflow."
-            throw [RollbackSkippedException]::new()
-        }
-
-        # Parse the input and remove selected IDs from the default selection.
-        $idsToDeselect = [System.Collections.Generic.List[Int]]::new()
-        if ($deselectInput -and $deselectInput.Trim()) {
-            $inputParts = $deselectInput -split "," | ForEach-Object { $_.Trim() } | Where-Object { $_ }
-            foreach ($part in $inputParts) {
-                $parsedId = 0
-                if ([int]::TryParse($part, [ref]$parsedId)) {
-                    $idsToDeselect.Add($parsedId)
-                }
-                else {
-                    Write-LogMessage -Type ERROR -Message "Invalid disk ID format: `"$part`". Expected numeric value."
-                    throw [VcfDeploymentException]::new("Invalid disk ID format: `"$part`". Expected numeric value.")
-                }
-            }
-        }
-
-        # Validate IDs are within range.
-        $idsToDeselectArray = $idsToDeselect.ToArray()
-        $invalidIds = $idsToDeselectArray | Where-Object { $_ -lt 1 -or $_ -gt $diskDisplayList.Count }
-        if ($invalidIds) {
-            Write-LogMessage -Type ERROR -Message "Invalid disk ID(s) provided: $($invalidIds -join ', '). Valid range is 1-$($diskDisplayList.Count)."
-            throw [VcfDeploymentException]::new("Invalid disk ID(s) provided: $($invalidIds -join ', '). Valid range is 1-$($diskDisplayList.Count).")
-        }
-
-        # Remove deselected IDs from the selected list.
-        $selectedDiskIds = $selectedDiskIds | Where-Object { $idsToDeselectArray -notcontains $_ }
-
-        if ($selectedDiskIds.Count -eq 0) {
-            Write-LogMessage -Type ERROR -Message "No disks selected. At least one disk must be selected."
-            throw [VcfDeploymentException]::new("No disks selected. At least one disk must be selected.")
-        }
-
-        $disksWereDeselected = $true
-        Write-Host ""
-        Write-LogMessage -Type INFO -Message "User de-selected disk ID(s): $($idsToDeselectArray -join ', '). $($selectedDiskIds.Count) disk(s) remain selected."
-    }
-
-    # Get selected and excluded disk objects.
-    $selectedDisks = $diskDisplayList | Where-Object { $selectedDiskIds -contains $_.Id }
-    $excludedDisks = $diskDisplayList | Where-Object { $selectedDiskIds -notcontains $_.Id }
-
-    # Display summary only if disks were deselected, otherwise show simple confirmation.
     if ($disksWereDeselected) {
-        # Display summary tables for included and excluded disks.
-        Write-Host ""
-        Write-Output "Disk Selection Summary:"
-        Write-Host ""
-
-        # Display included disks table.
-        Write-Output "Included Disks:"
-        if ($selectedDisks.Count -gt 0) {
-            $selectedDisks | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize
-        } else {
-            Write-Output "  (No disks included)"
-        }
-        Write-Host ""
-
-        # Display excluded disks table.
-        Write-Output "Excluded Disks:"
-        if ($excludedDisks.Count -gt 0) {
-            $excludedDisks | Format-Table -Property Id, VMHostName, CanonicalName, CapacityGB, Model -AutoSize
-        } else {
-            Write-Output "  (No disks excluded)"
-        }
-        Write-Host ""
+        Show-DiskSelectionSummary -SelectedDisks $selectedDisks -ExcludedDisks $excludedDisks
     } else {
-        # Simple confirmation when all disks are selected.
         Write-LogMessage -Type INFO -Message "All $($diskDisplayList.Count) disk(s) will be added to vSAN $StorageType storage pools."
     }
 
-    # Log included and excluded disks to debug log.
     Write-LogMessage -Type DEBUG -Message "Included disks ($($selectedDisks.Count) total):"
     foreach ($disk in $selectedDisks) {
         Write-LogMessage -Type DEBUG -Message "  - ID $($disk.Id): Host=$($disk.VMHostName), CanonicalName=$($disk.CanonicalName), CapacityGB=$($disk.CapacityGB), Model=$($disk.Model)"
     }
-
     if ($excludedDisks.Count -gt 0) {
         Write-LogMessage -Type DEBUG -Message "Excluded disks ($($excludedDisks.Count) total):"
         foreach ($disk in $excludedDisks) {
             Write-LogMessage -Type DEBUG -Message "  - ID $($disk.Id): Host=$($disk.VMHostName), CanonicalName=$($disk.CanonicalName), CapacityGB=$($disk.CapacityGB), Model=$($disk.Model)"
         }
-    }
-    else {
+    } else {
         Write-LogMessage -Type DEBUG -Message "No disks excluded - all disks are included."
     }
 
-    # Validate that at least one disk is selected before proceeding.
     if ($selectedDisks.Count -eq 0) {
-        Write-LogMessage -Type ERROR -Message "No disks selected for vSAN $StorageType storage pool. At least one disk must be selected to create a vSAN datastore."
-        throw [VcfDeploymentException]::new("No disks selected for vSAN $StorageType storage pool. At least one disk must be selected to create a vSAN datastore.")
+        $errorMsg = "No disks selected for vSAN $StorageType storage pool. At least one disk must be selected to create a vSAN datastore."
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
     }
 
     return [PSCustomObject]@{
-        SelectedDisks = $selectedDisks
-        ExcludedDisks = $excludedDisks
+        SelectedDisks       = $selectedDisks
+        ExcludedDisks       = $excludedDisks
         DisksWereDeselected = $disksWereDeselected
-        DiskDisplayList = $diskDisplayList.ToArray()
+        DiskDisplayList     = $diskDisplayList
     }
 }
 function Add-VsanOsaDiskToDiskGroup {
+
     <#
         .SYNOPSIS
         Creates vSAN OSA disk groups on each host using the selected cache and capacity disks.
@@ -3851,12 +4800,13 @@ function Add-VsanOsaDiskToDiskGroup {
         $cacheDisk = $hostSelection.CacheDisk
         $capacityDisks = $hostSelection.CapacityDisks
         if (-not $cacheDisk) {
-            Write-LogMessage -Type ERROR -Message "No cache disk defined for host `"$hostName`"."
-            throw [VcfDeploymentException]::new("No cache disk defined for host `"$hostName`".")
+            $err = "No cache disk defined for host `"$hostName`"."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
         $capacityCanonicalNames = @()
         if ($capacityDisks -and $capacityDisks.Count -gt 0) {
-            $capacityCanonicalNames = $capacityDisks | ForEach-Object { $_.CanonicalName }
+            $capacityCanonicalNames = $capacityDisks | Select-Object -ExpandProperty CanonicalName
         }
         Write-LogMessage -Type INFO -Message "Creating vSAN OSA disk group on host `"$hostName`" (1 cache, $($capacityCanonicalNames.Count) capacity disk(s))."
 
@@ -3867,20 +4817,21 @@ function Add-VsanOsaDiskToDiskGroup {
             $operationStartTime = Get-Date
             try {
                 if ($capacityCanonicalNames.Count -eq 0) {
-                    Write-LogMessage -Type ERROR -Message "At least one capacity disk is required per host for vSAN OSA disk group on `"$hostName`"."
-                    throw [VcfDeploymentException]::new("At least one capacity disk is required per host for vSAN OSA disk group on `"$hostName`".")
+                    $err = "At least one capacity disk is required per host for vSAN OSA disk group on `"$hostName`"."
+                    Write-LogMessage -Type ERROR -Message $err
+                    throw [VcfDeploymentException]::new($err)
                 }
                 # Pass as array so cmdlet receives string[] and does not enumerate a single string as characters (avoids "Sequence contains no elements").
                 $dataDiskArray = @($capacityCanonicalNames)
                 New-VsanDiskGroup -VMHost $vmHostObject -SsdCanonicalName $cacheDisk.CanonicalName -DataDiskCanonicalName $dataDiskArray -ErrorAction Stop | Out-Null
 
                 $operationEndTime = Get-Date
-                $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
+                $operationDuration = [Math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
                 Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup completed for host `"$hostName`" after $operationDuration seconds."
                 Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA disk group on host `"$hostName`"."
             } catch {
                 $operationEndTime = Get-Date
-                $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
+                $operationDuration = [Math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
                 Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup failed for host `"$hostName`" after $operationDuration seconds."
 
                 $errMsg = $_.Exception.Message
@@ -3898,20 +4849,115 @@ function Add-VsanOsaDiskToDiskGroup {
                         break
                     }
                     default {
-                        Write-LogMessage -Type ERROR -Message "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg"
+                        $errorMsg = "Failed to create vSAN OSA disk group on host `"$hostName`": $errMsg"
+                        Write-LogMessage -Type ERROR -Message $errorMsg
                     }
                 }
-                throw [VcfDeploymentException]::new()
+                throw [VcfDeploymentException]::new($errorMsg)
             }
         } catch [VcfDeploymentException] {
             throw  # already logged and typed — propagate without re-wrapping
         } catch {
-            Write-LogMessage -Type ERROR -Message "Failed to create vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)"
-            throw [VcfDeploymentException]::new("Failed to create vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)")
+            $err = "Failed to create vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 }
+function Invoke-VsanStoragePoolDiskWithRetry {
+
+    <#
+        .SYNOPSIS
+        Calls Add-VsanStoragePoolDisk for a host with retry logic for transient invalid-state errors.
+
+        .DESCRIPTION
+        Executes Add-VsanStoragePoolDisk for the given host and disks, retrying up to
+        ClaimRetryMaxAttempts times when a transient invalid-object-state error is returned.
+        On final failure, logs the error reason (with a PowerCLI timeout hint when applicable)
+        and throws VcfDeploymentException.
+
+        .PARAMETER CanonicalNames
+        Array of disk canonical names to add to the vSAN ESA storage pool.
+
+        .PARAMETER ClaimRetryDelaySeconds
+        Delay in seconds between retry attempts. Default is 15.
+
+        .PARAMETER ClaimRetryMaxAttempts
+        Maximum number of attempts before giving up. Default is 4.
+
+        .PARAMETER HostName
+        Host display name used in log messages and error text.
+
+        .PARAMETER TimeoutSeconds
+        PowerCLI web operation timeout value used to compute a recommended timeout hint. Default is 1800.
+
+        .PARAMETER VMHostObject
+        The VMHost PowerCLI object for the target host.
+
+        .EXAMPLE
+        Invoke-VsanStoragePoolDiskWithRetry -HostName "esx01.lab" -VMHostObject $vmh -CanonicalNames @("naa.xxx") -ClaimRetryMaxAttempts 4 -ClaimRetryDelaySeconds 15 -TimeoutSeconds 1800
+
+        .NOTES
+        Called by Add-VsanEsaDiskToStoragePool for each cluster host.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$CanonicalNames,
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$ClaimRetryDelaySeconds = 15,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 12)] [Int]$ClaimRetryMaxAttempts = 4,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$TimeoutSeconds = 1800,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$VMHostObject
+    )
+
+    $operationStartTime = Get-Date
+    try {
+        $claimAttempt = 0
+        while ($claimAttempt -lt $ClaimRetryMaxAttempts) {
+            $claimAttempt++
+            try {
+                Add-VsanStoragePoolDisk -VMHost $VMHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalNames $CanonicalNames -ErrorAction Stop | Out-Null
+                break
+            } catch {
+                $rawMsg = $_.Exception.Message
+                if ($_.Exception.InnerException) {
+                    $rawMsg = "$rawMsg $($_.Exception.InnerException.Message)"
+                }
+                $isTransientState = $rawMsg -match "Operation is not valid due to the current state of the object|invalid state|InvalidState|not allowed in the current state"
+                if ($isTransientState -and $claimAttempt -lt $ClaimRetryMaxAttempts) {
+                    Write-LogMessage -Type WARNING -Message "Add-VsanStoragePoolDisk attempt $claimAttempt of $ClaimRetryMaxAttempts on host `"$HostName`" failed (transient object state). Waiting $ClaimRetryDelaySeconds seconds before retry."
+                    Start-Sleep -Seconds $ClaimRetryDelaySeconds
+                    continue
+                }
+                throw
+            }
+        }
+        $operationDuration = [Math]::Round(((Get-Date) - $operationStartTime).TotalSeconds, 2)
+        Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation completed for host `"$HostName`" after $operationDuration seconds."
+        Write-LogMessage -Type INFO -CompletePending -Message "Success"
+    } catch {
+        $operationDuration = [Math]::Round(((Get-Date) - $operationStartTime).TotalSeconds, 2)
+        Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation failed for host `"$HostName`" after $operationDuration seconds."
+        $errorReason = Get-CleanVsanErrorMessage -ErrorMessage $_.Exception.Message
+        if ($_.Exception.Message -match "request channel timed out|SendTimeout|00:05:00") {
+            $recommendedTimeout = [Math]::Min($TimeoutSeconds + $Script:PowerCliTimeoutBufferSeconds, $Script:MaxPowerCliTimeoutSeconds)
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            Write-LogMessage -Type ERROR -Message "Add disk(s) to datastore failed due to PowerCLI web operation timeout (default is 5 minutes)."
+            Write-LogMessage -Type ERROR -Message "To resolve this, increase the PowerCLI web operation timeout by running:"
+            Write-LogMessage -Type ERROR -Message "    Set-PowerCLIConfiguration -WebOperationTimeoutSeconds $recommendedTimeout -Scope Session"
+            Write-LogMessage -Type ERROR -Message "Then re-run the deployment. The recommended timeout is $recommendedTimeout seconds (based on operation timeout of $TimeoutSeconds seconds)."
+            Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$HostName`": $errorReason"
+        } else {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            $errorMsg = "Failed to add disks to vSAN ESA datastore from host `"$HostName`": $errorReason"
+            Write-LogMessage -Type ERROR -Message $errorMsg
+        }
+        throw [VcfDeploymentException]::new($errorMsg)
+    }
+}
 function Add-VsanEsaDiskToStoragePool {
+
     <#
         .SYNOPSIS
         Adds selected disks to vSAN ESA storage pools for each host.
@@ -3947,12 +4993,11 @@ function Add-VsanEsaDiskToStoragePool {
 
     foreach ($hostName in ($DisksByHost.Keys | Sort-Object)) {
         $hostDisks = $DisksByHost[$hostName]
-        # Create array of canonical names as strings.
         $canonicalNames = [System.Collections.Generic.List[String]]::new()
         foreach ($disk in $hostDisks) {
             $canonicalNames.Add($disk.CanonicalName)
         }
-        # Convert to array for cmdlet parameter.
+        # .ToArray() required: the cmdlet parameter does not accept List[T] directly.
         $canonicalNames = $canonicalNames.ToArray()
 
         Write-LogMessage -Type INFO -NoNewline -Message "Adding $($hostDisks.Count) disk(s) to vSAN ESA datastore from host `"$hostName`"... "
@@ -3971,67 +5016,84 @@ function Add-VsanEsaDiskToStoragePool {
                 }
             }
 
-            # Execute Add-VsanStoragePoolDisk with retries for transient invalid object state while vSAN/VMOM catches up with vCenter.
-            $operationStartTime = Get-Date
-            try {
-                $claimAttempt = 0
-                while ($claimAttempt -lt $ClaimRetryMaxAttempts) {
-                    $claimAttempt++
-                    try {
-                        Add-VsanStoragePoolDisk -VMHost $vmHostObject -VsanStoragePoolDiskType $Script:VsanStoragePoolDiskType -DiskCanonicalNames $canonicalNames -ErrorAction Stop | Out-Null
-                        break
-                    } catch {
-                        $rawMsg = $_.Exception.Message
-                        if ($_.Exception.InnerException) {
-                            $rawMsg = "$rawMsg $($_.Exception.InnerException.Message)"
-                        }
-                        $isTransientState = $rawMsg -match "Operation is not valid due to the current state of the object|invalid state|InvalidState|not allowed in the current state"
-                        if ($isTransientState -and $claimAttempt -lt $ClaimRetryMaxAttempts) {
-                            Write-LogMessage -Type WARNING -Message "Add-VsanStoragePoolDisk attempt $claimAttempt of $ClaimRetryMaxAttempts on host `"$hostName`" failed (transient object state). Waiting $ClaimRetryDelaySeconds seconds before retry."
-                            Start-Sleep -Seconds $ClaimRetryDelaySeconds
-                            continue
-                        }
-                        throw
-                    }
-                }
-
-                $operationEndTime = Get-Date
-                $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
-                Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation completed for host `"$hostName`" after $operationDuration seconds."
-
-                Write-LogMessage -Type INFO -CompletePending -Message "Success"
-            } catch {
-                $operationEndTime = Get-Date
-                $operationDuration = [math]::Round(($operationEndTime - $operationStartTime).TotalSeconds, 2)
-                Write-LogMessage -Type DEBUG -Message "Add-VsanStoragePoolDisk operation failed for host `"$hostName`" after $operationDuration seconds."
-
-                # Check if the error is a PowerCLI web operation timeout (default is 5 minutes).
-                $errorReason = Get-CleanVsanErrorMessage -ErrorMessage $_.Exception.Message
-                if ($_.Exception.Message -match "request channel timed out|SendTimeout|00:05:00") {
-                    $recommendedTimeout = [Math]::Min($TimeoutSeconds + $Script:PowerCliTimeoutBufferSeconds, $Script:MaxPowerCliTimeoutSeconds)
-                    Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-                    Write-LogMessage -Type ERROR -Message "Add disk(s) to datastore failed due to PowerCLI web operation timeout (default is 5 minutes)."
-                    Write-LogMessage -Type ERROR -Message "To resolve this, increase the PowerCLI web operation timeout by running:"
-                    Write-LogMessage -Type ERROR -Message "    Set-PowerCLIConfiguration -WebOperationTimeoutSeconds $recommendedTimeout -Scope Session"
-                    Write-LogMessage -Type ERROR -Message "Then re-run the deployment. The recommended timeout is $recommendedTimeout seconds (based on operation timeout of $TimeoutSeconds seconds)."
-                    Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
-                } else {
-                    Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
-                }
-                throw [VcfDeploymentException]::new()
-            }
+            Invoke-VsanStoragePoolDiskWithRetry `
+                -CanonicalNames        $canonicalNames `
+                -ClaimRetryDelaySeconds $ClaimRetryDelaySeconds `
+                -ClaimRetryMaxAttempts  $ClaimRetryMaxAttempts `
+                -HostName               $hostName `
+                -TimeoutSeconds         $TimeoutSeconds `
+                -VMHostObject           $vmHostObject
         } catch {
             if ($null -ne $Script:LogMessagePending) {
                 Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
             }
             $errorReason = Get-CleanVsanErrorMessage -ErrorMessage $_.Exception.Message
-            Write-LogMessage -Type ERROR -Message "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
-            throw [VcfDeploymentException]::new("Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason")
+            $err = "Failed to add disks to vSAN ESA datastore from host `"$hostName`": $errorReason"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 }
+function Invoke-VsanDatastoreRenameAndVerify {
+
+    <#
+    .SYNOPSIS
+        Renames a vSAN datastore and verifies the rename succeeded.
+    .DESCRIPTION
+        If the datastore name already matches DatastoreName no action is taken. Otherwise,
+        Set-Datastore is called and the result is confirmed by re-querying vCenter after a
+        brief delay. Throws VcfDeploymentException on any failure.
+    .PARAMETER DatastoreName
+        Target name for the vSAN datastore.
+    .PARAMETER VsanDatastore
+        The datastore object returned by Get-Datastore.
+    .EXAMPLE
+        Invoke-VsanDatastoreRenameAndVerify -DatastoreName "datastore-site1" -VsanDatastore $ds
+    .NOTES
+        Uses $Script:vCenterName and $Script:DatastoreRenameVerificationDelaySeconds.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$VsanDatastore
+    )
+
+    Write-LogMessage -Type DEBUG -Message "vSAN datastore found: `"$($VsanDatastore.Name)`" (Type: $($VsanDatastore.Type))"
+
+    if ($VsanDatastore.Name -ne $DatastoreName) {
+        try {
+            $VsanDatastore | Set-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction Stop | Out-Null
+
+            Start-Sleep -Seconds $Script:DatastoreRenameVerificationDelaySeconds
+            $renamedDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+            if (-not $renamedDatastore) {
+                $err = "Failed to verify vSAN datastore rename. Datastore `"$DatastoreName`" not found after rename operation."
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            }
+
+            Write-LogMessage -Type INFO -CompletePending -Message "Success"
+        } catch [VcfDeploymentException] {
+            throw
+        } catch {
+            Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
+            $err = "Failed to rename vSAN datastore from `"$($VsanDatastore.Name)`" to `"$DatastoreName`": $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+
+    $finalDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    if (-not $finalDatastore) {
+        $err = "vSAN datastore `"$DatastoreName`" not found after configuration."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    $null = $finalDatastore
+}
 function Wait-ForVsanDatastoreAndRename {
+
     <#
         .SYNOPSIS
         Waits for a vSAN datastore to appear and renames it to the specified name.
@@ -4063,7 +5125,7 @@ function Wait-ForVsanDatastoreAndRename {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(1, 60)] [Int]$CheckInterval = 5,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Array]$ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [Object[]]$ClusterHosts,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 1800)] [Int]$TimeoutSeconds = 300
     )
@@ -4082,7 +5144,7 @@ function Wait-ForVsanDatastoreAndRename {
 
     while (-not $datastoreFound) {
         $checkCount++
-        $elapsedTime = [math]::Floor(((Get-Date) - $startTime).TotalSeconds)
+        $elapsedTime = [Math]::Floor(((Get-Date) - $startTime).TotalSeconds)
         if ($elapsedTime -ge $TimeoutSeconds) {
             Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
             Write-LogMessage -Type ERROR -Message "vSAN datastore did not appear within $TimeoutSeconds seconds after $checkCount check(s)."
@@ -4101,8 +5163,9 @@ function Wait-ForVsanDatastoreAndRename {
                     }
                 }
             }
-            Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN datastore was not created within the timeout period. Check logs for details."
-            throw [VcfDeploymentException]::new()
+            $errorMsg = "Deployment failed. vSAN datastore was not created within the timeout period. Check logs for details."
+            Write-LogMessage -Type ERROR -Message $errorMsg
+            throw [VcfDeploymentException]::new($errorMsg)
         }
 
         # Look for vSAN datastores accessible by hosts in the cluster.
@@ -4115,40 +5178,8 @@ function Wait-ForVsanDatastoreAndRename {
         }
 
         if ($vsanDatastores -and $vsanDatastores.Count -gt 0) {
-            Write-LogMessage -Type DEBUG -Message "vSAN datastore found: `"$($vsanDatastores[0].Name)`" (Type: $($vsanDatastores[0].Type))"
             $vsanDatastore = $vsanDatastores | Select-Object -First 1
-
-            if ($vsanDatastore.Name -ne $DatastoreName) {
-                try {
-                    $vsanDatastore | Set-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-
-                    # Verify the rename succeeded by re-querying the datastore.
-                    Start-Sleep -Seconds $Script:DatastoreRenameVerificationDelaySeconds
-                    $renamedDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                    if (-not $renamedDatastore) {
-                        Write-LogMessage -Type ERROR -Message "Failed to verify vSAN datastore rename. Datastore `"$DatastoreName`" not found after rename operation."
-                        throw [VcfDeploymentException]::new("Deployment failed. vSAN datastore rename verification failed. Check logs for details.")
-                    }
-
-                    Write-LogMessage -Type INFO -CompletePending -Message "Success"
-                } catch [VcfDeploymentException] {
-                    throw  # already logged and typed — propagate without re-wrapping
-                } catch {
-                    Write-LogMessage -Type ERROR -CompletePending -Message " Failed."
-                    Write-LogMessage -Type ERROR -Message "Failed to rename vSAN datastore from `"$($vsanDatastore.Name)`" to `"$DatastoreName`": $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Deployment failed. vSAN datastore rename failed. Check logs for details.")
-                }
-            }
-
-            # Final verification that the datastore exists with the expected name.
-            $finalDatastore = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-            if (-not $finalDatastore) {
-                Write-LogMessage -Type ERROR -Message "vSAN datastore `"$DatastoreName`" not found after configuration."
-                throw [VcfDeploymentException]::new("Deployment failed. vSAN datastore `"$DatastoreName`" not found. Check logs for details.")
-            }
-            # Suppress output from datastore object to prevent table display.
-            $null = $finalDatastore
-
+            Invoke-VsanDatastoreRenameAndVerify -DatastoreName $DatastoreName -VsanDatastore $vsanDatastore
             $datastoreFound = $true
             Write-LogMessage -Type DEBUG -Message "vSAN datastore `"$DatastoreName`" is available."
             break
@@ -4164,6 +5195,7 @@ function Wait-ForVsanDatastoreAndRename {
     [Console]::Out.Flush()
 }
 function Get-CleanVsanErrorMessage {
+
     <#
         .SYNOPSIS
         Extracts a concise reason from vSAN/API error messages for user-facing output.
@@ -4180,9 +5212,12 @@ function Get-CleanVsanErrorMessage {
         .NOTES
         Whitespace-only input is returned unchanged. When no pattern matches, the original message is returned.
     #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
     Param ([Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage)
 
-    if ([string]::IsNullOrWhiteSpace($ErrorMessage)) {
+    if ([String]::IsNullOrWhiteSpace($ErrorMessage)) {
         return $ErrorMessage
     }
 
@@ -4219,7 +5254,211 @@ function Get-CleanVsanErrorMessage {
         }
     }
 }
+function Resolve-VsanWitnessOsaDiskNames {
+
+    <#
+        .SYNOPSIS
+        Pre-validates that selected OSA witness disks are visible on the host and resolves canonical names to NAA format.
+
+        .DESCRIPTION
+        Verifies that the cache and capacity disks selected for an OSA witness disk group are visible on the
+        witness host via Get-ScsiLun. Resolves each disk's canonical name to the ScsiLun CanonicalName
+        (typically NAA format) so New-VsanDiskGroup receives the format the host/vSAN API expects.
+        QueryDisksForVsan may return mpx paths while New-VsanDiskGroup looks up by NAA; this resolution
+        avoids "Sequence contains no elements" errors from New-VsanDiskGroup.
+        Throws a VcfDeploymentException if any required disk is not visible on the host.
+
+        .PARAMETER CacheDisk
+        The selected cache disk object (must have a CanonicalName property).
+
+        .PARAMETER CapacityCanonicalNames
+        String array of canonical names for the capacity disk(s).
+
+        .PARAMETER VMHost
+        The witness VMHost object.
+
+        .PARAMETER VMHostName
+        The witness host name string (used for log messages and exception text).
+
+        .EXAMPLE
+        $diskNames = Resolve-VsanWitnessOsaDiskNames -CacheDisk $cacheDisk -CapacityCanonicalNames $capNames -VMHost $witnessHost -VMHostName "witness01.lab.local"
+        New-VsanDiskGroup -VMHost $witnessHost -SsdCanonicalName $diskNames.CacheNameForCmdlet -DataDiskCanonicalName $diskNames.DataDiskArray
+
+        .OUTPUTS
+        PSCustomObject with CacheNameForCmdlet (String) and DataDiskArray (String[]).
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $CacheDisk,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [String[]]$CapacityCanonicalNames,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VMHostName
+    )
+
+    $requiredCanonicalNames = @($CacheDisk.CanonicalName) + @($CapacityCanonicalNames)
+    $visibleLuns = Get-ScsiLun -VMHost $VMHost -LunType disk -ErrorAction SilentlyContinue
+    $visibleCanonicalNames = @($visibleLuns | Select-Object -ExpandProperty CanonicalName | Select-Object -Unique)
+    $visibleRuntimeNames = @($visibleLuns | ForEach-Object {
+        if ($_.PSObject.Properties['RuntimeName']) { $_.RuntimeName } else { $null }
+    } | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    $missingDisks = @($requiredCanonicalNames | Where-Object {
+        $cn = $_
+        $visibleCanonicalNames -notcontains $cn -and $visibleRuntimeNames -notcontains $cn
+    })
+    if ($missingDisks.Count -gt 0) {
+        $err = "Witness host `"$VMHostName`" cannot see one or more disks that were reported as eligible. Missing on host: $($missingDisks -join ', '). Visible disk count: $($visibleCanonicalNames.Count)."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    $cacheLun = $visibleLuns | Where-Object {
+        $_.CanonicalName -eq $CacheDisk.CanonicalName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $CacheDisk.CanonicalName)
+    } | Select-Object -First 1
+    $cacheNameForCmdlet = if ($cacheLun) { $cacheLun.CanonicalName } else { $CacheDisk.CanonicalName }
+    $capacityNamesForCmdlet = [System.Collections.Generic.List[String]]::new()
+    foreach ($capName in $CapacityCanonicalNames) {
+        $capLun = $visibleLuns | Where-Object {
+            $_.CanonicalName -eq $capName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $capName)
+        } | Select-Object -First 1
+        $capacityNamesForCmdlet.Add($(if ($capLun) { $capLun.CanonicalName } else { $capName }))
+    }
+    $dataDiskArray = @($capacityNamesForCmdlet)
+    if ($cacheNameForCmdlet -ne $CacheDisk.CanonicalName -or ($capacityNamesForCmdlet -join ',') -ne ($CapacityCanonicalNames -join ',')) {
+        Write-LogMessage -Type DEBUG -Message "Resolve-VsanWitnessOsaDiskNames: resolved disk names for New-VsanDiskGroup (cache: $cacheNameForCmdlet, capacity: $($dataDiskArray -join ', '))."
+    }
+    return [PSCustomObject]@{ CacheNameForCmdlet = $cacheNameForCmdlet; DataDiskArray = $dataDiskArray }
+}
+function Invoke-VsanOsaWitnessDiskGroupCreation {
+
+    <#
+        .SYNOPSIS
+        Creates a vSAN OSA disk group on a witness host if one does not already exist.
+
+        .DESCRIPTION
+        Handles the full OSA witness disk group creation path: checks for an existing disk group, retrieves
+        eligible disks, selects the cache disk (smallest SSD) and capacity disk(s), validates canonical
+        names via Resolve-VsanWitnessOsaDiskNames, and calls New-VsanDiskGroup.
+
+        Supports single-SSD witness appliance compatibility: the official vSAN OSA witness OVF marks only
+        one disk as SSD (T0 is boot, excluded). When one eligible SSD is found, single-disk disk group
+        creation is attempted; if the platform rejects it, a VcfDeploymentException is thrown requesting a
+        second non-boot disk.
+
+        .PARAMETER ClusterName
+        Cluster name (used for eligible disk retrieval logging).
+
+        .PARAMETER VMHost
+        The witness VMHost object.
+
+        .PARAMETER VMHostName
+        The witness host name string (used in log messages and exception text).
+
+        .EXAMPLE
+        Invoke-VsanOsaWitnessDiskGroupCreation -ClusterName "MyCluster" -VMHost $witnessHost -VMHostName "witness01.lab.local"
+
+        Ensures the OSA witness disk group exists on witness01.lab.local.
+
+        .NOTES
+        Called by Initialize-VsanWitnessDiskGroup when StoragePolicyType is vSAN-OSA.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$VMHostName
+    )
+
+    $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $VMHost -Server $Script:vCenterName
+    $hasValidOsaGroup = $witnessOsaResult.HasValidOsaGroup -or ($witnessOsaResult.DiskGroupCount -gt 0)
+    if ($witnessOsaResult.DiskGroupCount -gt 0) {
+        Write-LogMessage -Type DEBUG -Message "Witness host `"$VMHostName`" has $($witnessOsaResult.DiskGroupCount) OSA disk group(s) (HostVsanSystem.config). HasValidOsaGroup=$($witnessOsaResult.HasValidOsaGroup)."
+    }
+    if ($hasValidOsaGroup) {
+        Write-LogMessage -Type INFO -Message "Witness host `"$VMHostName`" already has a vSAN OSA disk group. Skipping auto-create."
+        return
+    }
+    $witnessHostsArray = @($VMHost)
+    Write-LogMessage -Type DEBUG -Message "Invoke-VsanOsaWitnessDiskGroupCreation: calling Get-VsanOsaEligibleDisksFromCluster for witness host `"$VMHostName`" (ClusterHosts count=$($witnessHostsArray.Count))."
+    $eligibleDisks = Get-VsanOsaEligibleDisksFromCluster -ClusterName $ClusterName -ClusterHosts $witnessHostsArray
+    Write-LogMessage -Type DEBUG -Message "Invoke-VsanOsaWitnessDiskGroupCreation: witness host returned $($eligibleDisks.Count) eligible disk(s)."
+    if (-not $eligibleDisks -or $eligibleDisks.Count -eq 0) {
+        $err = "Witness host `"$VMHostName`" has no vSAN OSA eligible disks. The boot device is typically excluded from vSAN; add at least one non-boot disk (e.g. a second virtual disk) to the witness appliance."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    $singleSsdWitness = $false
+    if ($eligibleDisks.Count -eq 1) {
+        $onlyDisk = $eligibleDisks[0]
+        if ($onlyDisk.IsSsd) {
+            $singleSsdWitness = $true
+            Write-LogMessage -Type INFO -Message "Witness has one eligible SSD; attempting single-disk OSA witness disk group (official witness appliance compatibility)."
+        } else {
+            $err = "Witness host `"$VMHostName`" has only one eligible disk (not SSD). vSAN OSA requires one SSD for cache. Add a non-boot SSD or a second disk to the witness appliance and re-run."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+    $ssds = @($eligibleDisks | Where-Object { $_.IsSsd } | Sort-Object -Property CapacityGB)
+    $nonSsds = @($eligibleDisks | Where-Object { -not $_.IsSsd })
+    if ($ssds.Count -eq 0) {
+        $err = "Witness host `"$VMHostName`" has no SSD among eligible disks. vSAN OSA requires one SSD for cache; capacity can be HDD or SSD. The boot device is typically excluded; add a non-boot SSD to the witness."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    $cacheDisk = $ssds[0]
+    $witnessOsaApiOrderStr = ($eligibleDisks | ForEach-Object { "$($_.CanonicalName)/$($_.CapacityGB)/$($_.IsSsd)" }) -join ", "
+    Write-LogMessage -Type DEBUG -Message "Invoke-VsanOsaWitnessDiskGroupCreation: witness disks (API order) CanonicalName/CapacityGB/IsSsd: $witnessOsaApiOrderStr. Chosen cache: $($cacheDisk.CanonicalName), CapacityGB=$($cacheDisk.CapacityGB)."
+    $capacityDisksList = @(if ($singleSsdWitness) { @($cacheDisk) } else { $nonSsds + ($ssds | Select-Object -Skip 1) })
+    if ($capacityDisksList.Count -eq 0 -and -not $singleSsdWitness) {
+        $err = "Witness host `"$VMHostName`" has only one eligible disk (SSD). Add a second non-boot disk to the witness appliance and re-run."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    if ([String]::IsNullOrWhiteSpace($cacheDisk.CanonicalName)) {
+        $err = "Witness host `"$VMHostName`" cache SSD disk has no valid CanonicalName."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    $capacityCanonicalNames = [string[]]@($capacityDisksList | Select-Object -ExpandProperty CanonicalName | Where-Object { -not [String]::IsNullOrWhiteSpace($_) })
+    if ($capacityCanonicalNames.Count -eq 0) {
+        $err = "Witness host `"$VMHostName`" capacity disk(s) have no valid CanonicalName."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    Write-LogMessage -Type INFO -Message "Creating vSAN OSA witness disk group on `"$VMHostName`" (cache SSD: $($cacheDisk.CanonicalName), capacity: $($capacityCanonicalNames -join ', '))."
+    $resolvedNames = Resolve-VsanWitnessOsaDiskNames -CacheDisk $cacheDisk -CapacityCanonicalNames $capacityCanonicalNames -VMHost $VMHost -VMHostName $VMHostName
+    try {
+        New-VsanDiskGroup -VMHost $VMHost -SsdCanonicalName $resolvedNames.CacheNameForCmdlet -DataDiskCanonicalName $resolvedNames.DataDiskArray -ErrorAction Stop | Out-Null
+    } catch {
+        $msg = $_.Exception.Message
+        if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
+        if ($singleSsdWitness) {
+            $errorMsg = "Deployment failed. Witness host `"$VMHostName`" has only one vSAN-eligible disk; this platform requires one distinct cache (SSD) and one distinct capacity disk. Add a second non-boot disk to the witness appliance and re-run."
+            Write-LogMessage -Type ERROR -Message $errorMsg
+            throw [VcfDeploymentException]::new($errorMsg)
+        }
+        if ($msg -match "Sequence contains no elements") {
+            $witnessOsaRecheck = Get-VsanOsaDiskGroupsOnHost -VMHost $VMHost -Server $Script:vCenterName
+            if ($witnessOsaRecheck.HasValidOsaGroup -or $witnessOsaRecheck.DiskGroupCount -gt 0) {
+                Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup failed with Sequence contains no elements; witness `"$VMHostName`" already has a vSAN OSA disk group. Treating as success."
+                return
+            }
+            $err = "New-VsanDiskGroup failed on witness `"$VMHostName`" with Sequence contains no elements. Names passed to cmdlet: cache=$($resolvedNames.CacheNameForCmdlet), capacity=$($resolvedNames.DataDiskArray -join ', '). Disks were visible via Get-ScsiLun; the failure may be due to disk state (e.g. in use) or a VCF PowerCLI lookup difference."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        throw
+    }
+    if ($singleSsdWitness) {
+        Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA witness disk group on host `"$VMHostName`" (single eligible disk; official witness appliance compatibility)."
+    } else {
+        Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA witness disk group on host `"$VMHostName`"."
+    }
+}
 function Initialize-VsanWitnessDiskGroup {
+
     <#
         .SYNOPSIS
         Ensures the vSAN witness host has a valid disk group; creates it if missing.
@@ -4251,12 +5490,15 @@ function Initialize-VsanWitnessDiskGroup {
         Detecting the correct witness type: the script reads the advanced setting VSAN.HostDeployedFromWitnessOVF on the witness host (1 = OSA witness OVA, 2 = ESA witness OVA) and validates that it matches the cluster storage policy type (vSAN-ESA vs vSAN-OSA). A mismatch causes deployment to fail with guidance to deploy the correct witness OVA. If the setting is absent, the script also checks disk layout (OSA disk group vs ESA storage pool) and fails if the witness type does not match.
         A single witness may be used for many clusters; the workflow is not always creating the storage group. When the witness already has an OSA disk group (e.g. from another cluster), creation is skipped.
         Called when vSanWitnessVmName is set. ESA witness: uses a single disk (or zero); no disk pool is added by this script. OSA witness: automatic selection (smallest SSD = cache, rest = capacity). The official vSAN OSA witness OVF configures only one vSAN data disk (T1:L0); T0 is boot. When only one eligible disk is reported, single-disk disk group is attempted; if the API rejects it, add a second non-boot disk. Ensure the witness ran OVF firstboot so HostDeployedFromWitnessOVF and vsanWitnessVirtualAppliance are set.
+    
+        .EXAMPLE
+        Initialize-VsanWitnessDiskGroup -ClusterName "edge-cluster-1" -StoragePolicyType "storage-policy" -StoragePolicyType "storage-policy"
     #>
 
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [ValidateRange(1, 10000)] [int]$MinWitnessEsaCapacityGB = 32,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10000)] [Int]$MinWitnessEsaCapacityGB = 32,
         [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName
     )
@@ -4265,8 +5507,9 @@ function Initialize-VsanWitnessDiskGroup {
 
     $witnessHost = Get-VMHost -Name $vSanWitnessVmName -Server $Script:vCenterName -ErrorAction Stop
     if (-not $witnessHost) {
-        Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" not found in vCenter."
-        throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" not found. Ensure the witness host is added to vCenter.")
+        $err = "Witness host `"$vSanWitnessVmName`" not found in vCenter."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     # Check HostDeployedFromWitnessOVF (set by official witness OVF at firstboot): 1 = OSA witness OVA, 2 = ESA witness OVA. If present and mismatched, tell the user they deployed the wrong OVA.
@@ -4274,7 +5517,7 @@ function Initialize-VsanWitnessDiskGroup {
     try {
         $advSetting = Get-AdvancedSetting -Entity $witnessHost -Name "VSAN.HostDeployedFromWitnessOVF" -ErrorAction SilentlyContinue
         if ($advSetting -and $null -ne $advSetting.Value) {
-            $hostDeployedFromWitnessOvf = [int]$advSetting.Value
+            $hostDeployedFromWitnessOvf = [Int]$advSetting.Value
             Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" HostDeployedFromWitnessOVF=$hostDeployedFromWitnessOvf (1=OSA witness OVA, 2=ESA witness OVA)."
         }
     } catch {
@@ -4282,12 +5525,14 @@ function Initialize-VsanWitnessDiskGroup {
     }
     if ($null -ne $hostDeployedFromWitnessOvf) {
         if ($StoragePolicyType -eq "vSAN-OSA" -and $hostDeployedFromWitnessOvf -eq 2) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN ESA witness OVA (HostDeployedFromWitnessOVF=2). For an OSA cluster use the vSAN OSA witness appliance OVA."
-            throw [VcfDeploymentException]::new("Deployment failed. This witness was deployed from the vSAN ESA witness OVA. For an OSA cluster use the vSAN OSA witness appliance OVA (and vice versa for ESA). Redeploy the correct witness OVA and re-run.")
+            $err = "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN ESA witness OVA (HostDeployedFromWitnessOVF=2). For an OSA cluster use the vSAN OSA witness appliance OVA."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
         if ($StoragePolicyType -eq "vSAN-ESA" -and $hostDeployedFromWitnessOvf -eq 1) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN OSA witness OVA (HostDeployedFromWitnessOVF=1). For an ESA cluster use the vSAN ESA witness appliance OVA."
-            throw [VcfDeploymentException]::new("Deployment failed. This witness was deployed from the vSAN OSA witness OVA. For an ESA cluster use the vSAN ESA witness appliance OVA (and vice versa for OSA). Redeploy the correct witness OVA and re-run.")
+            $err = "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN OSA witness OVA (HostDeployedFromWitnessOVF=1). For an ESA cluster use the vSAN ESA witness appliance OVA."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 
@@ -4295,16 +5540,18 @@ function Initialize-VsanWitnessDiskGroup {
     if ($StoragePolicyType -eq "vSAN-ESA") {
         $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $witnessHost -Server $Script:vCenterName
         if ($witnessOsaResult.HasValidOsaGroup) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use an ESA witness or remove the OSA disk group from this host."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use a different host for the ESA witness or remove the OSA disk group from this host. Deployment will roll back.")
+            $err = "Witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use an ESA witness or remove the OSA disk group from this host."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
     elseif ($StoragePolicyType -eq "vSAN-OSA") {
         $witnessPoolDisks = Get-VsanStoragePoolDisk -VMHost $witnessHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
         $witnessPoolDiskCount = if ($witnessPoolDisks) { @($witnessPoolDisks).Count } else { 0 }
         if ($witnessPoolDiskCount -ge 1) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use an OSA witness or remove the ESA storage pool from this host."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use a different host for the OSA witness or remove the ESA storage pool from this host. Deployment will roll back.")
+            $err = "Witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use an OSA witness or remove the ESA storage pool from this host."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
     }
 
@@ -4321,124 +5568,704 @@ function Initialize-VsanWitnessDiskGroup {
     }
 
     if ($StoragePolicyType -eq "vSAN-OSA") {
-        # Use HostVsanSystem API so witness is detected even when not in a cluster (Get-VsanDiskGroup requires cluster membership).
-        $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $witnessHost -Server $Script:vCenterName
-        $hasValidOsaGroup = $witnessOsaResult.HasValidOsaGroup -or ($witnessOsaResult.DiskGroupCount -gt 0)
-        if ($witnessOsaResult.DiskGroupCount -gt 0) {
-            Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" has $($witnessOsaResult.DiskGroupCount) OSA disk group(s) (HostVsanSystem.config). HasValidOsaGroup=$($witnessOsaResult.HasValidOsaGroup)."
-        }
-        if ($hasValidOsaGroup) {
-            Write-LogMessage -Type INFO -Message "Witness host `"$vSanWitnessVmName`" already has a vSAN OSA disk group. Skipping auto-create."
-            return
-        }
-        $witnessHostsArray = @($witnessHost)
-        Write-LogMessage -Type DEBUG -Message "Initialize-VsanWitnessDiskGroup (OSA): calling Get-VsanOsaEligibleDisksFromCluster with ClusterHosts count=$($witnessHostsArray.Count), host name=`"$($witnessHost.Name)`" (witness only)."
-        $eligibleDisks = Get-VsanOsaEligibleDisksFromCluster -ClusterName $ClusterName -ClusterHosts $witnessHostsArray
-        Write-LogMessage -Type DEBUG -Message "Initialize-VsanWitnessDiskGroup (OSA): witness host returned $($eligibleDisks.Count) eligible disk(s)."
-        if (-not $eligibleDisks -or $eligibleDisks.Count -eq 0) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has no vSAN OSA eligible disks. The boot device is typically excluded from vSAN; add at least one non-boot disk (e.g. a second virtual disk) to the witness appliance."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" has no eligible disks. Add at least one non-boot disk to the witness and re-run. Check logs for details.")
-        }
-        # Official vSAN OSA witness appliance (see provision script sets numVsanSsds=1 and marks only mpx.vmhba0:C0:T1:L0 as SSD; T0 is boot and is not used for vSAN. So only one disk is vSAN-eligible. Try that one disk as cache+capacity; if the platform rejects it, we throw and ask for a second disk.
-        $singleSsdWitness = $false
-        if ($eligibleDisks.Count -eq 1) {
-            $onlyDisk = $eligibleDisks[0]
-            if ($onlyDisk.IsSsd) {
-                $singleSsdWitness = $true
-                Write-LogMessage -Type INFO -Message "Witness has one eligible SSD; attempting single-disk OSA witness disk group (official witness appliance compatibility)."
-            } else {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has only one eligible disk (not SSD). vSAN OSA requires one SSD for cache. Add a non-boot SSD or a second disk to the witness appliance and re-run."
-                throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" needs at least one SSD for cache. Add an SSD or a second disk. Check logs for details.")
-            }
-        }
-        # Cache must be SSD (New-VsanDiskGroup -SsdCanonicalName requires SSD). Capacity can be HDD or SSD. Use smallest SSD as cache so assignment is deterministic (API disk order can vary).
-        $ssds = @($eligibleDisks | Where-Object { $_.IsSsd } | Sort-Object -Property CapacityGB)
-        $nonSsds = @($eligibleDisks | Where-Object { -not $_.IsSsd })
-        if ($ssds.Count -gt 0) {
-            $cacheDisk = $ssds[0]
-            $witnessOsaApiOrderStr = ($eligibleDisks | ForEach-Object { "$($_.CanonicalName)/$($_.CapacityGB)/$($_.IsSsd)" }) -join ", "
-            Write-LogMessage -Type DEBUG -Message "Initialize-VsanWitnessDiskGroup (OSA): witness disks (API order) CanonicalName/CapacityGB/IsSsd: $witnessOsaApiOrderStr. Chosen cache: $($cacheDisk.CanonicalName), CapacityGB=$($cacheDisk.CapacityGB)."
-            if ($singleSsdWitness) {
-                $capacityDisksList = @($cacheDisk)
-            } else {
-                $capacityDisksList = $nonSsds + ($ssds | Select-Object -Skip 1)
-            }
-        } else {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has no SSD among eligible disks. vSAN OSA requires one SSD for cache; capacity can be HDD or SSD. The boot device is typically excluded; add a non-boot SSD to the witness."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" must have at least one SSD for the OSA witness cache tier. Add an SSD; capacity disk(s) can be HDD or SSD. Check logs for details.")
-        }
-        $capacityDisksList = @($capacityDisksList)
-        if ($capacityDisksList.Count -eq 0 -and -not $singleSsdWitness) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has only one eligible disk (SSD). Add a second non-boot disk to the witness appliance and re-run."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" needs two eligible disks for OSA: one SSD for cache and one distinct disk for capacity. Add a second non-boot disk and re-run. Check logs for details.")
-        }
-        # Validate cache disk has a valid CanonicalName.
-        if ([String]::IsNullOrWhiteSpace($cacheDisk.CanonicalName)) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" cache SSD disk has no valid CanonicalName."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" cache SSD disk missing CanonicalName. Check logs for details.")
-        }
-        # Build capacity canonical names; exclude null/empty to avoid "Sequence contains no elements" from New-VsanDiskGroup.
-        $capacityCanonicalNames = [string[]]@($capacityDisksList | ForEach-Object { $_.CanonicalName } | Where-Object { -not [String]::IsNullOrWhiteSpace($_) })
-        if ($capacityCanonicalNames.Count -eq 0) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" capacity disk(s) have no valid CanonicalName."
-            throw [VcfDeploymentException]::new("Deployment failed. Witness host `"$vSanWitnessVmName`" capacity disks missing CanonicalName. Check logs for details.")
-        }
-        Write-LogMessage -Type INFO -Message "Creating vSAN OSA witness disk group on `"$vSanWitnessVmName`" (cache SSD: $($cacheDisk.CanonicalName), capacity: $($capacityCanonicalNames -join ', '))."
-        # Pre-validate that cache and capacity disks are visible on the witness host (Get-ScsiLun). Resolve to the LUN's CanonicalName so New-VsanDiskGroup receives the format the host uses (e.g. NAA); QueryDisksForVsan may return mpx path, which can cause "Sequence contains no elements" when the cmdlet looks up by NAA.
-        $requiredCanonicalNames = @($cacheDisk.CanonicalName) + @($capacityCanonicalNames)
-        $visibleLuns = Get-ScsiLun -VMHost $witnessHost -LunType disk -ErrorAction SilentlyContinue
-        $visibleCanonicalNames = @($visibleLuns | ForEach-Object { $_.CanonicalName } | Select-Object -Unique)
-        $visibleRuntimeNames = @($visibleLuns | ForEach-Object { if ($_.PSObject.Properties['RuntimeName']) { $_.RuntimeName } else { $null } } | Where-Object { -not [String]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
-        $missingDisks = @($requiredCanonicalNames | Where-Object {
-            $cn = $_
-            $visibleCanonicalNames -notcontains $cn -and $visibleRuntimeNames -notcontains $cn
-        })
-        if ($missingDisks.Count -gt 0) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" cannot see one or more disks that were reported as eligible. Missing on host: $($missingDisks -join ', '). Visible disk count: $($visibleCanonicalNames.Count)."
-            throw [VcfDeploymentException]::new("Deployment failed. vSAN witness disk group creation failed on `"$vSanWitnessVmName`": the following disk(s) are not visible on the witness host (or may be in use): $($missingDisks -join ', '). Ensure these canonical names match the disks on the witness host and that the disks are not in use. If the error persists, create the OSA disk group manually on the witness host and re-run.")
-        }
-        # Resolve each disk to the ScsiLun's CanonicalName (typically NAA) so New-VsanDiskGroup receives the format the host/vSAN API expects; avoids "Sequence contains no elements" when QueryDisksForVsan returns mpx and the cmdlet looks up by NAA.
-        $cacheLun = $visibleLuns | Where-Object { $_.CanonicalName -eq $cacheDisk.CanonicalName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $cacheDisk.CanonicalName) } | Select-Object -First 1
-        $cacheNameForCmdlet = if ($cacheLun) { $cacheLun.CanonicalName } else { $cacheDisk.CanonicalName }
-        $capacityNamesForCmdlet = [System.Collections.Generic.List[String]]::new()
-        foreach ($capName in $capacityCanonicalNames) {
-            $capLun = $visibleLuns | Where-Object { $_.CanonicalName -eq $capName -or ($_.PSObject.Properties['RuntimeName'] -and $_.RuntimeName -eq $capName) } | Select-Object -First 1
-            $nameToAdd = if ($capLun) { $capLun.CanonicalName } else { $capName }
-            $capacityNamesForCmdlet.Add($nameToAdd)
-        }
-        $dataDiskArray = @($capacityNamesForCmdlet)
-        if ($cacheNameForCmdlet -ne $cacheDisk.CanonicalName -or ($capacityNamesForCmdlet -join ',') -ne ($capacityCanonicalNames -join ',')) {
-            Write-LogMessage -Type DEBUG -Message "Initialize-VsanWitnessDiskGroup (OSA): resolved disk names for New-VsanDiskGroup (cache: $cacheNameForCmdlet, capacity: $($dataDiskArray -join ', '))."
-        }
-        try {
-            New-VsanDiskGroup -VMHost $witnessHost -SsdCanonicalName $cacheNameForCmdlet -DataDiskCanonicalName $dataDiskArray -ErrorAction Stop | Out-Null
-        } catch {
-            $msg = $_.Exception.Message
-            if ($_.Exception.InnerException) { $msg = $_.Exception.InnerException.Message }
-            if ($singleSsdWitness) {
-                Write-LogMessage -Type ERROR -Message "Deployment failed. Witness host `"$vSanWitnessVmName`" has only one vSAN-eligible disk; this platform requires one distinct cache (SSD) and one distinct capacity disk. Add a second non-boot disk to the witness appliance and re-run."
-                throw [VcfDeploymentException]::new()
-            }
-            if ($msg -match "Sequence contains no elements") {
-                # Disks may already be in a vSAN disk group (e.g. created earlier or by another process); re-check and treat as success if so.
-                $witnessOsaRecheck = Get-VsanOsaDiskGroupsOnHost -VMHost $witnessHost -Server $Script:vCenterName
-                if ($witnessOsaRecheck.HasValidOsaGroup -or $witnessOsaRecheck.DiskGroupCount -gt 0) {
-                    Write-LogMessage -Type DEBUG -Message "New-VsanDiskGroup failed with Sequence contains no elements; witness `"$vSanWitnessVmName`" already has a vSAN OSA disk group. Treating as success."
-                    return
-                }
-                Write-LogMessage -Type ERROR -Message "New-VsanDiskGroup failed on witness `"$vSanWitnessVmName`" with Sequence contains no elements. Names passed to cmdlet: cache=$cacheNameForCmdlet, capacity=$($dataDiskArray -join ', '). Disks were visible via Get-ScsiLun; the failure may be due to disk state (e.g. in use) or a VCF PowerCLI lookup difference."
-                throw [VcfDeploymentException]::new("Deployment failed. vSAN witness disk group creation failed on `"$vSanWitnessVmName`": the host could not resolve one or more disks (cache: $cacheNameForCmdlet, capacity: $($dataDiskArray -join ', ')). Ensure these canonical names match the disks visible on the witness host and that the disks are not in use. If the error persists, create the OSA disk group manually on the witness host and re-run.")
-            }
-            throw
-        }
-        if ($singleSsdWitness) {
-            Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA witness disk group on host `"$vSanWitnessVmName`" (single eligible disk; official witness appliance compatibility)."
-        } else {
-            Write-LogMessage -Type INFO -Message "Successfully created vSAN OSA witness disk group on host `"$vSanWitnessVmName`"."
-        }
+        Invoke-VsanOsaWitnessDiskGroupCreation -ClusterName $ClusterName -VMHost $witnessHost -VMHostName $vSanWitnessVmName
     }
 }
+function Test-VsanDataHostVersionConsistency {
+
+    <#
+        .SYNOPSIS
+        Checks all data hosts in a vSAN cluster for consistent ESX version and build against a reference.
+
+        .DESCRIPTION
+        Iterates each cluster data host and compares its version and build against the provided reference
+        values. Returns on the first mismatch found. Returns HasMismatch=$false when all hosts match or
+        when version/build is unreadable on a host.
+
+        .PARAMETER ClusterHosts
+        Array of VMHost objects representing the cluster data hosts.
+
+        .PARAMETER RefBuild
+        Expected ESX build number (from the first data host used as the reference).
+
+        .PARAMETER RefVersion
+        Expected ESX version string (from the first data host used as the reference).
+
+        .EXAMPLE
+        $check = Test-VsanDataHostVersionConsistency -ClusterHosts $hosts -RefVersion "8.0.0" -RefBuild "21313628"
+
+        .NOTES
+        Called by Confirm-VsanWitnessVersionMatch after the witness/reference-host comparison.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$ClusterHosts,
+        [Parameter(Mandatory = $false)] [String]$RefBuild,
+        [Parameter(Mandatory = $false)] [String]$RefVersion
+    )
+
+    foreach ($dataHost in @($ClusterHosts)) {
+        $hostVersion = if ($dataHost.PSObject.Properties['Version']) { [String]$dataHost.Version } else { $null }
+        if ([String]::IsNullOrWhiteSpace($hostVersion) -and $dataHost.ExtensionData -and $dataHost.ExtensionData.Config -and $dataHost.ExtensionData.Config.Product) { $hostVersion = [String]$dataHost.ExtensionData.Config.Product.Version }
+        $hostBuild = if ($dataHost.PSObject.Properties['Build']) { [String]$dataHost.Build } else { $null }
+        if ([String]::IsNullOrWhiteSpace($hostBuild) -and $dataHost.ExtensionData -and $dataHost.ExtensionData.Config -and $dataHost.ExtensionData.Config.Product) { $hostBuild = [String]$dataHost.ExtensionData.Config.Product.Build }
+        if (-not [String]::IsNullOrWhiteSpace($hostVersion) -and $hostVersion -ne $RefVersion) {
+            $detail = "Cluster host `"$($dataHost.Name)`" has ESX version `"$hostVersion`" (build $hostBuild); expected same as reference version `"$RefVersion`" (build $RefBuild). All data hosts and witness must be the same release."
+            return [PSCustomObject]@{ HasMismatch = $true; MismatchDetail = $detail }
+        }
+        if (-not [String]::IsNullOrWhiteSpace($hostBuild) -and -not [String]::IsNullOrWhiteSpace($RefBuild) -and $hostBuild -ne $RefBuild) {
+            $detail = "Cluster host `"$($dataHost.Name)`" has ESX build `"$hostBuild`"; expected build `"$RefBuild`" (version $RefVersion). All data hosts and witness must be the exact same ESX release."
+            return [PSCustomObject]@{ HasMismatch = $true; MismatchDetail = $detail }
+        }
+    }
+    return [PSCustomObject]@{ HasMismatch = $false; MismatchDetail = $null }
+}
+function Confirm-VsanWitnessVersionMatch {
+
+    <#
+        .SYNOPSIS
+        Validates that the witness host and all cluster data hosts are on the exact same ESX release.
+
+        .DESCRIPTION
+        Compares ESX version and build numbers between the witness host and each cluster data host.
+        When a mismatch is detected and LabEnvironment is $true, logs a WARNING and returns.
+        When a mismatch is detected and LabEnvironment is $false, prompts the user (Y/N); throws
+        VcfDeploymentException when the user declines.
+
+        .PARAMETER ClusterHosts
+        Array of VMHost objects representing the cluster data hosts.
+
+        .PARAMETER ClusterName
+        Cluster name used in thrown exception messages.
+
+        .PARAMETER LabEnvironment
+        When $true, logs a WARNING on mismatch instead of prompting for confirmation.
+
+        .PARAMETER vSanWitnessVmName
+        Witness host FQDN or IP used in log and exception messages.
+
+        .PARAMETER WitnessHost
+        The witness VMHost object whose version and build are compared against the cluster hosts.
+
+        .EXAMPLE
+        Confirm-VsanWitnessVersionMatch -WitnessHost $witnessHost -ClusterHosts $clusterHosts -ClusterName "cl0" -vSanWitnessVmName "witness01.example.com" -LabEnvironment:$false
+
+        .NOTES
+        Throws VcfDeploymentException when the user declines continuation on a version/build mismatch.
+        When ESX version or build cannot be read from the witness or reference host, a WARNING is logged
+        and strict version checking is skipped.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$WitnessHost
+    )
+
+    $witnessVersion = $null
+    $witnessBuild = $null
+    if ($WitnessHost.PSObject.Properties['Version']) { $witnessVersion = [String]$WitnessHost.Version }
+    if ([String]::IsNullOrWhiteSpace($witnessVersion) -and $WitnessHost.ExtensionData -and $WitnessHost.ExtensionData.Config -and $WitnessHost.ExtensionData.Config.Product) { $witnessVersion = [String]$WitnessHost.ExtensionData.Config.Product.Version }
+    if ($WitnessHost.PSObject.Properties['Build']) { $witnessBuild = [String]$WitnessHost.Build }
+    if ([String]::IsNullOrWhiteSpace($witnessBuild) -and $WitnessHost.ExtensionData -and $WitnessHost.ExtensionData.Config -and $WitnessHost.ExtensionData.Config.Product) { $witnessBuild = [String]$WitnessHost.ExtensionData.Config.Product.Build }
+
+    $referenceHost = $ClusterHosts[0]
+    $refVersion = $null
+    $refBuild = $null
+    if ($referenceHost.PSObject.Properties['Version']) { $refVersion = [String]$referenceHost.Version }
+    if ([String]::IsNullOrWhiteSpace($refVersion) -and $referenceHost.ExtensionData -and $referenceHost.ExtensionData.Config -and $referenceHost.ExtensionData.Config.Product) { $refVersion = [String]$referenceHost.ExtensionData.Config.Product.Version }
+    if ($referenceHost.PSObject.Properties['Build']) { $refBuild = [String]$referenceHost.Build }
+    if ([String]::IsNullOrWhiteSpace($refBuild) -and $referenceHost.ExtensionData -and $referenceHost.ExtensionData.Config -and $referenceHost.ExtensionData.Config.Product) { $refBuild = [String]$referenceHost.ExtensionData.Config.Product.Build }
+
+    if ([String]::IsNullOrWhiteSpace($witnessVersion) -or [String]::IsNullOrWhiteSpace($refVersion)) {
+        Write-LogMessage -Type WARNING -Message "Could not read ESX version for version check (witness or cluster host). Skipping strict version check."
+        return
+    }
+
+    $versionMismatch = $false
+    $mismatchDetail = $null
+    if ($witnessVersion -ne $refVersion) {
+        $versionMismatch = $true
+        $mismatchDetail = "Witness `"$vSanWitnessVmName`" has ESX version `"$witnessVersion`" (build $witnessBuild); cluster data hosts have version `"$refVersion`" (build $refBuild). All must be the same release."
+    }
+    if (-not $versionMismatch -and -not [String]::IsNullOrWhiteSpace($witnessBuild) -and -not [String]::IsNullOrWhiteSpace($refBuild) -and $witnessBuild -ne $refBuild) {
+        $versionMismatch = $true
+        $mismatchDetail = "Witness `"$vSanWitnessVmName`" has ESX build `"$witnessBuild`" (version $witnessVersion); cluster data hosts have build `"$refBuild`" (version $refVersion). Data nodes and witness must be the exact same ESX release (same build number)."
+    }
+    if (-not $versionMismatch) {
+        $dataHostCheck = Test-VsanDataHostVersionConsistency -ClusterHosts $ClusterHosts -RefVersion $refVersion -RefBuild $refBuild
+        if ($dataHostCheck.HasMismatch) {
+            $versionMismatch = $true
+            $mismatchDetail  = $dataHostCheck.MismatchDetail
+        }
+    }
+
+    if (-not $versionMismatch) {
+        Write-LogMessage -Type DEBUG -Message "Witness and cluster hosts have matching ESX release (version $refVersion, build $refBuild)."
+        return
+    }
+
+    if ($LabEnvironment) {
+        Write-LogMessage -Type WARNING -Message "ESX version/build mismatch (lab environment; continuing without prompt): $mismatchDetail."
+        return
+    }
+
+    Write-LogMessage -Type ERROR -Message "ESX version/build mismatch: $mismatchDetail."
+    $continueAnyway = $false
+    $continuePrompt = "Witness and data hosts have different ESX builds. Continue anyway? (Y/N; press Enter for N)"
+    try {
+        do {
+            $response = Read-Host $continuePrompt
+            $response = if ($response) { $response.Trim() } else { "" }
+            if ($response -match '^[yY](es)?$') {
+                $continueAnyway = $true
+                Write-LogMessage -Type WARNING -Message "User chose to continue despite witness/data host ESX build mismatch. Proceeding with vSAN witness configuration."
+                break
+            }
+            if ([String]::IsNullOrWhiteSpace($response) -or $response -match '^[nN](o)?$') {
+                break
+            }
+            Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N (or press Enter for N)."
+        } while ($true)
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Treating as N; deployment will fail."
+    }
+
+    if (-not $continueAnyway) {
+        $errorMsg = "Deployment failed configuring vSAN witness for cluster `"$ClusterName`": $mismatchDetail Upgrade or patch the witness and data hosts to the same ESX release (same build number), then re-run. The deployment will be rolled back."
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
+    }
+}
+function Resolve-VsanPreferredFaultDomain {
+
+    <#
+        .SYNOPSIS
+        Resolves or creates the preferred vSAN fault domain for a stretched cluster.
+
+        .DESCRIPTION
+        Attempts to resolve the preferred fault domain by name "Primary" first, then by the
+        caller-provided PreferredFaultDomainName, and finally by VMHost. When no fault domains
+        exist at all, creates a "Primary" (preferred) and "Secondary" fault domain pair and
+        returns the preferred one. Returns $null when existing fault domains are present but
+        none match the expected names or host.
+
+        .PARAMETER Cluster
+        The cluster object obtained from Get-Cluster.
+
+        .PARAMETER ClusterHosts
+        Array of VMHost objects in the cluster. The first host is assigned to the "Primary"
+        fault domain when creating fault domains.
+
+        .PARAMETER ClusterName
+        Cluster name used in exception messages.
+
+        .PARAMETER PreferredFaultDomainName
+        Caller-provided name to resolve (e.g. edge site name). "Primary" is always tried first.
+
+        .PARAMETER PreferredHost
+        The first cluster host, used when resolving by VMHost and when creating the primary
+        fault domain.
+
+        .PARAMETER Server
+        vCenter server name.
+
+        .EXAMPLE
+        $faultDomain = Resolve-VsanPreferredFaultDomain -Cluster $cluster -ClusterHosts $clusterHosts -ClusterName "cl0" -PreferredFaultDomainName "site1" -PreferredHost $clusterHosts[0] -Server $Script:vCenterName
+
+        .NOTES
+        Get-VsanFaultDomain and New-VsanFaultDomain emit VMHost.State deprecation warnings that
+        do not accept -WarningAction. Each call uses -WarningAction SilentlyContinue directly.
+        Returns $null when existing fault domains are present but none match — the caller must
+        log a warning and decide whether to proceed without a preferred fault domain.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object[]]$ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PreferredFaultDomainName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSObject]$PreferredHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server
+    )
+
+    $primaryFaultDomainName = "Primary"
+    $secondaryFaultDomainName = "Secondary"
+    $preferredFaultDomain = $null
+
+    try {
+        $preferredFaultDomain = Get-VsanFaultDomain -Cluster $Cluster -Name $primaryFaultDomainName -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Select-Object -First 1
+        if (-not $preferredFaultDomain -and $PreferredFaultDomainName -ne $primaryFaultDomainName) {
+            $preferredFaultDomain = Get-VsanFaultDomain -Cluster $Cluster -Name $PreferredFaultDomainName -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Select-Object -First 1
+        }
+        if (-not $preferredFaultDomain) {
+            $preferredFaultDomain = Get-VsanFaultDomain -Cluster $Cluster -VMHost $PreferredHost -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue | Select-Object -First 1
+            if ($preferredFaultDomain) {
+                Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain by VMHost: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
+            }
+        } else {
+            Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain by name: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Could not resolve VsanFaultDomain (Get-VsanFaultDomain): $($_.Exception.Message). Proceeding without -PreferredFaultDomain."
+    }
+
+    if ($preferredFaultDomain) {
+        return $preferredFaultDomain
+    }
+
+    $existingFaultDomains = Get-VsanFaultDomain -Cluster $Cluster -Server $Server -WarningAction SilentlyContinue -ErrorAction SilentlyContinue
+    if ($existingFaultDomains -and $existingFaultDomains.Count -gt 0) {
+        Write-LogMessage -Type WARNING -Message "Could not resolve VsanFaultDomain for name `"$primaryFaultDomainName`" or `"$PreferredFaultDomainName`" or for host `"$($PreferredHost.Name)`". Cluster has $($existingFaultDomains.Count) fault domain(s) but none match. Ensure preferred fault domain name matches an existing fault domain or create fault domains with New-VsanFaultDomain. Set-VsanClusterConfiguration may fail with preferred fault domain not specified."
+        return $null
+    }
+
+    Write-LogMessage -Type INFO -Message "No vSAN fault domains found for cluster `"$ClusterName`". Creating FDs `"$primaryFaultDomainName`" and `"$secondaryFaultDomainName`"."
+    try {
+        New-VsanFaultDomain -Name $primaryFaultDomainName -VMHost $PreferredHost -Server $Server -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+        Write-LogMessage -Type DEBUG -Message "Created fault domain `"$primaryFaultDomainName`" (preferred) with host `"$($PreferredHost.Name)`"."
+        $remainingHosts = $ClusterHosts | Where-Object { $_.Id -ne $PreferredHost.Id }
+        if ($remainingHosts -and $remainingHosts.Count -gt 0) {
+            New-VsanFaultDomain -Name $secondaryFaultDomainName -VMHost $remainingHosts -Server $Server -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+            Write-LogMessage -Type DEBUG -Message "Created fault domain `"$secondaryFaultDomainName`" with host(s): $(($remainingHosts | Select-Object -ExpandProperty Name) -join ', ')."
+        }
+        $preferredFaultDomain = Get-VsanFaultDomain -Cluster $Cluster -Name $primaryFaultDomainName -Server $Server -WarningAction SilentlyContinue -ErrorAction Stop | Select-Object -First 1
+        if ($preferredFaultDomain) {
+            Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain after creation: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
+        }
+        return $preferredFaultDomain
+    } catch [VcfDeploymentException] {
+        throw  # already logged and typed — propagate without re-wrapping
+    } catch {
+        $err = "Failed to create vSAN fault domains for cluster `"$ClusterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+}
+function Invoke-WitnessFaultDomainSetup {
+
+    <#
+        .SYNOPSIS
+        Resolves or creates the vSAN preferred fault domain and activates stretched cluster mode.
+
+        .DESCRIPTION
+        Performs the three-phase witness activation after all pre-condition checks pass:
+        (1) Resolves or creates the preferred fault domain via Resolve-VsanPreferredFaultDomain.
+        (2) Enables vSAN automatic disk claim when the cmdlet supports it, then re-fetches the
+            cluster configuration if the claim mode changed.
+        (3) Calls Set-VsanClusterConfiguration to enable stretched cluster mode with the witness
+            host and preferred fault domain, then verifies the result and runs post-configuration
+            tasks (automatic rebalance, config re-apply, partition check).
+
+        .PARAMETER Cluster
+        The cluster object returned by Get-Cluster.
+
+        .PARAMETER ClusterHosts
+        Array of VMHost objects in the cluster, used when creating new fault domains.
+
+        .PARAMETER ClusterName
+        The name of the cluster. Used for logging and vSAN cmdlet calls.
+
+        .PARAMETER PreferredFaultDomainName
+        Name used to resolve an existing preferred fault domain (e.g. edge site name). When fault
+        domains are newly created, the preferred is named "Primary".
+
+        .PARAMETER PreferredHost
+        The first ESX host in the cluster; assigned to the "Primary" fault domain on creation.
+
+        .PARAMETER VsanClusterConfig
+        The current vSAN cluster configuration object. Internally superseded when
+        Enable-VsanAutomaticDiskClaimIfSupported triggers a config change.
+
+        .PARAMETER vSanWitnessVmName
+        FQDN or IP of the witness host. Used for logging and post-configuration verification.
+
+        .PARAMETER WitnessHost
+        The VMHost object for the witness host.
+
+        .NOTES
+        Called exclusively by Set-VsanWitness after all pre-condition checks pass and the
+        idempotency guard confirms the witness is not yet configured. Any thrown
+        VcfDeploymentException is caught by the outer try/catch in Set-VsanWitness.
+    
+        .EXAMPLE
+        Invoke-WitnessFaultDomainSetup -Cluster $clusterObject -ClusterHosts $inputObject -ClusterName "edge-cluster-1" -PreferredFaultDomainName "resource-name"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PreferredFaultDomainName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $PreferredHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VsanClusterConfig,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $WitnessHost
+    )
+
+    $preferredFaultDomain = Resolve-VsanPreferredFaultDomain `
+        -Cluster $Cluster `
+        -ClusterHosts $ClusterHosts `
+        -ClusterName $ClusterName `
+        -PreferredFaultDomainName $PreferredFaultDomainName `
+        -PreferredHost $PreferredHost `
+        -Server $Script:vCenterName
+
+    # Re-fetch vSAN cluster config if automatic disk claim was just enabled so Set-VsanClusterConfiguration receives the latest configuration object.
+    if (Enable-VsanAutomaticDiskClaimIfSupported -ClusterName $ClusterName) {
+        $VsanClusterConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+    }
+
+    # Per vSAN Stretched Cluster Guide: validate connectivity between data hosts and witness before/after configuration (UDP 23451/12321, vmkping from each site to witness vSAN VMkernel IP).
+    Write-LogMessage -Type INFO -Message "Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface."
+    if (-not $preferredFaultDomain) {
+        Write-LogMessage -Type WARNING -Message "Preferred fault domain not resolved. Set-VsanClusterConfiguration may fail with preferred fault domain not specified."
+    }
+    Write-LogMessage -Type DEBUG -Message "Attempting Set-VsanClusterConfiguration for cluster `"$ClusterName`" with vSanWitnessVmName=`"$vSanWitnessVmName`", preferred fault domain host=`"$($PreferredHost.Name)`", PreferredFaultDomain resolved=$($null -ne $preferredFaultDomain)."
+    Write-LogMessage -Type INFO -Message "Enabling stretched cluster mode and configuring witness host `"$vSanWitnessVmName`" for cluster `"$ClusterName`"..."
+
+    $progressActivity = "Configuring vSAN witness for cluster `"$ClusterName`""
+    try {
+        Write-Progress -Activity $progressActivity -Status "Enabling stretched cluster mode and configuring witness host. This may take several minutes..." -PercentComplete -1
+        [Console]::Out.Flush()
+        $setParams = @{
+            Configuration           = $VsanClusterConfig
+            StretchedClusterEnabled = $true
+            WitnessHost             = $WitnessHost
+            Server                  = $Script:vCenterName
+        }
+        if ($preferredFaultDomain) {
+            $setParams["PreferredFaultDomain"] = $preferredFaultDomain
+        }
+        # Per vSAN Stretched Cluster Guide: enable Site Read Locality so reads come from the local site and reduce traffic across the ISL.
+        if ((Get-Command Set-VsanClusterConfiguration -ErrorAction SilentlyContinue).Parameters.ContainsKey("SiteReadLocalityEnabled")) {
+            $setParams["SiteReadLocalityEnabled"] = $true
+            Write-LogMessage -Type DEBUG -Message "Enabling Site Read Locality on stretched cluster per vSAN Stretched Cluster Guide."
+        }
+        # -WarningAction SilentlyContinue suppresses VMHost.State deprecation warnings emitted by this cmdlet.
+        Set-VsanClusterConfiguration @setParams -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+    }
+    finally {
+        Write-Progress -Activity $progressActivity -Status "Complete" -Completed
+        [Console]::Out.Flush()
+    }
+
+    $updatedConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+    if ($updatedConfig -and $updatedConfig.WitnessHost -and $updatedConfig.WitnessHost.Name -eq $vSanWitnessVmName) {
+        Write-LogMessage -Type INFO -Message "Successfully configured witness host `"$vSanWitnessVmName`" for cluster `"$ClusterName`"."
+        $rebalanceEnabled = Enable-VsanAutomaticRebalance -ClusterName $ClusterName -AutomaticRebalanceThreshold 30
+        if ($rebalanceEnabled -and -not (Test-VsanAutomaticRebalanceAtThreshold -ClusterName $ClusterName -ExpectedThresholdPercent 30)) {
+            Write-LogMessage -Type DEBUG -Message "vSAN automatic rebalance at 30% may not be applied on cluster `"$ClusterName`"; config re-apply will push cluster settings."
+        }
+        $reapplySucceeded = Invoke-VsanClusterConfigReapply -ClusterName $ClusterName
+        if ($reapplySucceeded) {
+            Write-LogMessage -Type DEBUG -Message "Re-applied vSAN config after witness setup to help witness sync with cluster (reduce partition risk)."
+        }
+        # Check for partition per vSAN Stretched Cluster Guide; if connectivity or routing is wrong, the cluster can end up in multiple partitions.
+        $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache
+        if ($healthSummary -and (Test-VsanClusterPartitioned -HealthSummary $healthSummary)) {
+            Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" appears partitioned after witness configuration. Ensure the witness is at a third site, data hosts can reach the witness vSAN VMkernel (vmkping), and UDP 23451/12321 are allowed. See vSAN Stretched Cluster Guide (vmware.com/docs/vsan-stretched-cluster-guide)."
+        }
+    } else {
+        Write-LogMessage -Type WARNING -Message "Witness host configuration may not have been applied correctly. Verification failed."
+    }
+}
+function Confirm-VsanWitnessConfiguration {
+
+    <#
+        .SYNOPSIS
+        Validates OVA type, disk configuration, and memory requirements for a vSAN witness host.
+
+        .DESCRIPTION
+        Checks that the witness host was deployed from the correct witness OVA (OSA vs ESA), has the disk
+        configuration matching the requested storage type (OSA: disk group required; ESA: storage pool
+        optional), and meets the minimum memory requirement for the storage type (OSA: 8 GB; ESA: 16 GB).
+
+        .PARAMETER ClusterName
+        The vSAN cluster name; used in exception messages only.
+
+        .PARAMETER StoragePolicyType
+        The vSAN storage type: vSAN-OSA or vSAN-ESA.
+
+        .PARAMETER vSanWitnessVmName
+        The FQDN or IP of the witness host; used in log and error messages.
+
+        .PARAMETER WitnessHost
+        The PowerCLI VMHost object representing the witness host.
+
+        .EXAMPLE
+        Confirm-VsanWitnessConfiguration -ClusterName "cl0-site1" -StoragePolicyType "vSAN-ESA" -vSanWitnessVmName "10.1.1.10" -WitnessHost $witnessHost
+
+        Validates the witness has the correct ESA OVA, no OSA disk group, and at least 16 GB of memory.
+
+        .NOTES
+        Throws [VcfDeploymentException] when any validation fails.
+        Minimum memory by StoragePolicyType: OSA 8 GB; ESA 16 GB.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$WitnessHost
+    )
+
+    $minimumMemoryGB = if ($StoragePolicyType -eq "vSAN-ESA") { 16 } else { 8 }
+
+    # OVA type check: 1=OSA witness OVA, 2=ESA witness OVA. If mismatched, the user deployed the wrong OVA.
+    $hostDeployedFromWitnessOvf = $null
+    try {
+        $advSetting = Get-AdvancedSetting -Entity $WitnessHost -Name "VSAN.HostDeployedFromWitnessOVF" -ErrorAction SilentlyContinue
+        if ($advSetting -and $null -ne $advSetting.Value) {
+            $hostDeployedFromWitnessOvf = [Int]$advSetting.Value
+            Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" HostDeployedFromWitnessOVF=$hostDeployedFromWitnessOvf (1=OSA witness OVA, 2=ESA witness OVA)."
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Could not read HostDeployedFromWitnessOVF from witness `"$vSanWitnessVmName`": $($_.Exception.Message). Skipping OVA-type check."
+    }
+    if ($null -ne $hostDeployedFromWitnessOvf) {
+        if ($StoragePolicyType -eq "vSAN-OSA" -and $hostDeployedFromWitnessOvf -eq 2) {
+            $err = "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN ESA witness OVA (HostDeployedFromWitnessOVF=2). For an OSA cluster use the vSAN OSA witness appliance OVA."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        if ($StoragePolicyType -eq "vSAN-ESA" -and $hostDeployedFromWitnessOvf -eq 1) {
+            $err = "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN OSA witness OVA (HostDeployedFromWitnessOVF=1). For an ESA cluster use the vSAN ESA witness appliance OVA."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+
+    # Fail if witness disk layout does not match requested storage type (OSA vs ESA). Prevents using an OSA witness for ESA or vice versa.
+    if ($StoragePolicyType -eq "vSAN-ESA") {
+        $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $WitnessHost -Server $Script:vCenterName
+        if ($witnessOsaResult.HasValidOsaGroup) {
+            $err = "Witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use an ESA witness or remove the OSA disk group from this host."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    } elseif ($StoragePolicyType -eq "vSAN-OSA") {
+        $witnessPoolDisks = Get-VsanStoragePoolDisk -VMHost $WitnessHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $witnessEsaPoolCount = if ($witnessPoolDisks) { @($witnessPoolDisks).Count } else { 0 }
+        if ($witnessEsaPoolCount -ge 1) {
+            $err = "Witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use an OSA witness or remove the ESA storage pool from this host."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+
+    $witnessMemoryGB = $WitnessHost.MemoryTotalGB
+    if ($witnessMemoryGB -lt $minimumMemoryGB) {
+        $err = "Witness host `"$vSanWitnessVmName`" has $witnessMemoryGB GB memory; $StoragePolicyType requires at least $minimumMemoryGB GB to enable a witness."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    # Enforce disk configuration: ESA may have zero storage pool disks (supported); OSA requires a disk group with cache + capacity.
+    if ($StoragePolicyType -eq "vSAN-ESA") {
+        $witnessPoolDisks = Get-VsanStoragePoolDisk -VMHost $WitnessHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
+        $witnessPoolDiskCount = if ($witnessPoolDisks) { @($witnessPoolDisks).Count } else { 0 }
+        Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" has $witnessPoolDiskCount vSAN ESA storage pool disk(s). ESA witness with zero disks is supported."
+    } elseif ($StoragePolicyType -eq "vSAN-OSA") {
+        $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $WitnessHost -Server $Script:vCenterName
+        if ($witnessOsaResult.DiskGroupCount -lt 1) {
+            $err = "Witness host `"$vSanWitnessVmName`" has no vSAN OSA disk group. A vSAN witness for OSA requires a disk group with one cache and one capacity disk. Create a disk group on the witness host, then re-run."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        if (-not $witnessOsaResult.HasValidOsaGroup) {
+            $err = "Witness host `"$vSanWitnessVmName`" has vSAN OSA disk group(s) but none has both cache and capacity. A vSAN witness for OSA requires one cache (SSD) and one capacity disk. Add the required disks to a disk group on the witness host, then re-run."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" has $($witnessOsaResult.DiskGroupCount) vSAN OSA disk group(s) with valid cache and capacity."
+    }
+}
+function Invoke-EnsureWitnessVsanTraffic {
+
+    <#
+        .SYNOPSIS
+        Ensures vSAN traffic is enabled on the witness host's VMkernel interface.
+
+        .DESCRIPTION
+        Checks whether the witness host has a VMkernel adapter with vSAN traffic enabled.
+        If not, enables vSAN traffic on vmk0 (the witness host requires vSAN traffic for quorum
+        participation). Per Broadcom documentation, the witness traffic type must NOT be configured
+        on the witness host itself; only vSAN traffic is required.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name; used in exception messages only.
+
+        .PARAMETER vSanWitnessVmName
+        The FQDN or IP of the witness host; used in log and error messages.
+
+        .PARAMETER WitnessHost
+        The PowerCLI VMHost object representing the witness host.
+
+        .EXAMPLE
+        Invoke-EnsureWitnessVsanTraffic -ClusterName "cl0-site1" -vSanWitnessVmName "10.1.1.10" -WitnessHost $witnessHost
+
+        Ensures the witness host has at least one VMkernel with vSAN traffic enabled.
+
+        .NOTES
+        Throws [VcfDeploymentException] when vSAN traffic cannot be enabled or verified.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$WitnessHost
+    )
+
+    $witnessVsanCheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $WitnessHost -RequireWitnessTraffic $false
+    if (-not $witnessVsanCheck.HasCompliantInterface -and $witnessVsanCheck.Vmk0Adapter) {
+        try {
+            # Witness host only needs vSAN traffic on vmk0; do not set witness traffic type on the witness host (per Broadcom docs).
+            $witnessSetParams = @{ VirtualNic = $witnessVsanCheck.Vmk0Adapter; VsanTrafficEnabled = $true }
+            Set-VMHostNetworkAdapter @witnessSetParams -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+            Write-LogMessage -Type INFO -Message "vSAN witness host `"$vSanWitnessVmName`" had no VMkernel with vSAN traffic enabled; vSAN traffic has been enabled on vmk0."
+        } catch [VcfDeploymentException] {
+            throw  # already logged and typed — propagate without re-wrapping
+        } catch {
+            $err = "Failed to enable vSAN traffic on vmk0 on witness host `"$vSanWitnessVmName`": $($_.Exception.Message). vSAN traffic is required for the witness; deployment will roll back."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        $witnessRecheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $WitnessHost -RequireWitnessTraffic $false
+        if (-not $witnessRecheck.HasCompliantInterface) {
+            $err = "After enabling vSAN traffic on witness host `"$vSanWitnessVmName`", interface is still not tagged. vSAN traffic is required for the witness; deployment will roll back."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    } elseif (-not $witnessVsanCheck.HasCompliantInterface) {
+        $err = "Witness host `"$vSanWitnessVmName`" has no VMkernel with vSAN traffic enabled and vmk0 was not found. vSAN traffic is required for the witness; deployment will roll back."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+}
+function Confirm-VsanClusterReadinessForWitness {
+
+    <#
+        .SYNOPSIS
+        Retrieves cluster hosts, validates version compatibility with the witness, confirms the witness is not a cluster member, and verifies vSAN traffic on each data host.
+
+        .DESCRIPTION
+        Retrieves all VMHost objects in the cluster. Calls Confirm-VsanWitnessVersionMatch to verify
+        all data hosts and the witness are on the same ESX release. Confirms the witness host is not a
+        member of the cluster (required by the vSAN Stretched Cluster Guide). Checks that each data host
+        has a VMkernel with both vSAN and vSAN witness traffic enabled. Returns the cluster hosts and the
+        preferred (first) host for fault domain assignment.
+
+        .PARAMETER Cluster
+        The PowerCLI Cluster object.
+
+        .PARAMETER ClusterName
+        The name of the vSAN cluster; used in log and error messages.
+
+        .PARAMETER LabEnvironment
+        When $true, version mismatches are logged as WARNING without prompting.
+
+        .PARAMETER vSanWitnessVmName
+        The FQDN or IP of the witness host; used in log and error messages.
+
+        .PARAMETER WitnessHost
+        The PowerCLI VMHost object representing the witness host.
+
+        .EXAMPLE
+        $setup = Confirm-VsanClusterReadinessForWitness -Cluster $cluster -ClusterName "cl0-site1" -LabEnvironment:$false -vSanWitnessVmName "10.1.1.10" -WitnessHost $witnessHost
+        $clusterHosts  = $setup.ClusterHosts
+        $preferredHost = $setup.PreferredHost
+
+        Returns ClusterHosts and PreferredHost after all validation passes.
+
+        .NOTES
+        Throws [VcfDeploymentException] when: cluster has no hosts; witness is a cluster member; or any data host lacks the required VMkernel traffic types or IP.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$Cluster,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$WitnessHost
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Retrieving ESX hosts in cluster `"$ClusterName`"."
+    $clusterHosts = Get-VMHost -Location $Cluster -Server $Script:vCenterName -ErrorAction Stop
+    if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
+        $err = "Cluster `"$ClusterName`" does not contain any hosts."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    Confirm-VsanWitnessVersionMatch `
+        -ClusterHosts $clusterHosts `
+        -ClusterName $ClusterName `
+        -LabEnvironment:$LabEnvironment.IsPresent `
+        -vSanWitnessVmName $vSanWitnessVmName `
+        -WitnessHost $WitnessHost
+
+    # Per vSAN Stretched Cluster Guide: the witness host must not be a member of any cluster. Having the witness in the cluster can cause partitioning or undefined behavior.
+    $witnessMoRefValue = $null
+    if ($WitnessHost.ExtensionData -and $WitnessHost.ExtensionData.MoRef) {
+        $witnessMoRefValue = $WitnessHost.ExtensionData.MoRef.Value
+    }
+    $witnessIsInCluster = $false
+    if ($witnessMoRefValue) {
+        $witnessIsInCluster = @($clusterHosts | Where-Object { $_.ExtensionData -and $_.ExtensionData.MoRef -and $_.ExtensionData.MoRef.Value -eq $witnessMoRefValue }).Count -gt 0
+    }
+    if (-not $witnessIsInCluster) {
+        $witnessIsInCluster = @($clusterHosts | Where-Object { $_.Id -eq $WitnessHost.Id -or $_.Name -eq $WitnessHost.Name }).Count -gt 0
+    }
+    if ($witnessIsInCluster) {
+        $err = "Witness host `"$vSanWitnessVmName`" is a member of cluster `"$ClusterName`". Per the vSAN Stretched Cluster Guide, the witness must not be a member of any cluster; it must reside in vCenter inventory outside the cluster. Remove the witness host from the cluster, then re-run."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    # Ensure every cluster host has vSAN (and witness) traffic; vmk0 is mgmt + vSAN witness only (no vSAN). Clear vSAN from vmk0 if present.
+    foreach ($dataHost in @($clusterHosts)) {
+        $dataHostName = $dataHost.Name
+        $vmk0 = Get-VMHostNetworkAdapter -VMHost $dataHost -VMKernel -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "vmk0" }
+        if ($vmk0 -and $vmk0.PSObject.Properties["VsanTrafficEnabled"] -and $vmk0.VsanTrafficEnabled -eq $true) {
+            try {
+                Set-VMHostNetworkAdapter -VirtualNic $vmk0 -VsanTrafficEnabled $false -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop | Out-Null
+                Write-LogMessage -Type INFO -Message "Cleared vSAN traffic from mgmt (vmk0) on host `"$dataHostName`" (vmk0 is mgmt + vSAN witness only)."
+            } catch {
+                Write-LogMessage -Type WARNING -Message "Could not clear vSAN from vmk0 on host `"$dataHostName`": $($_.Exception.Message). Clear manually if needed."
+            }
+        }
+        $vsanCheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $dataHost
+        if (-not $vsanCheck.HasCompliantInterface) {
+            $err = "Cluster host `"$dataHostName`" has no VMkernel with vSAN and vSAN witness traffic enabled. Use vmk2 (or vmk3) for vSAN; vmk0 may carry vSAN witness only."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        if (-not (Test-VsanTrafficVmkernelHasValidIp -VMHost $dataHost)) {
+            $err = "Cluster host `"$dataHostName`" has vSAN traffic enabled but the VMkernel has no IPv4 or IPv6 address configured."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+
+    $preferredHost = $clusterHosts[0]
+    Write-LogMessage -Type DEBUG -Message "Using first ESX host `"$($preferredHost.Name)`" as preferred fault domain host."
+    return [PSCustomObject]@{ ClusterHosts = $clusterHosts; PreferredHost = $preferredHost }
+}
 function Set-VsanWitness {
+
     <#
         .SYNOPSIS
         Configures a vSAN witness host for a cluster.
@@ -4488,7 +6315,7 @@ function Set-VsanWitness {
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$PreferredFaultDomainName,
         [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$vSanWitnessVmName
@@ -4496,415 +6323,88 @@ function Set-VsanWitness {
 
     Write-LogMessage -Type DEBUG -Message "Entered Set-VsanWitness function for cluster: `"$ClusterName`" with witness host: `"$vSanWitnessVmName`", preferred fault domain: `"$PreferredFaultDomainName`", storage type: `"$StoragePolicyType`"."
 
-    # Minimum witness host memory (GB) by vSAN type: OSA 8 GB, ESA 16 GB.
-    $minimumWitnessMemoryGB = switch ($StoragePolicyType) {
-        "vSAN-OSA" { 8 }
-        "vSAN-ESA" { 16 }
-        default { 0 }
-    }
-
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": not connected to vCenter. $($connectionTest.ErrorMessage)")
+        $err = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     try {
-        # Get the cluster object.
         Write-LogMessage -Type DEBUG -Message "Retrieving cluster object for cluster `"$ClusterName`"."
         $cluster = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         if (-not $cluster) {
-            Write-LogMessage -Type ERROR -Message "Failed to retrieve cluster `"$ClusterName`"."
-            throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": cluster not found.")
+            $err = "Failed to retrieve cluster `"$ClusterName`"."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
-        # Get the witness host object.
         Write-LogMessage -Type DEBUG -Message "Retrieving witness host object for `"$vSanWitnessVmName`"."
         $witnessHost = Get-VMHost -Name $vSanWitnessVmName -Server $Script:vCenterName -ErrorAction Stop
         if (-not $witnessHost) {
-            Write-LogMessage -Type ERROR -Message "Failed to retrieve witness host `"$vSanWitnessVmName`"."
-            throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host `"$vSanWitnessVmName`" not found in vCenter. Ensure the witness host is added to vCenter.")
+            $err = "Failed to retrieve witness host `"$vSanWitnessVmName`"."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
-        # Check HostDeployedFromWitnessOVF (set by official witness OVF at firstboot): 1 = OSA witness OVA, 2 = ESA witness OVA. If mismatched, tell the user they deployed the wrong OVA.
-        $hostDeployedFromWitnessOvf = $null
-        try {
-            $advSetting = Get-AdvancedSetting -Entity $witnessHost -Name "VSAN.HostDeployedFromWitnessOVF" -ErrorAction SilentlyContinue
-            if ($advSetting -and $null -ne $advSetting.Value) {
-                $hostDeployedFromWitnessOvf = [int]$advSetting.Value
-                Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" HostDeployedFromWitnessOVF=$hostDeployedFromWitnessOvf (1=OSA witness OVA, 2=ESA witness OVA)."
-            }
-        } catch {
-            Write-LogMessage -Type DEBUG -Message "Could not read HostDeployedFromWitnessOVF from witness `"$vSanWitnessVmName`": $($_.Exception.Message). Skipping OVA-type check."
-        }
-        if ($null -ne $hostDeployedFromWitnessOvf) {
-            if ($StoragePolicyType -eq "vSAN-OSA" -and $hostDeployedFromWitnessOvf -eq 2) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN ESA witness OVA (HostDeployedFromWitnessOVF=2). For an OSA cluster use the vSAN OSA witness appliance OVA."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": this witness was deployed from the vSAN ESA witness OVA. For an OSA cluster use the vSAN OSA witness appliance OVA (and vice versa for ESA). Redeploy the correct witness OVA and re-run.")
-            }
-            if ($StoragePolicyType -eq "vSAN-ESA" -and $hostDeployedFromWitnessOvf -eq 1) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" was deployed from the vSAN OSA witness OVA (HostDeployedFromWitnessOVF=1). For an ESA cluster use the vSAN ESA witness appliance OVA."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": this witness was deployed from the vSAN OSA witness OVA. For an ESA cluster use the vSAN ESA witness appliance OVA (and vice versa for OSA). Redeploy the correct witness OVA and re-run.")
-            }
-        }
+        Confirm-VsanWitnessConfiguration `
+            -ClusterName $ClusterName `
+            -StoragePolicyType $StoragePolicyType `
+            -vSanWitnessVmName $vSanWitnessVmName `
+            -WitnessHost $witnessHost
 
-        # Fail if witness disk layout does not match requested storage type (OSA vs ESA). Prevents using an OSA witness for ESA or vice versa.
-        if ($StoragePolicyType -eq "vSAN-ESA") {
-            $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $witnessHost -Server $Script:vCenterName
-            if ($witnessOsaResult.HasValidOsaGroup) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use an ESA witness or remove the OSA disk group from this host."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host `"$vSanWitnessVmName`" has a vSAN OSA disk group (cache + capacity). This witness is for vSAN OSA, not ESA. Use a different host for the ESA witness or remove the OSA disk group from this host. Deployment will roll back.")
-            }
-        }
-        elseif ($StoragePolicyType -eq "vSAN-OSA") {
-            $witnessStoragePoolDisksForMismatch = Get-VsanStoragePoolDisk -VMHost $witnessHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
-            $witnessEsaPoolCount = if ($witnessStoragePoolDisksForMismatch) { @($witnessStoragePoolDisksForMismatch).Count } else { 0 }
-            if ($witnessEsaPoolCount -ge 1) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use an OSA witness or remove the ESA storage pool from this host."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host `"$vSanWitnessVmName`" has a vSAN ESA storage pool (all-flash). This witness is for vSAN ESA, not OSA. Use a different host for the OSA witness or remove the ESA storage pool from this host. Deployment will roll back.")
-            }
-        }
+        Invoke-EnsureWitnessVsanTraffic `
+            -ClusterName $ClusterName `
+            -vSanWitnessVmName $vSanWitnessVmName `
+            -WitnessHost $witnessHost
 
-        # Enforce witness host minimum memory based on storage type (OSA 8 GB, ESA 16 GB).
-        $witnessMemoryGB = $witnessHost.MemoryTotalGB
-        if ($witnessMemoryGB -lt $minimumWitnessMemoryGB) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has $witnessMemoryGB GB memory; $StoragePolicyType requires at least $minimumWitnessMemoryGB GB to enable a witness."
-            throw [VcfDeploymentException]::new("The witness host `"$vSanWitnessVmName`" has $witnessMemoryGB GB of memory. You must upgrade the witness host to at least $minimumWitnessMemoryGB GB of memory to enable a witness for a $StoragePolicyType cluster.")
-        }
+        $clusterSetup = Confirm-VsanClusterReadinessForWitness `
+            -Cluster $cluster `
+            -ClusterName $ClusterName `
+            -LabEnvironment:$LabEnvironment.IsPresent `
+            -vSanWitnessVmName $vSanWitnessVmName `
+            -WitnessHost $witnessHost
+        $clusterHosts  = $clusterSetup.ClusterHosts
+        $preferredHost = $clusterSetup.PreferredHost
 
-        # Enforce witness host disk configuration: ESA may have zero storage pool disks (supported configuration); OSA requires a disk group with one cache and one capacity disk.
-        if ($StoragePolicyType -eq "vSAN-ESA") {
-            $witnessStoragePoolDisks = Get-VsanStoragePoolDisk -VMHost $witnessHost -Server $Script:vCenterName -ErrorAction SilentlyContinue
-            $witnessPoolDiskCount = if ($witnessStoragePoolDisks) { @($witnessStoragePoolDisks).Count } else { 0 }
-            Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" has $witnessPoolDiskCount vSAN ESA storage pool disk(s). ESA witness with zero disks is supported."
-        }
-        elseif ($StoragePolicyType -eq "vSAN-OSA") {
-            # Use HostVsanSystem API so witness is validated even when not in a cluster (Get-VsanDiskGroup requires cluster membership).
-            $witnessOsaResult = Get-VsanOsaDiskGroupsOnHost -VMHost $witnessHost -Server $Script:vCenterName
-            if ($witnessOsaResult.DiskGroupCount -lt 1) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has no vSAN OSA disk group. A vSAN witness for OSA requires a disk group with one cache and one capacity disk. Create a disk group on the witness host, then re-run."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host `"$vSanWitnessVmName`" has no vSAN OSA disk group. Create a disk group with one cache (SSD) and one capacity disk on the witness host, then re-run.")
-            }
-            if (-not $witnessOsaResult.HasValidOsaGroup) {
-                Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has vSAN OSA disk group(s) but none has both cache and capacity. A vSAN witness for OSA requires one cache (SSD) and one capacity disk. Add the required disks to a disk group on the witness host, then re-run."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host `"$vSanWitnessVmName`" disk group(s) do not have both cache and capacity disk. Create or update a disk group with one cache (SSD) and one capacity disk, then re-run.")
-            }
-            Write-LogMessage -Type DEBUG -Message "Witness host `"$vSanWitnessVmName`" has $($witnessOsaResult.DiskGroupCount) vSAN OSA disk group(s) with valid cache and capacity."
-        }
-
-        # Ensure the witness host has at least one VMkernel with vSAN traffic enabled (required for witness participation).
-        # Do not add witness traffic type (-T witness) on the witness host; only data hosts get esxcli vsan network ip add -i vmkx -T witness (Broadcom stretched cluster doc).
-        $witnessVsanCheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $witnessHost -RequireWitnessTraffic $false
-        if (-not $witnessVsanCheck.HasCompliantInterface -and $witnessVsanCheck.Vmk0Adapter) {
-            try {
-                # Witness host only needs vSAN traffic on vmk0; do not set witness traffic type on the witness host (per Broadcom: do not configure the witness traffic type on the witness host).
-                $witnessSetParams = @{ VirtualNic = $witnessVsanCheck.Vmk0Adapter; VsanTrafficEnabled = $true }
-                Set-VMHostNetworkAdapter @witnessSetParams -Confirm:$false -ErrorAction Stop | Out-Null
-                Write-LogMessage -Type INFO -Message "vSAN witness host `"$vSanWitnessVmName`" had no VMkernel with vSAN traffic enabled; vSAN traffic has been enabled on vmk0."
-            } catch [VcfDeploymentException] {
-                throw  # already logged and typed — propagate without re-wrapping
-            } catch {
-                Write-LogMessage -Type ERROR -Message "Failed to enable vSAN traffic on vmk0 on witness host `"$vSanWitnessVmName`": $($_.Exception.Message). vSAN traffic is required for the witness; deployment will roll back."
-                throw [VcfDeploymentException]::new("vSAN traffic is required for the witness host. Could not ensure an interface is tagged for vSAN traffic on witness `"$vSanWitnessVmName`". Deployment will roll back.")
-            }
-            $witnessRecheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $witnessHost -RequireWitnessTraffic $false
-            if (-not $witnessRecheck.HasCompliantInterface) {
-                Write-LogMessage -Type ERROR -Message "After enabling vSAN traffic on witness host `"$vSanWitnessVmName`", interface is still not tagged. vSAN traffic is required for the witness; deployment will roll back."
-                throw [VcfDeploymentException]::new("vSAN traffic is required for the witness host. Could not ensure an interface is tagged for vSAN traffic on witness `"$vSanWitnessVmName`". Deployment will roll back.")
-            }
-        }
-        elseif (-not $witnessVsanCheck.HasCompliantInterface) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" has no VMkernel with vSAN traffic enabled and vmk0 was not found. vSAN traffic is required for the witness; deployment will roll back."
-            throw [VcfDeploymentException]::new("vSAN traffic is required for the witness host. Witness `"$vSanWitnessVmName`" has no VMkernel with vSAN traffic enabled (vmk0 not found). Enable vSAN traffic on at least one VMkernel on the witness host, then re-run. Deployment will roll back.")
-        }
-
-        # Get all hosts in the cluster and select the first one as the preferred fault domain host.
-        Write-LogMessage -Type DEBUG -Message "Retrieving ESX hosts in cluster `"$ClusterName`"."
-        $clusterHosts = Get-VMHost -Location $cluster -Server $Script:vCenterName -ErrorAction Stop
-        if (-not $clusterHosts -or $clusterHosts.Count -eq 0) {
-            Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not contain any hosts."
-            throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": cluster has no hosts.")
-        }
-
-        # Require exact same ESX release (version and build) on all data hosts and the witness. A different build on the witness can cause vSAN stretched cluster issues; fail early and let the caller roll back.
-        $witnessVersion = $null
-        $witnessBuild = $null
-        if ($witnessHost.PSObject.Properties['Version']) { $witnessVersion = [string]$witnessHost.Version }
-        if ([String]::IsNullOrWhiteSpace($witnessVersion) -and $witnessHost.ExtensionData -and $witnessHost.ExtensionData.Config -and $witnessHost.ExtensionData.Config.Product) { $witnessVersion = [string]$witnessHost.ExtensionData.Config.Product.Version }
-        if ($witnessHost.PSObject.Properties['Build']) { $witnessBuild = [string]$witnessHost.Build }
-        if ([String]::IsNullOrWhiteSpace($witnessBuild) -and $witnessHost.ExtensionData -and $witnessHost.ExtensionData.Config -and $witnessHost.ExtensionData.Config.Product) { $witnessBuild = [string]$witnessHost.ExtensionData.Config.Product.Build }
-        $referenceHost = $clusterHosts[0]
-        $refVersion = $null
-        $refBuild = $null
-        if ($referenceHost.PSObject.Properties['Version']) { $refVersion = [string]$referenceHost.Version }
-        if ([String]::IsNullOrWhiteSpace($refVersion) -and $referenceHost.ExtensionData -and $referenceHost.ExtensionData.Config -and $referenceHost.ExtensionData.Config.Product) { $refVersion = [string]$referenceHost.ExtensionData.Config.Product.Version }
-        if ($referenceHost.PSObject.Properties['Build']) { $refBuild = [string]$referenceHost.Build }
-        if ([String]::IsNullOrWhiteSpace($refBuild) -and $referenceHost.ExtensionData -and $referenceHost.ExtensionData.Config -and $referenceHost.ExtensionData.Config.Product) { $refBuild = [string]$referenceHost.ExtensionData.Config.Product.Build }
-        $versionMismatch = $false
-        $mismatchDetail = $null
-        if ([String]::IsNullOrWhiteSpace($witnessVersion) -or [String]::IsNullOrWhiteSpace($refVersion)) {
-            Write-LogMessage -Type WARNING -Message "Could not read ESX version for version check (witness or cluster host). Skipping strict version check."
-        } else {
-            if ($witnessVersion -ne $refVersion) {
-                $versionMismatch = $true
-                $mismatchDetail = "Witness `"$vSanWitnessVmName`" has ESX version `"$witnessVersion`" (build $witnessBuild); cluster data hosts have version `"$refVersion`" (build $refBuild). All must be the same release."
-            }
-            if (-not $versionMismatch -and -not [String]::IsNullOrWhiteSpace($witnessBuild) -and -not [String]::IsNullOrWhiteSpace($refBuild) -and $witnessBuild -ne $refBuild) {
-                $versionMismatch = $true
-                $mismatchDetail = "Witness `"$vSanWitnessVmName`" has ESX build `"$witnessBuild`" (version $witnessVersion); cluster data hosts have build `"$refBuild`" (version $refVersion). Data nodes and witness must be the exact same ESX release (same build number)."
-            }
-            if (-not $versionMismatch) {
-                foreach ($dataHost in @($clusterHosts)) {
-                    $dv = if ($dataHost.PSObject.Properties['Version']) { [string]$dataHost.Version } else { $null }
-                    if ([String]::IsNullOrWhiteSpace($dv) -and $dataHost.ExtensionData -and $dataHost.ExtensionData.Config -and $dataHost.ExtensionData.Config.Product) { $dv = [string]$dataHost.ExtensionData.Config.Product.Version }
-                    $db = if ($dataHost.PSObject.Properties['Build']) { [string]$dataHost.Build } else { $null }
-                    if ([String]::IsNullOrWhiteSpace($db) -and $dataHost.ExtensionData -and $dataHost.ExtensionData.Config -and $dataHost.ExtensionData.Config.Product) { $db = [string]$dataHost.ExtensionData.Config.Product.Build }
-                    if (-not [String]::IsNullOrWhiteSpace($dv) -and $dv -ne $refVersion) {
-                        $versionMismatch = $true
-                        $mismatchDetail = "Cluster host `"$($dataHost.Name)`" has ESX version `"$dv`" (build $db); expected same as reference version `"$refVersion`" (build $refBuild). All data hosts and witness must be the same release."
-                        break
-                    }
-                    if (-not [String]::IsNullOrWhiteSpace($db) -and -not [String]::IsNullOrWhiteSpace($refBuild) -and $db -ne $refBuild) {
-                        $versionMismatch = $true
-                        $mismatchDetail = "Cluster host `"$($dataHost.Name)`" has ESX build `"$db`"; expected build `"$refBuild`" (version $refVersion). All data hosts and witness must be the exact same ESX release."
-                        break
-                    }
-                }
-            }
-        }
-        if ($versionMismatch -and $mismatchDetail) {
-            if ($LabEnvironment) {
-                Write-LogMessage -Type WARNING -Message "ESX version/build mismatch (lab environment; continuing without prompt): $mismatchDetail."
-                $continueAnyway = $true
-            } else {
-                Write-LogMessage -Type ERROR -Message "ESX version/build mismatch: $mismatchDetail."
-                $continuePrompt = "Witness and data hosts have different ESX builds. Continue anyway? (Y/N; press Enter for N)"
-                $continueAnyway = $false
-                try {
-                    do {
-                        $response = Read-Host $continuePrompt
-                        $response = if ($response) { $response.Trim() } else { "" }
-                        if ($response -match '^[yY](es)?$') {
-                            $continueAnyway = $true
-                            Write-LogMessage -Type WARNING -Message "User chose to continue despite witness/data host ESX build mismatch. Proceeding with vSAN witness configuration."
-                            break
-                        }
-                        if ([String]::IsNullOrWhiteSpace($response) -or $response -match '^[nN](o)?$') {
-                            break
-                        }
-                        Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N (or press Enter for N)."
-                    } while ($true)
-                } catch {
-                    Write-LogMessage -Type WARNING -Message "Read-Host failed (non-interactive?): $($_.Exception.Message). Treating as N; deployment will fail."
-                }
-            }
-            if (-not $continueAnyway) {
-                Write-LogMessage -Type ERROR -Message "Deployment failed configuring vSAN witness for cluster `"$ClusterName`": $mismatchDetail Upgrade or patch the witness and data hosts to the same ESX release (same build number), then re-run. The deployment will be rolled back."
-                throw [VcfDeploymentException]::new()
-            }
-        } else {
-            Write-LogMessage -Type DEBUG -Message "Witness and cluster hosts have matching ESX release (version $refVersion, build $refBuild)."
-        }
-
-        # Per vSAN Stretched Cluster Guide: the witness host must not be a member of any cluster. It resides in vCenter inventory but not in the cluster. Having the witness in the cluster can cause partitioning or undefined behavior.
-        $witnessMoRefValue = $null
-        if ($witnessHost.ExtensionData -and $witnessHost.ExtensionData.MoRef) {
-            $witnessMoRefValue = $witnessHost.ExtensionData.MoRef.Value
-        }
-        $witnessIsInCluster = $false
-        if ($witnessMoRefValue) {
-            $witnessIsInCluster = @($clusterHosts | Where-Object { $_.ExtensionData -and $_.ExtensionData.MoRef -and $_.ExtensionData.MoRef.Value -eq $witnessMoRefValue }).Count -gt 0
-        }
-        if (-not $witnessIsInCluster) {
-            $witnessIsInCluster = @($clusterHosts | Where-Object { $_.Id -eq $witnessHost.Id -or $_.Name -eq $witnessHost.Name }).Count -gt 0
-        }
-        if ($witnessIsInCluster) {
-            Write-LogMessage -Type ERROR -Message "Witness host `"$vSanWitnessVmName`" is a member of cluster `"$ClusterName`". Per the vSAN Stretched Cluster Guide, the witness must not be a member of any cluster; it must reside in vCenter inventory outside the cluster. Remove the witness host from the cluster, then re-run."
-            throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": witness host must not be a member of the cluster. Remove the witness from the cluster and add it to the data center (or folder) outside the cluster, then re-run.")
-        }
-
-        # Ensure every cluster host has vSAN (and witness) traffic; vmk0 is mgmt + vSAN witness only (no vSAN). Clear only vSAN from vmk0 if present.
-        foreach ($dataHost in @($clusterHosts)) {
-            $dataHostName = $dataHost.Name
-            $vmk0 = Get-VMHostNetworkAdapter -VMHost $dataHost -VMKernel -Server $Script:vCenterName -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq "vmk0" }
-            if ($vmk0 -and $vmk0.PSObject.Properties["VsanTrafficEnabled"] -and $vmk0.VsanTrafficEnabled -eq $true) {
-                try {
-                    Set-VMHostNetworkAdapter -VirtualNic $vmk0 -VsanTrafficEnabled $false -Confirm:$false -ErrorAction Stop | Out-Null
-                    Write-LogMessage -Type INFO -Message "Cleared vSAN traffic from mgmt (vmk0) on host `"$dataHostName`" (vmk0 is mgmt + vSAN witness only)."
-                } catch {
-                    Write-LogMessage -Type WARNING -Message "Could not clear vSAN from vmk0 on host `"$dataHostName`": $($_.Exception.Message). Clear manually if needed."
-                }
-            }
-            $vsanCheck = Test-VmkernelVsanAndWitnessTraffic -VMHost $dataHost
-            if (-not $vsanCheck.HasCompliantInterface) {
-                Write-LogMessage -Type ERROR -Message "Cluster host `"$dataHostName`" has no VMkernel with vSAN and vSAN witness traffic enabled. Use vmk2 (or vmk3) for vSAN; vmk0 may carry vSAN witness only."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": cluster host `"$dataHostName`" requires at least one VMkernel with vSAN (e.g. vmk2) and at least one with vSAN witness (vmk0 or vmk3). Configure networkingVmKernelInterfaces and ensure VMkernels exist. Check logs for details.")
-            }
-            if (-not (Test-VsanTrafficVmkernelHasValidIp -VMHost $dataHost)) {
-                Write-LogMessage -Type ERROR -Message "Cluster host `"$dataHostName`" has vSAN traffic enabled but the VMkernel has no IPv4 or IPv6 address configured."
-                throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": neither IPv4 nor IPv6 is properly configured for vSAN traffic on all hosts. On host `"$dataHostName`", the VMkernel(s) with vSAN traffic have no IP. Configure a static IPv4 (or IPv6) on the dedicated vSAN VMkernel (e.g. vmk2) on each cluster host, then re-run.")
-            }
-        }
-
-        $preferredHost = $clusterHosts[0]
-        Write-LogMessage -Type DEBUG -Message "Using first ESX host `"$($preferredHost.Name)`" as preferred fault domain host."
-
-        # Get the current vSAN cluster configuration.
         Write-LogMessage -Type DEBUG -Message "Retrieving current vSAN cluster configuration for cluster `"$ClusterName`"."
         $vsanClusterConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction Stop
         if (-not $vsanClusterConfig) {
-            Write-LogMessage -Type ERROR -Message "Failed to retrieve vSAN cluster configuration for cluster `"$ClusterName`"."
-            throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": vSAN cluster configuration not available.")
+            $err = "Failed to retrieve vSAN cluster configuration for cluster `"$ClusterName`"."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
-        # Check if witness host is already configured.
         if ($vsanClusterConfig.WitnessHost -and $vsanClusterConfig.WitnessHost.Name -eq $vSanWitnessVmName) {
             Write-LogMessage -Type INFO -Message "Witness host `"$vSanWitnessVmName`" is already configured for cluster `"$ClusterName`"."
             return
         }
 
-        # Resolve preferred fault domain object for stretched cluster (API requires both witness host and preferred fault domain).
-        # Suppress VMHost.State deprecation warning; PowerCLI vSAN cmdlets may read deprecated .State when given VMHost. We use ConnectionState in our code.
-        $previousWarningPreference = $WarningPreference
-        $WarningPreference = 'SilentlyContinue'
-        try {
-            $preferredFaultDomain = $null
-            $primaryFaultDomainName = "Primary"
-            $secondaryFaultDomainName = "Secondary"
-            try {
-                # Resolve by "Primary" first (our created naming), then by caller-provided name (e.g. edge site), then by VMHost.
-                $preferredFaultDomain = Get-VsanFaultDomain -Cluster $cluster -Name $primaryFaultDomainName -Server $Script:vCenterName -ErrorAction SilentlyContinue | Select-Object -First 1
-                if (-not $preferredFaultDomain -and $PreferredFaultDomainName -ne $primaryFaultDomainName) {
-                    $preferredFaultDomain = Get-VsanFaultDomain -Cluster $cluster -Name $PreferredFaultDomainName -Server $Script:vCenterName -ErrorAction SilentlyContinue | Select-Object -First 1
-                }
-                if (-not $preferredFaultDomain) {
-                    $preferredFaultDomain = Get-VsanFaultDomain -Cluster $cluster -VMHost $preferredHost -Server $Script:vCenterName -ErrorAction SilentlyContinue | Select-Object -First 1
-                    if ($preferredFaultDomain) {
-                        Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain by VMHost: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
-                    }
-                } else {
-                    Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain by name: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
-                }
-            } catch {
-                Write-LogMessage -Type DEBUG -Message "Could not resolve VsanFaultDomain (Get-VsanFaultDomain): $($_.Exception.Message). Proceeding without -PreferredFaultDomain."
-            }
-
-        # If no fault domains exist, create them for stretched cluster. Preferred (first host) is named "Primary"; the other is "Secondary" for consistent UI and resolution.
-        if (-not $preferredFaultDomain) {
-            $existingFaultDomains = Get-VsanFaultDomain -Cluster $cluster -Server $Script:vCenterName -ErrorAction SilentlyContinue
-            if (-not $existingFaultDomains -or $existingFaultDomains.Count -eq 0) {
-                $preferredFdCreateName = $primaryFaultDomainName
-                Write-LogMessage -Type INFO -Message "No vSAN fault domains found for cluster `"$ClusterName`". Creating FDs `"$preferredFdCreateName`" and `"$secondaryFaultDomainName`"."
-                try {
-                    New-VsanFaultDomain -Name $preferredFdCreateName -VMHost $preferredHost -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                    Write-LogMessage -Type DEBUG -Message "Created fault domain `"$preferredFdCreateName`" (preferred) with host `"$($preferredHost.Name)`"."
-                    $remainingHosts = $clusterHosts | Where-Object { $_.Id -ne $preferredHost.Id }
-                    if ($remainingHosts -and $remainingHosts.Count -gt 0) {
-                        New-VsanFaultDomain -Name $secondaryFaultDomainName -VMHost $remainingHosts -Server $Script:vCenterName -ErrorAction Stop | Out-Null
-                        Write-LogMessage -Type DEBUG -Message "Created fault domain `"$secondaryFaultDomainName`" with host(s): $(($remainingHosts | ForEach-Object { $_.Name }) -join ', ')."
-                    }
-                    $preferredFaultDomain = Get-VsanFaultDomain -Cluster $cluster -Name $preferredFdCreateName -Server $Script:vCenterName -ErrorAction Stop | Select-Object -First 1
-                    if ($preferredFaultDomain) {
-                        Write-LogMessage -Type DEBUG -Message "Resolved preferred fault domain after creation: `"$($preferredFaultDomain.Name)`" (Id: $($preferredFaultDomain.Id))."
-                    }
-                } catch [VcfDeploymentException] {
-                    throw  # already logged and typed — propagate without re-wrapping
-                } catch {
-                    Write-LogMessage -Type ERROR -Message "Failed to create vSAN fault domains for cluster `"$ClusterName`": $($_.Exception.Message)"
-                    throw [VcfDeploymentException]::new("Deployment failed configuring vSAN witness for cluster `"$ClusterName`": could not create fault domains. $($_.Exception.Message)")
-                }
-            } else {
-                Write-LogMessage -Type WARNING -Message "Could not resolve VsanFaultDomain for name `"$primaryFaultDomainName`" or `"$PreferredFaultDomainName`" or for host `"$($preferredHost.Name)`". Cluster has $($existingFaultDomains.Count) fault domain(s) but none match. Ensure preferred fault domain name matches an existing fault domain or create fault domains with New-VsanFaultDomain. Set-VsanClusterConfiguration may fail with preferred fault domain not specified."
-            }
-        }
-
-        # Enable vSAN automatic disk claim (VsanDiskClaimMode Automatic) when supported (OSA and ESA). Re-fetch config if we changed it.
-        if (Enable-VsanAutomaticDiskClaimIfSupported -ClusterName $ClusterName) {
-            $vsanClusterConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction Stop
-        }
-
-        # Configure the vSAN witness host and stretched cluster. API requires both -WitnessHost and -PreferredFaultDomain when enabling stretched cluster.
-        # Per vSAN Stretched Cluster Guide: validate connectivity between data hosts and witness before/after configuration to avoid partition. Use vmkping from each data site to the witness vSAN VMkernel IP; ensure UDP 23451 (vSAN clustering) and 12321 (unicast agent to witness) are open. The witness must communicate with each data site directly, not through the other site.
-        Write-LogMessage -Type INFO -Message "Ensure connectivity between cluster hosts and witness through vSAN Witness VMkernel interface."
-        if (-not $preferredFaultDomain) {
-            Write-LogMessage -Type WARNING -Message "Preferred fault domain not resolved. Set-VsanClusterConfiguration may fail with preferred fault domain not specified."
-        }
-        Write-LogMessage -Type DEBUG -Message "Attempting Set-VsanClusterConfiguration for cluster `"$ClusterName`" with vSanWitnessVmName=`"$vSanWitnessVmName`", preferred fault domain host=`"$($preferredHost.Name)`", PreferredFaultDomain resolved=$($null -ne $preferredFaultDomain)."
-        Write-LogMessage -Type INFO -Message "Enabling stretched cluster mode and configuring witness host `"$vSanWitnessVmName`" for cluster `"$ClusterName`"..."
-        $progressActivity = "Configuring vSAN witness for cluster `"$ClusterName`""
-        try {
-            Write-Progress -Activity $progressActivity -Status "Enabling stretched cluster mode and configuring witness host. This may take several minutes..." -PercentComplete -1
-            [Console]::Out.Flush()
-            $setParams = @{
-                Configuration            = $vsanClusterConfig
-                StretchedClusterEnabled  = $true
-                WitnessHost              = $witnessHost
-                Server                   = $Script:vCenterName
-            }
-            if ($preferredFaultDomain) {
-                $setParams["PreferredFaultDomain"] = $preferredFaultDomain
-            }
-            # Per vSAN Stretched Cluster Guide: enable Site Read Locality so reads come from the local site and reduce traffic across the ISL.
-            if ((Get-Command Set-VsanClusterConfiguration -ErrorAction SilentlyContinue).Parameters.ContainsKey("SiteReadLocalityEnabled")) {
-                $setParams["SiteReadLocalityEnabled"] = $true
-                Write-LogMessage -Type DEBUG -Message "Enabling Site Read Locality on stretched cluster per vSAN Stretched Cluster Guide."
-            }
-            Set-VsanClusterConfiguration @setParams -ErrorAction Stop | Out-Null
-        }
-        finally {
-            Write-Progress -Activity $progressActivity -Status "Complete" -Completed
-            [Console]::Out.Flush()
-        }
-        # Verify the configuration was applied.
-        $updatedConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-        if ($updatedConfig -and $updatedConfig.WitnessHost -and $updatedConfig.WitnessHost.Name -eq $vSanWitnessVmName) {
-            Write-LogMessage -Type INFO -Message "Successfully configured witness host `"$vSanWitnessVmName`" for cluster `"$ClusterName`"."
-            # Enable vSAN automatic rebalancing at 30% then re-apply vSAN cluster configuration so vCenter pushes config to all hosts including the witness.
-            $rebalanceEnabled = Enable-VsanAutomaticRebalance -ClusterName $ClusterName -AutomaticRebalanceThreshold 30
-            if ($rebalanceEnabled -and -not (Test-VsanAutomaticRebalanceAtThreshold -ClusterName $ClusterName -ExpectedThresholdPercent 30)) {
-                Write-LogMessage -Type DEBUG -Message "vSAN automatic rebalance at 30% may not be applied on cluster `"$ClusterName`"; config re-apply will push cluster settings."
-            }
-            $reapplySucceeded = Invoke-VsanClusterConfigReapply -ClusterName $ClusterName
-            if ($reapplySucceeded) {
-                Write-LogMessage -Type DEBUG -Message "Re-applied vSAN config after witness setup to help witness sync with cluster (reduce partition risk)."
-            }
-            # Check for partition per vSAN Stretched Cluster Guide; if connectivity or routing is wrong, the cluster can end up in multiple partitions.
-            $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $true
-            if ($healthSummary -and (Test-VsanClusterPartitioned -HealthSummary $healthSummary)) {
-                Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" appears partitioned after witness configuration. Ensure the witness is at a third site, data hosts can reach the witness vSAN VMkernel (vmkping), and UDP 23451/12321 are allowed. See vSAN Stretched Cluster Guide (vmware.com/docs/vsan-stretched-cluster-guide)."
-            }
-        } else {
-            Write-LogMessage -Type WARNING -Message "Witness host configuration may not have been applied correctly. Verification failed."
-        }
-        }
-        finally {
-            $WarningPreference = $previousWarningPreference
-        }
-    }
-    catch [System.UnauthorizedAccessException] {
-        $errorMessage = $_.Exception.Message
-        $reason = Get-CleanVsanErrorMessage -ErrorMessage $errorMessage
-        if ($reason -eq $errorMessage) { $reason = "authorization error. $errorMessage" }
-        $cleanMessage = "Failed to configure vSAN witness for cluster `"$ClusterName`". Reason: $reason"
-        Write-LogMessage -Type ERROR -Message $cleanMessage
-        throw [VcfDeploymentException]::new("Deployment failed. $cleanMessage")
-    }
-    catch [System.TimeoutException] {
-        $errorMessage = $_.Exception.Message
-        $reason = Get-CleanVsanErrorMessage -ErrorMessage $errorMessage
-        if ($reason -eq $errorMessage) { $reason = "network/timeout. $errorMessage" }
-        $cleanMessage = "Failed to configure vSAN witness for cluster `"$ClusterName`". Reason: $reason"
-        Write-LogMessage -Type ERROR -Message $cleanMessage
-        throw [VcfDeploymentException]::new("Deployment failed. $cleanMessage")
+        Invoke-WitnessFaultDomainSetup `
+            -Cluster $cluster `
+            -ClusterHosts $clusterHosts `
+            -ClusterName $ClusterName `
+            -PreferredFaultDomainName $PreferredFaultDomainName `
+            -PreferredHost $preferredHost `
+            -VsanClusterConfig $vsanClusterConfig `
+            -vSanWitnessVmName $vSanWitnessVmName `
+            -WitnessHost $witnessHost
     } catch {
         $errorMessage = $_.Exception.Message
         $reason = Get-CleanVsanErrorMessage -ErrorMessage $errorMessage
+        if ($reason -eq $errorMessage) {
+            if ($_.Exception -is [System.UnauthorizedAccessException]) { $reason = "authorization error. $errorMessage" }
+            elseif ($_.Exception -is [System.TimeoutException]) { $reason = "network/timeout. $errorMessage" }
+        }
         $cleanMessage = "Failed to configure vSAN witness for cluster `"$ClusterName`". Reason: $reason"
         Write-LogMessage -Type ERROR -Message $cleanMessage
         if ($errorMessage -match "preferred fault domain|witness host is not specified|witness.*not specified") {
             Write-LogMessage -Type ERROR -Message "vSAN stretched cluster requires both a witness host and a preferred fault domain. Ensure common.vSanWitnessVmName (or cluster-level clusters[].vSanWitnessVmName) and the preferred fault domain name (e.g. edge site name) are set. If the API still reports missing preferred fault domain, the PowerCLI/API version may not expose it; check VCF PowerCLI documentation for Set-VsanClusterConfiguration."
         }
-        throw [VcfDeploymentException]::new()
+        if ($errorMessage -match "ESA disabled cluster|witnessVsan1NotSupported|does not support joining vSAN ESA") {
+            Write-LogMessage -Type ERROR -Message "Cluster `"$ClusterName`" does not have vSAN ESA enabled in the vCenter database (vsanEsaEnabled=false). vSAN 9.1+ enforces this before an ESA witness can join. This is usually caused by an existing cluster that predates this requirement. Re-run the deployment script — Add-Cluster now applies Set-Cluster -VsanEsaEnabled automatically. If the cluster is vSAN OSA, delete it and recreate with storageType: vSAN-ESA in infrastructure.json."
+        }
+        throw [VcfDeploymentException]::new("Deployment failed. $cleanMessage")
     }
 }
 function Get-VsanClusterHealthSummaryViaView {
@@ -4930,12 +6430,16 @@ function Get-VsanClusterHealthSummaryViaView {
 
         .NOTES
         Requires connection to vCenter. Uses Get-VsanView and VsanQueryVcClusterHealthSummary (VCF PowerCLI 9).
+    
+        .EXAMPLE
+        $vsanClusterHealthSummaryViaView = Get-VsanClusterHealthSummaryViaView -ClusterName "edge-cluster-1"
     #>
+    [OutputType([PSObject])]
 
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [bool]$FetchFromCache = $false
+        [Parameter(Mandatory = $false)] [Switch]$FetchFromCache
     )
 
     $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
@@ -4945,7 +6449,6 @@ function Get-VsanClusterHealthSummaryViaView {
         return $null
     }
 
-    # Get the cluster MoRef and vSAN health system view.
     $clusterMoRef = $clusterObject.ExtensionData.MoRef
     $healthSystemView = Get-VsanView -Id "VsanVcClusterHealthSystem-vsan-cluster-health-system" -Server $Script:vCenterName -ErrorAction SilentlyContinue
     if (-not $healthSystemView) {
@@ -4956,11 +6459,9 @@ function Get-VsanClusterHealthSummaryViaView {
     # Get the requested fields for the health summary (include advCfgSync for vCenter-to-host config sync check).
     $requestedFields = @('advCfgSync', 'groups', 'networkHealth', 'overallHealth', 'overallHealthDescription')
     try {
-        # Call the vSAN health API to get the health summary.
         $healthSummary = $healthSystemView.VsanQueryVcClusterHealthSummary($clusterMoRef, $null, $null, $null, $requestedFields, $FetchFromCache, $null, $null, $null)
         return $healthSummary
     }
-    # Handle any errors that occur while calling the vSAN health API.
     catch {
         Write-LogMessage -Type ERROR -Message "VsanQueryVcClusterHealthSummary failed: $($_.Exception.Message)"
         Write-LogMessage -Type DEBUG -Message "vSAN health summary unavailable; caller will log health_summary_null next steps. Verify vCenter connection and cluster name; ensure VsanVcClusterHealthSystem (vCenter /vsanHealth) is available."
@@ -4983,9 +6484,13 @@ function Test-VsanClusterPartitioned {
 
         .OUTPUTS
         Boolean. $true if partitioned, $false otherwise.
+    
+        .EXAMPLE
+        Test-VsanClusterPartitioned -HealthSummary "Operation failed."
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] $HealthSummary
     )
@@ -5066,6 +6571,76 @@ function Test-VsanClusterPartitioned {
     # No partition indicators found in overall, network, or group health.
     return $false
 }
+function Write-VsanNetworkHealthDebugInfo {
+
+    <#
+    .SYNOPSIS
+        Logs DEBUG/WARNING details from a vSAN networkHealth object.
+    .DESCRIPTION
+        Reports per-context network diagnostics (ping test results, partition list, comm failures,
+        disconnected hosts) from the networkHealth property of a vSAN health summary. Partition-
+        context fields are logged at WARNING; everything else at DEBUG.
+    .PARAMETER ClusterName
+        Cluster name used in log messages.
+    .PARAMETER Context
+        Health-check context string; controls whether partition fields are escalated to WARNING.
+    .PARAMETER NetworkHealth
+        The networkHealth object from the vSAN health summary.
+    .EXAMPLE
+        Write-VsanNetworkHealthDebugInfo -ClusterName "cl1" -Context "partition_detected" -NetworkHealth $summary.networkHealth
+    .NOTES
+        Called from Write-VsanHealthFailureDebugInfo.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Context,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$NetworkHealth
+    )
+
+    if ($Context -match 'partition') {
+        $diagParts = [System.Collections.Generic.List[String]]::new()
+        foreach ($field in @('pingTestSuccess', 'largePingTestSuccess', 'issueFound', 'clusterInUnicastMode', 'vsanVmknicPresent')) {
+            $val = $NetworkHealth.$field
+            if ($null -ne $val) { $diagParts.Add("$field=$val") }
+        }
+        if ($diagParts.Count -gt 0) {
+            Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" network health: $($diagParts -join ', ')."
+        }
+    }
+
+    $partitions = $NetworkHealth.partitions
+    Write-LogMessage -Type DEBUG -Message "vSAN health debug: networkHealth.partitions count=$(if ($partitions) { $partitions.Count } else { 0 })."
+    if ($partitions -and $partitions.Count -gt 0) {
+        $partitionSummaries = [System.Collections.Generic.List[String]]::new()
+        for ($index = 0; $index -lt $partitions.Count; $index++) {
+            $partitionInfo = $partitions[$index]
+            $hosts = $partitionInfo.PSObject.Properties['hosts'].Value
+            $partitionUnknown = $partitionInfo.PSObject.Properties['partitionUnknown'].Value
+            $partitionIdList = if ($hosts -and $hosts.Count -gt 0) { ($hosts -join ', ') } else { '(none)' }
+            Write-LogMessage -Type DEBUG -Message "vSAN health debug: partition[$index] partition IDs: $partitionIdList."
+            $unknownLabel = if ($partitionUnknown) { ' (unknown to collector)' } else { '' }
+            $partitionSummaries.Add("Partition $($index + 1)${unknownLabel}: $partitionIdList")
+        }
+        Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" partition (partition IDs per partition): $($partitionSummaries -join '; ')."
+    }
+
+    foreach ($fieldInfo in @(
+        @{ Field = 'otherHostsInVsanCluster'; Label = 'otherHostsInVsanCluster (hosts in vSAN not in vCenter)'; WarnMsg = "hosts in vSAN but not in vCenter" },
+        @{ Field = 'hostsCommFailure';         Label = 'hostsCommFailure';                                       WarnMsg = "hosts with vSAN service comm failure" },
+        @{ Field = 'hostsDisconnected';        Label = 'hostsDisconnected';                                      WarnMsg = "hosts disconnected from vCenter" }
+    )) {
+        $hostList = $NetworkHealth.($fieldInfo.Field)
+        if ($hostList -and $hostList.Count -gt 0) {
+            $list = $hostList -join ', '
+            Write-LogMessage -Type DEBUG -Message "vSAN health debug: $($fieldInfo.Label): $list."
+            if ($Context -match 'partition') {
+                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" $($fieldInfo.WarnMsg): $list."
+            }
+        }
+    }
+}
 function Write-VsanHealthFailureDebugInfo {
 
     <#
@@ -5084,6 +6659,9 @@ function Write-VsanHealthFailureDebugInfo {
 
         .PARAMETER HealthSummary
         Current VsanClusterHealthSummary when available (null for health_summary_null or repair_failed).
+    
+        .EXAMPLE
+        Write-VsanHealthFailureDebugInfo -ClusterName "edge-cluster-1" -Context "vcf-context"
     #>
 
     [CmdletBinding()]
@@ -5095,78 +6673,7 @@ function Write-VsanHealthFailureDebugInfo {
 
     $networkHealth = if ($HealthSummary -and $HealthSummary.networkHealth) { $HealthSummary.networkHealth } else { $null }
     if ($networkHealth) {
-        # Report network diagnostics when partition context (per VsanClusterNetworkHealthResult API).
-        if ($Context -match 'partition') {
-            $pingOk = $networkHealth.pingTestSuccess
-            $largePingOk = $networkHealth.largePingTestSuccess
-            $issueFound = $networkHealth.issueFound
-            $unicast = $networkHealth.clusterInUnicastMode
-            $vmknicPresent = $networkHealth.vsanVmknicPresent
-            $diagParts = @()
-            if ($null -ne $pingOk) {
-                $diagParts += "pingTestSuccess=$pingOk"
-            }
-            if ($null -ne $largePingOk) {
-                $diagParts += "largePingTestSuccess=$largePingOk"
-            }
-            if ($null -ne $issueFound) {
-                $diagParts += "issueFound=$issueFound"
-            }
-            if ($null -ne $unicast) {
-                $diagParts += "clusterInUnicastMode=$unicast"
-            }
-            if ($null -ne $vmknicPresent) {
-                $diagParts += "vsanVmknicPresent=$vmknicPresent"
-            }
-            if ($diagParts.Count -gt 0) {
-                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" network health: $($diagParts -join ', ')."
-            }
-        }
-
-        # Partition list: log partition IDs per partition (host names not resolved).
-        $partitions = $networkHealth.partitions
-        $partitionsCount = if ($partitions) { $partitions.Count } else { 0 }
-        Write-LogMessage -Type DEBUG -Message "vSAN health debug: networkHealth.partitions count=$partitionsCount."
-        if ($partitions -and $partitions.Count -gt 0) {
-            $partitionSummaries = @()
-            for ($index = 0; $index -lt $partitions.Count; $index++) {
-                $partitionInfo = $partitions[$index]
-                $hosts = $partitionInfo.PSObject.Properties['hosts'].Value
-                $partitionUnknown = $partitionInfo.PSObject.Properties['partitionUnknown'].Value
-                $partitionIdList = if ($hosts -and $hosts.Count -gt 0) { ($hosts -join ', ') } else { '(none)' }
-                Write-LogMessage -Type DEBUG -Message "vSAN health debug: partition[$index] partition IDs: $partitionIdList."
-                $unknownLabel = if ($partitionUnknown) { ' (unknown to collector)' } else { '' }
-                $partitionSummaries += "Partition $($index + 1)${unknownLabel}: $partitionIdList"
-            }
-            $hostsPerPartition = $partitionSummaries -join '; '
-            Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" partition (partition IDs per partition): $hostsPerPartition."
-        }
-
-        # Hosts in vSAN but not in vCenter; comm failure; disconnected.
-        $otherHosts = $networkHealth.otherHostsInVsanCluster
-        if ($otherHosts -and $otherHosts.Count -gt 0) {
-            $otherList = $otherHosts -join ', '
-            Write-LogMessage -Type DEBUG -Message "vSAN health debug: otherHostsInVsanCluster (hosts in vSAN not in vCenter): $otherList."
-            if ($Context -match 'partition') {
-                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" hosts in vSAN but not in vCenter: $otherList."
-            }
-        }
-        $commFailure = $networkHealth.hostsCommFailure
-        if ($commFailure -and $commFailure.Count -gt 0) {
-            $commList = $commFailure -join ', '
-            Write-LogMessage -Type DEBUG -Message "vSAN health debug: hostsCommFailure: $commList."
-            if ($Context -match 'partition') {
-                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" hosts with vSAN service comm failure: $commList."
-            }
-        }
-        $disconnected = $networkHealth.hostsDisconnected
-        if ($disconnected -and $disconnected.Count -gt 0) {
-            $discList = $disconnected -join ', '
-            Write-LogMessage -Type DEBUG -Message "vSAN health debug: hostsDisconnected: $discList."
-            if ($Context -match 'partition') {
-                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" hosts disconnected from vCenter: $discList."
-            }
-        }
+        Write-VsanNetworkHealthDebugInfo -ClusterName $ClusterName -Context $Context -NetworkHealth $networkHealth
     }
 
     # Overall description and failure reasons (for any context).
@@ -5201,6 +6708,7 @@ function Write-VsanHealthFailureDebugInfo {
     }
 }
 function Test-VsanHealthSuggestsPartitionOrNetwork {
+
     <#
         .SYNOPSIS
         Returns whether the health summary suggests a network partition or initial sync issue.
@@ -5215,8 +6723,12 @@ function Test-VsanHealthSuggestsPartitionOrNetwork {
 
         .OUTPUTS
         Boolean. $true if the summary suggests partition/network/initial sync; $false otherwise.
+    
+        .EXAMPLE
+        Test-VsanHealthSuggestsPartitionOrNetwork -HealthSummary "Operation failed."
     #>
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] $HealthSummary
     )
@@ -5225,19 +6737,16 @@ function Test-VsanHealthSuggestsPartitionOrNetwork {
         return $false
     }
 
-    # Check overall description for partition/network wording.
     $overallDescription = $HealthSummary.overallHealthDescription
     if ($overallDescription -and ($overallDescription -match 'Network misconfiguration|partition|network')) {
         return $true
     }
 
-    # Check formatted failure reasons.
     $failureReasonsText = Get-VsanHealthFailureReasons -HealthSummary $HealthSummary
     if ($failureReasonsText -and ($failureReasonsText -match 'Network misconfiguration|partition|network')) {
         return $true
     }
 
-    # Check network health description.
     $networkHealth = $HealthSummary.networkHealth
     if ($networkHealth -and $networkHealth.description -and ($networkHealth.description -match 'Network misconfiguration|partition|network')) {
         return $true
@@ -5245,6 +6754,7 @@ function Test-VsanHealthSuggestsPartitionOrNetwork {
     return $false
 }
 function Test-VsanClusterAdvCfgSyncInSync {
+
     <#
         .SYNOPSIS
         Returns whether vSAN advanced configuration is in sync across all hosts (vCenter config pushed to ESX).
@@ -5258,8 +6768,12 @@ function Test-VsanClusterAdvCfgSyncInSync {
 
         .OUTPUTS
         Boolean. $true if advCfgSync is absent or all entries report inSync; $false if any entry is out of sync.
+    
+        .EXAMPLE
+        Test-VsanClusterAdvCfgSyncInSync -HealthSummary "Operation failed."
     #>
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] $HealthSummary
     )
@@ -5283,6 +6797,7 @@ function Test-VsanClusterAdvCfgSyncInSync {
     return $true
 }
 function Enable-VsanAutomaticRebalance {
+
     <#
         .SYNOPSIS
         Enables vSAN automatic disk rebalancing at a given threshold before re-applying vSAN configuration.
@@ -5300,11 +6815,15 @@ function Enable-VsanAutomaticRebalance {
 
         .OUTPUTS
         Boolean. $true if automatic rebalance was enabled or already set; $false on error or unsupported cmdlet.
+    
+        .EXAMPLE
+        Enable-VsanAutomaticRebalance -ClusterName "edge-cluster-1"
     #>
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [ValidateRange(25, 75)] [int]$AutomaticRebalanceThreshold = 30
+        [Parameter(Mandatory = $false)] [ValidateRange(25, 75)] [Int]$AutomaticRebalanceThreshold = 30,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
     $setCmd = Get-Command Set-VsanClusterConfiguration -ErrorAction SilentlyContinue
     if (-not $setCmd -or -not $setCmd.Parameters.ContainsKey("ProactiveRebalanceEnabled")) {
@@ -5349,6 +6868,9 @@ function Get-ClusterObjectByName {
 
         .OUTPUTS
         Cluster object, or throws on error.
+    
+        .EXAMPLE
+        $clusterObjectByName = Get-ClusterObjectByName -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
@@ -5378,6 +6900,9 @@ function Get-VsanClusterConfigurationForCluster {
 
         .OUTPUTS
         VsanClusterConfiguration object, or $null on error.
+    
+        .EXAMPLE
+        $vsanClusterConfigurationForCluster = Get-VsanClusterConfigurationForCluster -Cluster $clusterObject
     #>
 
     [CmdletBinding()]
@@ -5386,7 +6911,9 @@ function Get-VsanClusterConfigurationForCluster {
         [Parameter(Mandatory = $false)] [String]$Server = $Script:vCenterName
     )
 
-    Get-VsanClusterConfiguration -Cluster $Cluster -Server $Server -ErrorAction SilentlyContinue
+    # 3>$null 6>$null suppress the "Not found vSAN default storage policy" noise emitted by
+    # PowerCLI when Get-VsanClusterConfiguration is called on an ESA cluster.
+    Get-VsanClusterConfiguration -Cluster $Cluster -Server $Server -ErrorAction SilentlyContinue 3>$null 6>$null
 }
 function Test-VsanAutomaticRebalanceAtThreshold {
 
@@ -5410,9 +6937,13 @@ function Test-VsanAutomaticRebalanceAtThreshold {
 
         .OUTPUTS
         Boolean. $true if proactive rebalance is enabled and threshold matches; $false if not set, mismatch, or unsupported.
+    
+        .EXAMPLE
+        Test-VsanAutomaticRebalanceAtThreshold -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateRange(25, 75)] [Int]$ExpectedThresholdPercent = 30,
@@ -5434,7 +6965,7 @@ function Test-VsanAutomaticRebalanceAtThreshold {
             return $true
         }
         $currentThreshold = $thresholdProp.Value
-        if ($null -eq $currentThreshold -or [int]$currentThreshold -ne $ExpectedThresholdPercent) {
+        if ($null -eq $currentThreshold -or [Int]$currentThreshold -ne $ExpectedThresholdPercent) {
             Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`": ProactiveRebalanceThreshold is $currentThreshold (expected $ExpectedThresholdPercent)."
             return $false
         }
@@ -5445,16 +6976,17 @@ function Test-VsanAutomaticRebalanceAtThreshold {
     }
 }
 function Enable-VsanAutomaticDiskClaimIfSupported {
+
     <#
         .SYNOPSIS
         Enables vSAN automatic disk claim (VsanDiskClaimMode Automatic) when the cmdlet supports it.
 
         .DESCRIPTION
-        Sets the vSAN cluster disk claim mode to Automatic via Set-VsanClusterConfiguration -VsanDiskClaimMode
-        when the installed PowerCLI exposes that parameter. Applicable to both vSAN OSA and vSAN ESA:
-        automatic claim lets vSAN claim compatible disks on cluster hosts without manual selection.
-        The published Set-VsanClusterConfiguration reference may not list -VsanDiskClaimMode; this
-        function checks at runtime and skips if the parameter is absent. Non-fatal on failure.
+        Sets the vSAN cluster disk claim mode to Automatic. Tries Set-VsanClusterConfiguration
+        -VsanDiskClaimMode first; if that parameter is absent in the installed PowerCLI, falls back
+        to Set-Cluster -VsanDiskClaimMode (available in VCF PowerCLI 9 even when
+        Set-VsanClusterConfiguration lacks the parameter). Applicable to both vSAN OSA and vSAN ESA.
+        Non-fatal on failure — skips with a WARNING when neither cmdlet supports the parameter.
 
         .PARAMETER ClusterName
         Name of the vSAN cluster.
@@ -5463,22 +6995,36 @@ function Enable-VsanAutomaticDiskClaimIfSupported {
         Boolean. $true if Automatic was set or already active; $false if parameter unsupported or on error.
 
         .NOTES
-        Best practices when using automatic claim: ensure uniform host configurations (same number of
-        disk groups and similar disk types/sizes); OSA allows max 5 disk groups per host with up to
-        7 capacity devices per group. After autoclaim, validate with Get-VsanDisk (or Get-VsanStoragePoolDisk for ESA).
+        VsanDiskClaimMode is marked deprecated in VCF PowerCLI 9 but remains functional for triggering
+        automatic disk claim on both OSA and ESA clusters. The [Obsolete] attribute on the parameter does
+        not indicate a no-op in this environment. 3>$null 6>$null on Get-VsanClusterConfiguration reduce
+        PowerCLI stream noise; Write-Host-based output from PowerCLI internals may still reach the console.
         See https://developer.broadcom.com/powercli/latest/vmware.vimautomation.storage/commands/set-vsanclusterconfiguration
+
+        .EXAMPLE
+        Enable-VsanAutomaticDiskClaimIfSupported -ClusterName "edge-cluster-1"
     #>
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
-    $setCmd = Get-Command Set-VsanClusterConfiguration -ErrorAction SilentlyContinue
-    if (-not $setCmd -or -not $setCmd.Parameters.ContainsKey("VsanDiskClaimMode")) {
-        Write-LogMessage -Type DEBUG -Message "Set-VsanClusterConfiguration does not support -VsanDiskClaimMode in this PowerCLI version. Skipping vSAN Managed Disk Claim enablement."
+    $setVsanCmd = Get-Command Set-VsanClusterConfiguration -ErrorAction SilentlyContinue
+    $setClusterCmd = Get-Command Set-Cluster -ErrorAction SilentlyContinue
+    $vsanCmdHasParam = $setVsanCmd -and $setVsanCmd.Parameters.ContainsKey("VsanDiskClaimMode")
+    $clusterCmdHasParam = $setClusterCmd -and $setClusterCmd.Parameters.ContainsKey("VsanDiskClaimMode")
+    if (-not $vsanCmdHasParam -and -not $clusterCmdHasParam) {
+        Write-LogMessage -Type DEBUG -Message "Set-VsanClusterConfiguration and Set-Cluster both lack -VsanDiskClaimMode in this PowerCLI version. Skipping vSAN Managed Disk Claim enablement."
         return $false
     }
+    if (-not $vsanCmdHasParam) {
+        Write-LogMessage -Type DEBUG -Message "Set-VsanClusterConfiguration lacks -VsanDiskClaimMode; using Set-Cluster fallback."
+    }
+    $paramSource = if ($vsanCmdHasParam) { $setVsanCmd } else { $setClusterCmd }
     try {
-        $vsanClusterConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        # 3>$null 6>$null suppress PowerCLI stream noise from Get-VsanClusterConfiguration on ESA clusters.
+        # Write-Host-based output from PowerCLI internals may still reach the console regardless.
+        $vsanClusterConfig = Get-VsanClusterConfiguration -Cluster $ClusterName -Server $Script:vCenterName -ErrorAction Stop 3>$null 6>$null
         if (-not $vsanClusterConfig) {
             return $false
         }
@@ -5487,8 +7033,8 @@ function Enable-VsanAutomaticDiskClaimIfSupported {
         $claimModeType = $null
         if ($null -ne $vsanClusterConfig.VsanDiskClaimMode) {
             $claimModeType = $vsanClusterConfig.VsanDiskClaimMode.GetType()
-        } elseif ($setCmd.Parameters["VsanDiskClaimMode"].ParameterType.IsEnum) {
-            $claimModeType = $setCmd.Parameters["VsanDiskClaimMode"].ParameterType
+        } elseif ($paramSource.Parameters["VsanDiskClaimMode"].ParameterType.IsEnum) {
+            $claimModeType = $paramSource.Parameters["VsanDiskClaimMode"].ParameterType
         }
         if ($null -ne $claimModeType -and $claimModeType.IsEnum) {
             try {
@@ -5503,9 +7049,15 @@ function Enable-VsanAutomaticDiskClaimIfSupported {
         }
         if ($null -ne $automaticClaimValue -and $currentMode -ne $automaticClaimValue) {
             Write-LogMessage -Type INFO -Message "Enabling vSAN Managed Disk Claim (VsanDiskClaimMode Automatic) for cluster `"$ClusterName`"."
-            $setVsanParams = @{ Configuration = $vsanClusterConfig; Server = $Script:vCenterName; ErrorAction = 'Stop' }
-            $setVsanParams['VsanDiskClaimMode'] = $automaticClaimValue
-            Set-VsanClusterConfiguration @setVsanParams | Out-Null
+            if ($vsanCmdHasParam) {
+                $setVsanParams = @{ Configuration = $vsanClusterConfig; Server = $Script:vCenterName; ErrorAction = 'Stop' }
+                $setVsanParams['VsanDiskClaimMode'] = $automaticClaimValue
+                Set-VsanClusterConfiguration @setVsanParams 3>$null | Out-Null
+            } else {
+                $cluster = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+                Set-Cluster -Cluster $cluster -VsanDiskClaimMode $automaticClaimValue `
+                    -Server $Script:vCenterName -Confirm:$false -ErrorAction Stop 3>$null | Out-Null
+            }
             Write-LogMessage -Type DEBUG -Message "vSAN Managed Disk Claim enabled for cluster `"$ClusterName`"."
             return $true
         }
@@ -5546,6 +7098,7 @@ function Invoke-VsanClusterConfigReapply {
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
@@ -5565,6 +7118,7 @@ function Invoke-VsanClusterConfigReapply {
     }
 }
 function Get-VsanClusterTriggeredAlarms {
+
     <#
         .SYNOPSIS
         Returns triggered vCenter alarms for a vSAN cluster.
@@ -5583,10 +7137,13 @@ function Get-VsanClusterTriggeredAlarms {
 
         .NOTES
         Requires connection to vCenter. Uses Get-Cluster, Get-View, and alarm definition view (VCF PowerCLI 9).
+    
+        .EXAMPLE
+        Get-VsanClusterTriggeredAlarms -ClusterName "edge-cluster-1"
     #>
 
-    [OutputType([System.Object[]])]
     [CmdletBinding()]
+    [OutputType([System.Object[]], [System.Collections.Generic.List[PSObject]])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
@@ -5644,6 +7201,9 @@ function Test-VsanTriggeredAlarmIsStatsPrimaryElection {
 
         .OUTPUTS
         [bool] True when the alarm name matches Stats primary election/selection.
+    
+        .EXAMPLE
+        Test-VsanTriggeredAlarmIsStatsPrimaryElection -TriggeredAlarm "value"
     #>
 
     [CmdletBinding()]
@@ -5656,10 +7216,10 @@ function Test-VsanTriggeredAlarmIsStatsPrimaryElection {
         return $false
     }
     $name = $TriggeredAlarm.AlarmName
-    if ([String]::IsNullOrWhiteSpace([string]$name)) {
+    if ([String]::IsNullOrWhiteSpace([String]$name)) {
         return $false
     }
-    return [string]$name -match "Stats primary election|Stats primary selection|performance service alarm 'Stats primary|stats primary election|stats primary selection"
+    return [String]$name -match "Stats primary election|Stats primary selection|performance service alarm 'Stats primary|stats primary election|stats primary selection"
 }
 function Test-VsanTriggeredAlarmIsHclRelated {
 
@@ -5680,6 +7240,9 @@ function Test-VsanTriggeredAlarmIsHclRelated {
 
         .OUTPUTS
         [bool] True when the alarm name matches an HCL or hardware-compatibility check.
+    
+        .EXAMPLE
+        Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm "value"
     #>
 
     [CmdletBinding()]
@@ -5691,7 +7254,7 @@ function Test-VsanTriggeredAlarmIsHclRelated {
     if (-not (Get-Member -InputObject $TriggeredAlarm -Name "AlarmName" -MemberType Properties -ErrorAction SilentlyContinue)) {
         return $false
     }
-    $name = [string]$TriggeredAlarm.AlarmName
+    $name = [String]$TriggeredAlarm.AlarmName
     if ([String]::IsNullOrWhiteSpace($name)) {
         return $false
     }
@@ -5717,14 +7280,18 @@ function Set-VsanDomNetworkSchedulerThrottleOnHost {
 
         .OUTPUTS
         PSCustomObject with Applied (bool) and AlreadySet (bool). Applied is $true when the setting was set this call; AlreadySet is $true when already 1 (skipped). Both $false on error.
+    
+        .EXAMPLE
+        Set-VsanDomNetworkSchedulerThrottleOnHost -Server $vcenterConnection -VMHost $vmHostObject
     #>
 
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
         [Parameter(Mandatory = $true)] $VMHost
     )
-    $hostNameForLogging = if ($VMHost.Name) { $VMHost.Name } else { [string]$VMHost }
+    $hostNameForLogging = if ($VMHost.Name) { $VMHost.Name } else { [String]$VMHost }
     try {
         $esxcli = Get-EsxCli -VMHost $VMHost -V2 -Server $Server -ErrorAction Stop
         # Idempotent: read current value; skip if already 1.
@@ -5737,12 +7304,12 @@ function Set-VsanDomNetworkSchedulerThrottleOnHost {
                 $listResult = $listCmd.Invoke($listArgs)
                 if ($listResult) {
                     # Result may be single object or array (one item per setting); property may be IntValue or intvalue.
-                    $items = if ($listResult -is [Array] -or ($listResult -is [System.Collections.IEnumerable] -and $listResult -isnot [string])) { @($listResult) } else { @($listResult) }
+                    $items = @($listResult)
                     foreach ($item in $items) {
                         $optionName = $item.Option, $item.option, $item.Name, $item.name, $item.Path, $item.PSObject.Properties['Option'].Value, $item.PSObject.Properties['option'].Value | Where-Object { $_ } | Select-Object -First 1
                         if ($optionName -eq "/VSAN/DOMNetworkSchedulerThrottleComponent") {
                             $currentVal = $item.IntValue, $item.intvalue, $item.PSObject.Properties['IntValue'].Value, $item.PSObject.Properties['intvalue'].Value | Where-Object { $null -ne $_ } | Select-Object -First 1
-                            if ($null -ne $currentVal -and [int]$currentVal -eq 1) {
+                            if ($null -ne $currentVal -and [Int]$currentVal -eq 1) {
                                 return [PSCustomObject]@{ Applied = $false; AlreadySet = $true }
                             }
                             break
@@ -5751,7 +7318,7 @@ function Set-VsanDomNetworkSchedulerThrottleOnHost {
                     # Single-option list returns one object; it may not have Option property set, so check IntValue if we have only one item.
                     if ($items.Count -eq 1) {
                         $currentVal = $items[0].IntValue, $items[0].intvalue, $items[0].PSObject.Properties['IntValue'].Value, $items[0].PSObject.Properties['intvalue'].Value | Where-Object { $null -ne $_ } | Select-Object -First 1
-                        if ($null -ne $currentVal -and [int]$currentVal -eq 1) {
+                        if ($null -ne $currentVal -and [Int]$currentVal -eq 1) {
                             return [PSCustomObject]@{ Applied = $false; AlreadySet = $true }
                         }
                     }
@@ -5799,9 +7366,13 @@ function Set-VsanDomNetworkSchedulerThrottleOnCluster {
 
         .NOTES
         For stretched clusters, only data hosts are in the cluster; the witness is a separate host. This function applies the setting to all hosts in the cluster (data hosts) only. Ensure the correct witness type (ESA vs OSA witness appliance) is configured for your cluster; see Initialize-VsanWitnessDiskGroup and the advanced setting VSAN.HostDeployedFromWitnessOVF (1=OSA, 2=ESA).
+    
+        .EXAMPLE
+        Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
@@ -5833,6 +7404,206 @@ function Set-VsanDomNetworkSchedulerThrottleOnCluster {
     }
     return $appliedCount -gt 0
 }
+function Invoke-VsanAlarmRemediation {
+
+    <#
+        .SYNOPSIS
+        Iterates triggered vSAN alarms and dispatches each to its auto-remediation action.
+
+        .DESCRIPTION
+        Handles advCfgSync alarms (re-apply vSAN cluster config and re-check), HA host status alarms
+        (reconfigure HA/DRS), performance service alarms (enable programmatically), Stats primary
+        election alarms (log guidance; not blocking), and lab-only third-party IO filter alarms
+        (debug log only). Unrecognized alarms are logged as WARNING. Remaining alarms that could not
+        be cleared after remediation are logged as WARNING.
+
+        .PARAMETER Alarms
+        Initial set of triggered alarms returned by Get-VsanClusterTriggeredAlarms.
+
+        .PARAMETER ClusterName
+        Name of the vSAN cluster.
+
+        .PARAMETER HaPolicy
+        HA policy for Invoke-ReconfigureClusterHA (disabled, reservationBased, or slotBased).
+
+        .PARAMETER HaStabilizationDelaySeconds
+        Delay passed to Invoke-ReconfigureClusterHA after HA reconfig.
+
+        .PARAMETER LabEnvironment
+        When $true, the third-party IO filter alarm is logged at DEBUG and not added to WARNING output.
+
+        .PARAMETER PostRemediationWaitSeconds
+        Seconds to wait after a successful vSAN config re-apply before re-querying alarms.
+
+        .NOTES
+        Helper for Invoke-VsanClusterAlarmCheckAndRemediate. Not intended for direct call.
+    
+        .EXAMPLE
+        Invoke-VsanAlarmRemediation -Alarms "value" -ClusterName "edge-cluster-1"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [Object[]]$Alarms,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [ValidateSet("disabled", "reservationBased", "slotBased")] [String]$HaPolicy = "reservationBased",
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 600)] [Int]$HaStabilizationDelaySeconds = 0,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 120)] [Int]$PostRemediationWaitSeconds = 10
+    )
+
+    $advCfgSyncPattern = "advanced\s*(virtual\s*)?san\s*configuration\s*in\s*sync|advCfgSync|configuration\s*in\s*sync"
+    $attemptedFix = $false
+    $remainingAlarms = [System.Collections.Generic.List[PSObject]]::new()
+
+    foreach ($alarm in $Alarms) {
+        $name = $alarm.AlarmName
+        if ($name -match $advCfgSyncPattern) {
+            if (-not $attemptedFix) {
+                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`". Attempting remediation (re-apply vSAN cluster configuration)."
+                $reapplyOk = Invoke-VsanClusterConfigReapply -ClusterName $ClusterName
+                $attemptedFix = $true
+                if ($reapplyOk) {
+                    Start-Sleep -Seconds $PostRemediationWaitSeconds
+                    $afterAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
+                    foreach ($alarmItem in $afterAlarms) {
+                        if ($alarmItem.AlarmName -match $advCfgSyncPattern) { $remainingAlarms.Add($alarmItem) }
+                    }
+                } else {
+                    $remainingAlarms.Add($alarm)
+                }
+            }
+        } else {
+            if ($name -match "vSphere\s+HA\s+host\s+status|vsphere\s+ha\s+host\s+status") {
+                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`" (status: $($alarm.Status)). Auto-remediating by re-applying HA and DRS so vCenter re-evaluates management network for heartbeats."
+                Invoke-ReconfigureClusterHA -ClusterName $ClusterName -DelaySeconds $HaStabilizationDelaySeconds -HaPolicy $HaPolicy
+            } elseif ($name -match "Performance service status|perfsvcstatus|performance service alarm 'Performance service status'") {
+                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`" (status: $($alarm.Status)). Attempting to enable vSAN performance service programmatically."
+                Enable-VsanPerformanceService -ClusterName $ClusterName
+                Write-LogMessage -Type INFO -Message "If the alarm persists, it often clears within a few minutes as the performance service starts. Otherwise enable in vCenter (vSAN Services) or check vSAN Health > Performance service."
+            } elseif ($name -match "Stats primary election|Stats primary selection|performance service alarm 'Stats primary|stats primary election|stats primary selection") {
+                Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has Stats primary election/selection alarm: `"$name`" (status: $($alarm.Status)). Post-witness health uses re-trigger + optional proceed-with-warning when this is the only failing test. If performance service stays unhealthy, see Broadcom KB 401679 (remove duplicate .vsan.stats-* folders, restart vsanmgmtd on hosts, re-enable performance service, RETEST) or RVC vsan.perf.stats_object_delete/create."
+            } elseif ($LabEnvironment -and $name -match "Registration/unregistration of third-party IO filter storage providers fails on a host") {
+                Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has alarm (lab-suppressed): `"$name`" (status: $($alarm.Status)). Known lab/VAIO issue; resolve manually if needed (e.g. SSL/cert on port 9080)."
+            } elseif ($LabEnvironment -and (Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm $alarm)) {
+                Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has alarm (lab-suppressed HCL): `"$name`" (status: $($alarm.Status)). HCL/hardware-compatibility checks are silenced in lab mode; alarm not counted toward red gate."
+            } else {
+                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has alarm (not auto-remediated): `"$name`" (status: $($alarm.Status)). Resolve manually if needed."
+            }
+        }
+    }
+    foreach ($alarmItem in $remainingAlarms) {
+        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" alarm still present after remediation attempt: `"$($alarmItem.AlarmName)`" (status: $($alarmItem.Status)). Resolve manually if needed."
+    }
+}
+function Invoke-VsanRefreshedAlarmGate {
+
+    <#
+        .SYNOPSIS
+        Re-queries vSAN cluster alarms and gates on red alarms (AcceptBadCheckResults or interactive prompt).
+
+        .DESCRIPTION
+        After auto-remediation, re-reads triggered alarms. Stats primary election and (in lab mode)
+        third-party IO filter alarms are excluded from the gate. Remaining red alarms require an
+        explicit AcceptBadCheckResults flag or a user Y response; otherwise throws [VcfDeploymentException].
+        Yellow-only alarms log a summary warning without blocking.
+
+        .PARAMETER AcceptBadCheckResults
+        When set, proceeds without prompting when red alarms remain after remediation.
+
+        .PARAMETER ClusterName
+        Name of the vSAN cluster.
+
+        .PARAMETER LabEnvironment
+        When $true, suppresses the third-party IO filter alarm and HCL/hardware-compatibility alarms from the red gate.
+
+        .NOTES
+        Helper for Invoke-VsanClusterAlarmCheckAndRemediate. Not intended for direct call.
+    
+        .EXAMPLE
+        Invoke-VsanRefreshedAlarmGate -ClusterName "edge-cluster-1"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment
+    )
+
+    $refreshedAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
+    if (-not $refreshedAlarms -or $refreshedAlarms.Count -eq 0) { return }
+
+    $labThirdPartyPattern = "Registration/unregistration of third-party IO filter storage providers fails on a host"
+    $blockingRedAlarms = [System.Collections.Generic.List[PSObject]]::new()
+    $yellowAlarms      = [System.Collections.Generic.List[PSObject]]::new()
+    foreach ($alarm in $refreshedAlarms) {
+        $statusText = ([String]$alarm.Status).ToLower()
+        if ($LabEnvironment -and $alarm.AlarmName -match [Regex]::Escape($labThirdPartyPattern)) { continue }
+        if ($LabEnvironment -and (Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm $alarm)) {
+            Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has alarm (lab-suppressed HCL): `"$($alarm.AlarmName)`" (status: $($alarm.Status)). HCL/hardware-compatibility checks are silenced in lab mode; alarm not counted toward red gate."
+            continue
+        }
+        switch -Regex ($statusText) {
+            '^red$' {
+                if (Test-VsanTriggeredAlarmIsStatsPrimaryElection -TriggeredAlarm $alarm) {
+                    Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has red triggered alarm (not blocking on this gate): `"$($alarm.AlarmName)`". Same transient Stats primary handling as post-witness health; if supervisor or host preflight still fails, align witness and data node ESX builds, then see Broadcom KB 401679."
+                    continue
+                }
+                $blockingRedAlarms.Add($alarm)
+            }
+            '^yellow$' { $yellowAlarms.Add($alarm) }
+        }
+    }
+
+    if ($blockingRedAlarms.Count -gt 0) {
+        Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" has one or more triggered alarms with red status. This indicates a serious vSAN fault; stretched-cluster configuration (including witness reachability and routing) may be incorrect. Verify vSAN Health in vCenter and confirm witness network connectivity and witness VM health before continuing."
+        foreach ($redAlarm in $blockingRedAlarms) {
+            Write-LogMessage -Type WARNING -Message "  Red alarm: `"$($redAlarm.AlarmName)`" (status: $($redAlarm.Status))."
+        }
+        $hclRedAlarms = @($blockingRedAlarms | Where-Object { Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm $_ })
+        if ($hclRedAlarms.Count -gt 0) {
+            $hclNames = ($hclRedAlarms | ForEach-Object { "`"$($_.AlarmName)`"" }) -join ", "
+            Write-LogMessage -Type WARNING -Message "Red alarm(s) on cluster `"$ClusterName`" include vSAN HCL/hardware-compatibility findings: $hclNames. These would be hidden by common.labenvironment=true but the underlying HCL state (storage controller on HCL, controller firmware/driver/disk mode, host HCL DB state) is unchanged. Accepting risk here will almost certainly not produce a working supervisor: WCP supervisor enablement enforces cluster/host HCL conformance downstream of this gate. Resolve by using HCL-listed storage controllers, firmware, and drivers, then retry; do not simply acknowledge the alarms in vCenter."
+        }
+        if ($AcceptBadCheckResults.IsPresent) {
+            $acceptMsg = if ($hclRedAlarms.Count -gt 0) {
+                "AcceptBadCheckResults is set; proceeding despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Supervisor enablement will likely fail until the cluster is HCL-conformant."
+            } else {
+                "AcceptBadCheckResults is set; proceeding despite red vSAN triggered alarm(s) for cluster `"$ClusterName`"."
+            }
+            Write-LogMessage -Type WARNING -Message $acceptMsg
+        } else {
+            $continuePrompt = if ($hclRedAlarms.Count -gt 0) {
+                "Continue deployment despite red vSAN HCL/hardware-compatibility alarm(s)? Supervisor enablement is expected to fail. Type Y to accept risk, or N to stop [default: N]"
+            } else {
+                "Continue deployment despite red vSAN alarm(s)? Type Y to accept risk, or N to stop [default: N]"
+            }
+            do {
+                $continueResponse = Read-Host $continuePrompt
+                $continueResponse = if ($null -ne $continueResponse) { $continueResponse.Trim() } else { "" }
+                if ($continueResponse -match '^[yY](es)?$') {
+                    $acceptRiskMsg = if ($hclRedAlarms.Count -gt 0) {
+                        "User chose to continue despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Accepting risk; supervisor enablement may fail on non-HCL-conformant hardware."
+                    } else {
+                        "User chose to continue despite red vSAN triggered alarm(s) for cluster `"$ClusterName`". Accepting risk."
+                    }
+                    Write-LogMessage -Type WARNING -Message $acceptRiskMsg
+                    break
+                }
+                if ([String]::IsNullOrWhiteSpace($continueResponse) -or $continueResponse -match '^[nN](o)?$') {
+                    $redNames = ($blockingRedAlarms | Select-Object -ExpandProperty AlarmName) -join "; "
+                    $errorMsg = "Deployment failed. vSAN cluster `"$ClusterName`" has triggered alarm(s) with red status: $redNames"
+                    Write-LogMessage -Type ERROR -Message $errorMsg
+                    throw [VcfDeploymentException]::new($errorMsg)
+                }
+                Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)."
+            } while ($true)
+        }
+    } elseif ($yellowAlarms.Count -gt 0) {
+        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has $($yellowAlarms.Count) triggered alarm(s) with yellow status (no red); continuing without blocking. Resolve in vCenter when convenient."
+    }
+}
 function Invoke-VsanClusterAlarmCheckAndRemediate {
 
     <#
@@ -5859,6 +7630,9 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
 
         .NOTES
         Requires connection to vCenter. Called after vSAN storage configuration for the cluster.
+    
+        .EXAMPLE
+        Invoke-VsanClusterAlarmCheckAndRemediate -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
@@ -5866,154 +7640,28 @@ function Invoke-VsanClusterAlarmCheckAndRemediate {
         [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateSet("disabled", "reservationBased", "slotBased")] [String]$HaPolicy = "reservationBased",
-        [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
         [Parameter(Mandatory = $false)] [ValidateRange(0, 120)] [Int]$PostRemediationWaitSeconds = 10
     )
 
-    # Always set DOM network scheduler throttle on cluster (vSAN ESA on 10G; Broadcom KB 394932, 388455). Not only when "vSAN cluster compliance" alarm is present.
+    # Always set DOM network scheduler throttle on cluster (vSAN ESA on 10G; Broadcom KB 394932, 388455).
     $throttleSet = Set-VsanDomNetworkSchedulerThrottleOnCluster -ClusterName $ClusterName
     if (-not $throttleSet) {
         Write-LogMessage -Type DEBUG -Message "Set-VsanDomNetworkSchedulerThrottleOnCluster returned false for cluster `"$ClusterName`" (cluster not found or no hosts)."
     }
-
     $alarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
-    if (-not $alarms -or $alarms.Count -eq 0) {
-        return
-    }
-
-    # Alarm handling order: (1) advCfgSync alarms are remediated once by re-applying vSAN cluster config; (2) for all other alarms we run pattern-based handling: Performance service (enable programmatically), Stats primary election (DEBUG guidance; post-witness gate uses re-trigger in Invoke-VsanClusterHealthCheckAfterWitness), vSAN cluster compliance (set DOM throttle on hosts). Alarms we cannot remediate are logged as WARNING and collected in remainingAlarms.
-    $advCfgSyncPattern = "advanced\s*(virtual\s*)?san\s*configuration\s*in\s*sync|advCfgSync|configuration\s*in\s*sync"
-    $attemptedFix = $false
-    $remainingAlarms = [System.Collections.Generic.List[PSObject]]::new()
-
-    foreach ($alarm in $alarms) {
-        $name = $alarm.AlarmName
-        if ($name -match $advCfgSyncPattern) {
-            if (-not $attemptedFix) {
-                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`". Attempting remediation (re-apply vSAN cluster configuration)."
-                $reapplyOk = Invoke-VsanClusterConfigReapply -ClusterName $ClusterName
-                $attemptedFix = $true
-                if ($reapplyOk) {
-                    Start-Sleep -Seconds $PostRemediationWaitSeconds
-                    $afterAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
-                    foreach ($alarmItem in $afterAlarms) {
-                        if ($alarmItem.AlarmName -match $advCfgSyncPattern) {
-                            $remainingAlarms.Add($alarmItem)
-                        }
-                    }
-                }
-                else {
-                    $remainingAlarms.Add($alarm)
-                }
-            }
-            # When attemptedFix is already true, remaining advCfgSync alarms were captured from re-query; do not add again from initial list.
-        }
-        else {
-            # "vSphere HA host status": re-apply HA/DRS so vCenter re-evaluates management network for heartbeats (e.g. after vDS migration or vSAN/vLCM activity).
-            if ($name -match "vSphere\s+HA\s+host\s+status|vsphere\s+ha\s+host\s+status") {
-                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`" (status: $($alarm.Status)). Auto-remediating by re-applying HA and DRS so vCenter re-evaluates management network for heartbeats."
-                Invoke-ReconfigureClusterHA -ClusterName $ClusterName -DelaySeconds $Script:HaPostVsanStabilizationDelaySeconds -HaPolicy $HaPolicy
-            }
-            # "Performance service status" (perfsvcstatus): enable programmatically via Set-VsanClusterConfiguration -PerformanceServiceEnabled): perfsvcConfig.enabled / createStatsObject). Often clears within a few minutes if already enabled.
-            elseif ($name -match "Performance service status|perfsvcstatus|performance service alarm 'Performance service status'") {
-                Write-LogMessage -Type INFO -Message "vSAN cluster `"$ClusterName`" has alarm: `"$name`" (status: $($alarm.Status)). Attempting to enable vSAN performance service programmatically."
-                Enable-VsanPerformanceService -ClusterName $ClusterName
-                Write-LogMessage -Type INFO -Message "If the alarm persists, it often clears within a few minutes as the performance service starts. Otherwise enable in vCenter (vSAN Services) or check vSAN Health > Performance service."
-            }
-            # Stats primary election (perfsvc.masterexist): transient after power-on or duplicate .vsan.stats paths; silenced for health gates; log guidance only (KB 401679).
-            elseif ($name -match "Stats primary election|Stats primary selection|performance service alarm 'Stats primary|stats primary election|stats primary selection") {
-                Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has Stats primary election/selection alarm: `"$name`" (status: $($alarm.Status)). Post-witness health uses re-trigger + optional proceed-with-warning when this is the only failing test. If performance service stays unhealthy, see Broadcom KB 401679 (remove duplicate .vsan.stats-* folders, restart vsanmgmtd on hosts, re-enable performance service, RETEST) or RVC vsan.perf.stats_object_delete/create."
-            }
-            # Lab only: third-party IO filter / VAIO provider alarm is common (KB 406493, 402809); do not warn so deployment logs stay clean.
-            elseif ($LabEnvironment -and $name -match "Registration/unregistration of third-party IO filter storage providers fails on a host") {
-                Write-LogMessage -Type DEBUG -Message "vSAN cluster `"$ClusterName`" has alarm (lab-suppressed): `"$name`" (status: $($alarm.Status)). Known lab/VAIO issue; resolve manually if needed (e.g. SSL/cert on port 9080)."
-            }
-            else {
-                Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has alarm (not auto-remediated): `"$name`" (status: $($alarm.Status)). Resolve manually if needed."
-            }
-        }
-    }
-
-    foreach ($alarmItem in $remainingAlarms) {
-        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" alarm still present after remediation attempt: `"$($alarmItem.AlarmName)`" (status: $($alarmItem.Status)). Resolve manually if needed."
-    }
-
-    # Re-query alarms so red/yellow gating reflects state after auto-remediation (performance service, HA reconfig, etc.).
-    $refreshedAlarms = Get-VsanClusterTriggeredAlarms -ClusterName $ClusterName
-    if (-not $refreshedAlarms -or $refreshedAlarms.Count -eq 0) {
-        return
-    }
-
-    $labThirdPartyPattern = "Registration/unregistration of third-party IO filter storage providers fails on a host"
-    $blockingRedAlarms = [System.Collections.Generic.List[PSObject]]::new()
-    $yellowAlarms = [System.Collections.Generic.List[PSObject]]::new()
-    foreach ($a in $refreshedAlarms) {
-        $statusText = ([string]$a.Status).ToLower()
-        $alarmLabel = $a.AlarmName
-        if ($LabEnvironment -and $alarmLabel -match [regex]::Escape($labThirdPartyPattern)) {
-            continue
-        }
-        switch -Regex ($statusText) {
-            '^red$' {
-                if (Test-VsanTriggeredAlarmIsStatsPrimaryElection -TriggeredAlarm $a) {
-                    Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has red triggered alarm (not blocking on this gate): `"$($a.AlarmName)`". Same transient Stats primary handling as post-witness health; if supervisor or host preflight still fails, align witness and data node ESX builds, then see Broadcom KB 401679."
-                    continue
-                }
-                $blockingRedAlarms.Add($a)
-            }
-            '^yellow$' {
-                $yellowAlarms.Add($a)
-            }
-        }
-    }
-
-    if ($blockingRedAlarms.Count -gt 0) {
-        Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" has one or more triggered alarms with red status. This indicates a serious vSAN fault; stretched-cluster configuration (including witness reachability and routing) may be incorrect. Verify vSAN Health in vCenter and confirm witness network connectivity and witness VM health before continuing."
-        foreach ($ra in $blockingRedAlarms) {
-            Write-LogMessage -Type WARNING -Message "  Red alarm: `"$($ra.AlarmName)`" (status: $($ra.Status))."
-        }
-        # When any blocking red alarm matches an HCL/hardware-compatibility check (the same set lab mode silences), warn that accepting the risk does not fix the underlying HCL state and that WCP supervisor enablement will still enforce cluster/host HCL conformance downstream.
-        $hclRedAlarms = @($blockingRedAlarms | Where-Object { Test-VsanTriggeredAlarmIsHclRelated -TriggeredAlarm $_ })
-        if ($hclRedAlarms.Count -gt 0) {
-            $hclNames = ($hclRedAlarms | ForEach-Object { "`"$($_.AlarmName)`"" }) -join ", "
-            Write-LogMessage -Type WARNING -Message "Red alarm(s) on cluster `"$ClusterName`" include vSAN HCL/hardware-compatibility findings: $hclNames. These would be hidden by common.labenvironment=true but the underlying HCL state (storage controller on HCL, controller firmware/driver/disk mode, host HCL DB state) is unchanged. Accepting risk here will almost certainly not produce a working supervisor: WCP supervisor enablement enforces cluster/host HCL conformance downstream of this gate. Resolve by using HCL-listed storage controllers, firmware, and drivers, then retry; do not simply acknowledge the alarms in vCenter."
-        }
-        if ($AcceptBadCheckResults.IsPresent) {
-            if ($hclRedAlarms.Count -gt 0) {
-                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Supervisor enablement will likely fail until the cluster is HCL-conformant."
-            } else {
-                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite red vSAN triggered alarm(s) for cluster `"$ClusterName`"."
-            }
-        }
-        else {
-            $continuePrompt = if ($hclRedAlarms.Count -gt 0) {
-                "Continue deployment despite red vSAN HCL/hardware-compatibility alarm(s)? Supervisor enablement is expected to fail. Type Y to accept risk, or N to stop [default: N]"
-            } else {
-                "Continue deployment despite red vSAN alarm(s)? Type Y to accept risk, or N to stop [default: N]"
-            }
-            do {
-                $continueResponse = Read-Host $continuePrompt
-                $continueResponse = if ($null -ne $continueResponse) { $continueResponse.Trim() } else { "" }
-                if ($continueResponse -match '^[yY](es)?$') {
-                    if ($hclRedAlarms.Count -gt 0) {
-                        Write-LogMessage -Type WARNING -Message "User chose to continue despite red vSAN HCL alarm(s) for cluster `"$ClusterName`". Accepting risk; supervisor enablement may fail on non-HCL-conformant hardware."
-                    } else {
-                        Write-LogMessage -Type WARNING -Message "User chose to continue despite red vSAN triggered alarm(s) for cluster `"$ClusterName`". Accepting risk."
-                    }
-                    break
-                }
-                if ([String]::IsNullOrWhiteSpace($continueResponse) -or $continueResponse -match '^[nN](o)?$') {
-                    $redNames = ($blockingRedAlarms | ForEach-Object { $_.AlarmName }) -join "; "
-                    Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN cluster `"$ClusterName`" has triggered alarm(s) with red status: $redNames"
-                    throw [VcfDeploymentException]::new()
-                }
-                Write-LogMessage -Type WARNING -Message "Invalid response. Enter Y or N (or press Enter for N)."
-            } while ($true)
-        }
-    }
-    elseif ($yellowAlarms.Count -gt 0) {
-        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" has $($yellowAlarms.Count) triggered alarm(s) with yellow status (no red); continuing without blocking. Resolve in vCenter when convenient."
-    }
+    if (-not $alarms -or $alarms.Count -eq 0) { return }
+    Invoke-VsanAlarmRemediation `
+        -Alarms                       $alarms `
+        -ClusterName                  $ClusterName `
+        -HaPolicy                     $HaPolicy `
+        -HaStabilizationDelaySeconds  $Script:HaPostVsanStabilizationDelaySeconds `
+        -LabEnvironment:$LabEnvironment.IsPresent `
+        -PostRemediationWaitSeconds   $PostRemediationWaitSeconds
+    Invoke-VsanRefreshedAlarmGate `
+        -AcceptBadCheckResults:$AcceptBadCheckResults.IsPresent `
+        -ClusterName                  $ClusterName `
+        -LabEnvironment:$LabEnvironment.IsPresent
 }
 function Wait-VsanClusterConfigSyncOrTimeout {
 
@@ -6040,9 +7688,13 @@ function Wait-VsanClusterConfigSyncOrTimeout {
 
         .NOTES
         Uses Get-VsanClusterHealthSummaryViaView and Test-VsanClusterAdvCfgSyncInSync.
+    
+        .EXAMPLE
+        Wait-VsanClusterConfigSyncOrTimeout -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateRange(5, 120)] [Int]$CheckIntervalSeconds = 15,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
@@ -6057,14 +7709,14 @@ function Wait-VsanClusterConfigSyncOrTimeout {
     $checkCount = 0
     while ((Get-Date) -lt $deadline) {
         $checkCount++
-        $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
+        $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
         if ($healthSummary -and (Test-VsanClusterAdvCfgSyncInSync -HealthSummary $healthSummary)) {
             Write-LogMessage -Type INFO -Message "vSAN cluster configuration is in sync on all hosts for cluster `"$ClusterName`" (check #$checkCount)."
             return $true
         }
-        $remaining = [math]::Max(0, [int](($deadline - (Get-Date)).TotalSeconds))
+        $remaining = [Math]::Max(0, [int](($deadline - (Get-Date)).TotalSeconds))
         if ($remaining -gt 0) {
-            $sleepSeconds = [math]::Min($CheckIntervalSeconds, $remaining)
+            $sleepSeconds = [Math]::Min($CheckIntervalSeconds, $remaining)
             Write-LogMessage -Type DEBUG -Message "vSAN config not yet in sync for cluster `"$ClusterName`" (check #$checkCount). Waiting $CheckIntervalSeconds seconds (timeout in $remaining s)."
             Start-Sleep -Seconds $sleepSeconds
         }
@@ -6089,6 +7741,10 @@ function Test-VsanAdvCfgSyncAndWaitIfNeeded {
 
         .PARAMETER HealthSummary
         Current VsanClusterHealthSummary (must include advCfgSync field).
+    
+        .EXAMPLE
+        $vsanAdvCfgSyncAndWaitIfNeededResult = Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName "edge-cluster-1" -HealthSummary "Operation failed."
+        if (-not $vsanAdvCfgSyncAndWaitIfNeededResult.IsValid) { Write-LogMessage -Type ERROR -Message $vsanAdvCfgSyncAndWaitIfNeededResult.Summary }
     #>
 
     [CmdletBinding()]
@@ -6118,7 +7774,10 @@ function Get-VsanHealthFailureReasons {
         The VsanClusterHealthSummary object from Get-VsanClusterHealthSummaryViaView.
 
         .OUTPUTS
-        [string] Non-empty string with reason(s); [string]::Empty if summary is null or overall health is green.
+        [string] Non-empty string with reason(s); [String]::Empty if summary is null or overall health is green.
+    
+        .EXAMPLE
+        $vsanHealthFailureReasons = Get-VsanHealthFailureReasons -HealthSummary "Operation failed."
     #>
 
     [CmdletBinding()]
@@ -6127,7 +7786,7 @@ function Get-VsanHealthFailureReasons {
         [Parameter(Mandatory = $true)] [ValidateNotNull()] $HealthSummary
     )
 
-    $emptyResult = [string]::Empty
+    $emptyResult = [String]::Empty
 
     # Null or green: no failure reasons.
     if (-not $HealthSummary) {
@@ -6139,10 +7798,10 @@ function Get-VsanHealthFailureReasons {
     }
 
     # Build reasons from overall description and non-green groups/tests (full findings detail).
-    [string[]]$failureReasons = @()
+    $failureReasons = [System.Collections.Generic.List[String]]::new()
     $overallDescription = $HealthSummary.overallHealthDescription
     if ($overallDescription) {
-        $failureReasons += [string]$overallDescription
+        $failureReasons.Add([String]$overallDescription)
     }
 
     $healthGroups = $HealthSummary.groups
@@ -6154,7 +7813,7 @@ function Get-VsanHealthFailureReasons {
             }
             $groupName = $healthGroup.PSObject.Properties['groupName'].Value
             if ($groupName) {
-                $failureReasons += [string]("Group: $groupName ($groupHealthStatus)")
+                $failureReasons.Add([string]("Group: $groupName ($groupHealthStatus)"))
             }
             # Include per-test detail for non-green groups so red/yellow findings are fully visible.
             $tests = $healthGroup.PSObject.Properties['tests'].Value
@@ -6170,9 +7829,9 @@ function Get-VsanHealthFailureReasons {
                     $testDesc = $test.PSObject.Properties['description'].Value
                     $testLine = [string]("  Test: $testName ($testHealth)")
                     if ($testDesc) {
-                        $testLine = [string]($testLine + ": $testDesc")
+                        $testLine = "$($testLine): $testDesc"
                     }
-                    $failureReasons += $testLine
+                    $failureReasons.Add($testLine)
                 }
             }
         }
@@ -6207,13 +7866,17 @@ function Invoke-VsanClusterObjectRepairAndWait {
 
         .NOTES
         The API task completes when objects are queued for repair; actual resync runs in the background.
+    
+        .EXAMPLE
+        Invoke-VsanClusterObjectRepairAndWait -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [ValidateRange(5, 60)] [int]$PollIntervalSeconds = 15,
-        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [int]$TimeoutSeconds = 600
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 60)] [Int]$PollIntervalSeconds = 15,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$TimeoutSeconds = 600
     )
 
     $clusterObject = Get-ClusterByName -Name $ClusterName -Server $Script:vCenterName
@@ -6300,9 +7963,13 @@ function Enable-VsanHealthAlarms {
 
         .NOTES
         Requires VsanVcClusterHealthSystem view and Set-VsanClusterConfiguration -RemoveSilentHealthCheck.
+    
+        .EXAMPLE
+        Enable-VsanHealthAlarms -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
     )
@@ -6361,6 +8028,9 @@ function Invoke-AbandonHciWorkflowIfInProgress {
 
         .NOTES
         Requires cluster ExtensionData to expose AbandonHciWorkflow. "The operation is not allowed in the current state" means the workflow is already skipped and is treated as success.
+    
+        .EXAMPLE
+        Invoke-AbandonHciWorkflowIfInProgress -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
@@ -6416,6 +8086,9 @@ function Add-VsanClusterSilentHealthChecks {
 
         .NOTES
         Non-fatal when the cluster or VsanVcClusterHealthSystem view is missing; per-batch failures log WARNING.
+    
+        .EXAMPLE
+        Add-VsanClusterSilentHealthChecks -ClusterName "edge-cluster-1" -SilentCheckIds "domain-c123"
     #>
 
     [CmdletBinding()]
@@ -6554,6 +8227,9 @@ function Invoke-VsanClusterHealthRetestAfterDeployment {
 
         .NOTES
         Does not SSH to ESX or restart vsanmgmtd; for Stats Primary election remediation see Broadcom KB 401679.
+    
+        .EXAMPLE
+        Invoke-VsanClusterHealthRetestAfterDeployment -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
@@ -6600,6 +8276,9 @@ function Enable-VsanPerformanceService {
 
         .PARAMETER Server
         vCenter server. Default is $Script:vCenterName.
+    
+        .EXAMPLE
+        Enable-VsanPerformanceService -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
@@ -6636,6 +8315,9 @@ function Test-VsanHealthTestDetailsStatsPrimaryElection {
 
         .OUTPUTS
         Boolean.
+    
+        .EXAMPLE
+        Test-VsanHealthTestDetailsStatsPrimaryElection -Test "value"
     #>
 
     [CmdletBinding()]
@@ -6671,6 +8353,9 @@ function Test-VsanHealthFailureTextOnlyStatsPrimaryElection {
 
         .OUTPUTS
         Boolean.
+    
+        .EXAMPLE
+        Test-VsanHealthFailureTextOnlyStatsPrimaryElection -FailureText "Operation failed."
     #>
 
     [CmdletBinding()]
@@ -6701,6 +8386,9 @@ function Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection {
 
         .OUTPUTS
         Boolean.
+    
+        .EXAMPLE
+        Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection -HealthSummary "Operation failed."
     #>
 
     [CmdletBinding()]
@@ -6763,14 +8451,17 @@ function Invoke-VsanClusterHealthRetriggerForStatsPrimary {
 
         .NOTES
         Non-fatal when Test-VsanClusterHealth throws; callers should re-query Get-VsanClusterHealthSummaryViaView.
+    
+        .EXAMPLE
+        Invoke-VsanClusterHealthRetriggerForStatsPrimary -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
-        [Parameter(Mandatory = $false)] [ValidateRange(5, 600)] [Int]$WaitAfterTriggerSeconds = 45,
-        [Parameter(Mandatory = $false)] [ValidateRange(60, 900)] [Int]$VmCreateTimeoutSeconds = 120
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 900)] [Int]$VmCreateTimeoutSeconds = 120,
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 600)] [Int]$WaitAfterTriggerSeconds = 45
     )
 
     Enable-VsanPerformanceService -ClusterName $ClusterName -Server $Server | Out-Null
@@ -6799,6 +8490,431 @@ function Invoke-VsanClusterHealthRetriggerForStatsPrimary {
         Write-LogMessage -Type DEBUG -Message "Waiting $WaitAfterTriggerSeconds seconds after Stats Primary re-trigger for cluster `"$ClusterName`"."
         Start-Sleep -Seconds $WaitAfterTriggerSeconds
     }
+}
+function Invoke-VsanHealthCheckRound {
+
+    <#
+        .SYNOPSIS
+        Waits, refetches vSAN health, and evaluates the retry result after an initial non-green finding.
+
+        .DESCRIPTION
+        Waits RetryWaitSeconds, refetches the vSAN health summary, and evaluates the overall health:
+        - green   — proceeds
+        - yellow  — proceeds with a warning log
+        - red     — prompts the user (or auto-proceeds if AcceptBadCheckResults is set); throws on decline
+        - unknown — proceeds with a warning log
+
+        When the health summary cannot be refetched, the FallbackOverallHealth and
+        FallbackFailureReasons values from the pre-wait check are used so the caller has a
+        deterministic outcome even if vCenter is temporarily unresponsive.
+
+        .PARAMETER AcceptBadCheckResults
+        When set, automatically proceeds on red health without prompting the user.
+
+        .PARAMETER ClusterName
+        Name of the vSAN cluster. Used in log messages and health queries.
+
+        .PARAMETER FallbackFailureReasons
+        Failure reasons string from the pre-wait check. Used when the retry health fetch fails.
+
+        .PARAMETER FallbackOverallHealth
+        Overall health string from the pre-wait check (e.g. "yellow", "red"). Used when the
+        retry health fetch fails so the switch statement still has a deterministic value.
+
+        .PARAMETER RetryWaitSeconds
+        Seconds to wait before refetching health. Passed directly from Invoke-VsanClusterHealthCheckAfterWitness.
+
+        .PARAMETER StoragePolicyType
+        vSAN-OSA or vSAN-ESA. Logged when the user declines to proceed on red health so the
+        caller can initiate the correct rollback path.
+
+        .NOTES
+        Internal helper for Invoke-VsanClusterHealthCheckAfterWitness. Separated to keep the parent
+        function under the 80-line AST body guideline and to make the wait/evaluate contract independently
+        testable. Throws VcfDeploymentException when the user declines to proceed on a red health result.
+    
+        .EXAMPLE
+        Invoke-VsanHealthCheckRound -ClusterName "edge-cluster-1" -RetryWaitSeconds 30
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$FallbackFailureReasons = "",
+        [Parameter(Mandatory = $false)] [String]$FallbackOverallHealth = "unknown",
+        [Parameter(Mandatory = $true)] [ValidateRange(60, 600)] [Int]$RetryWaitSeconds,
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [ValidateSet("vSAN-ESA", "vSAN-OSA", "")] [String]$StoragePolicyType = ""
+    )
+
+    Write-LogMessage -Type INFO -Message "Waiting $RetryWaitSeconds seconds before rechecking health."
+    Start-Sleep -Seconds $RetryWaitSeconds
+
+    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache
+    $overallHealth = $FallbackOverallHealth
+    if (-not $healthSummary) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context "health_summary_null"
+        Write-LogMessage -Type WARNING -Message "Could not retrieve health on retry; using previous status."
+    } else {
+        $overallHealth = $healthSummary.overallHealth
+        if (-not $overallHealth) { $overallHealth = "unknown" }
+    }
+
+    $retryFailureReasons = if ($healthSummary) {
+        Get-VsanHealthFailureReasons -HealthSummary $healthSummary
+    } else {
+        $FallbackFailureReasons
+    }
+
+    $proceedReason = $null
+    switch ($overallHealth) {
+        "green"  { $proceedReason = "green" }
+        "yellow" { $proceedReason = "yellow" }
+        "red" {
+            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context "health_red" -HealthSummary $healthSummary
+            Write-LogMessage -Type ERROR -Message "vSAN cluster health is red for `"$ClusterName`" (second check): $retryFailureReasons"
+            if ($AcceptBadCheckResults.IsPresent) {
+                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite vSAN red health for cluster `"$ClusterName`"."
+                return
+            }
+            Write-LogMessage -Type WARNING -Message "vSAN cluster health is red. You may proceed and accept the risk (Y), or decline (N) to stop deployment and run rollback so you can resolve vSAN issues first."
+            $proceedPrompt = "Proceed anyway and accept the risk? (Y/N)"
+            do {
+                $proceedResponse = Read-Host $proceedPrompt
+                $proceedResponse = if ($proceedResponse) { $proceedResponse.Trim() } else { "" }
+                if ($proceedResponse -match "^Y(es)?$") {
+                    Write-LogMessage -Type WARNING -Message "User chose to proceed despite vSAN red health for cluster `"$ClusterName`". Accepting risk."
+                    return
+                }
+                if ($proceedResponse -match "^N(o)?$") {
+                    Write-LogMessage -Type INFO -Message "User chose not to proceed due to vSAN red health for cluster `"$ClusterName`". You will be prompted whether to roll back (same sequence as cleanup)."
+                    if (-not $StoragePolicyType) {
+                        Write-LogMessage -Type WARNING -Message "StoragePolicyType not passed to health check; caller will need to perform rollback."
+                    }
+                    $errorMsg = "Deployment failed. vSAN cluster health is red: $retryFailureReasons"
+                    Write-LogMessage -Type ERROR -Message $errorMsg
+                    throw [VcfDeploymentException]::new($errorMsg)
+                }
+                Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N."
+            } while ($true)
+        }
+        default { $proceedReason = "unknown" }
+    }
+
+    if ($proceedReason) {
+        if ($healthSummary) {
+            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
+        }
+        switch ($proceedReason) {
+            "green"  { Write-LogMessage -Type INFO    -Message "vSAN cluster health is green on retry for cluster `"$ClusterName`". Proceeding." }
+            "yellow" { Write-LogMessage -Type WARNING -Message "vSAN cluster health is yellow for `"$ClusterName`" after retry: $retryFailureReasons. Proceeding with warning." }
+            default  { Write-LogMessage -Type WARNING -Message "vSAN cluster health status is `"$overallHealth`" for `"$ClusterName`". Proceeding with warning." }
+        }
+    }
+}
+function Invoke-VsanInitialPartitionRepair {
+
+    <#
+        .SYNOPSIS
+        Triggers vSAN object repair when a partition is detected on the initial health check, then
+        rechecks the partition status.
+
+        .DESCRIPTION
+        Called when Test-VsanClusterPartitioned returns $true on the first health summary fetch after
+        vSAN cluster and witness configuration. Triggers Invoke-VsanClusterObjectRepairAndWait, then
+        refetches the health summary and rechecks partition. Throws VcfDeploymentException if repair
+        fails, if the post-repair health fetch fails, or if the cluster is still partitioned after repair.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name. Must be a non-empty string.
+
+        .PARAMETER HealthSummary
+        The health summary object at the time partition was detected.
+
+        .PARAMETER RepairTaskTimeoutSeconds
+        Maximum seconds to wait for the repair task. Default is 600.
+
+        .EXAMPLE
+        $updatedSummary = Invoke-VsanInitialPartitionRepair -ClusterName "cl-site1" -HealthSummary $healthSummary -RepairTaskTimeoutSeconds 600
+
+        .NOTES
+        Returns the post-repair health summary. Throws on any unresolved partition or repair failure.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$HealthSummary,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$RepairTaskTimeoutSeconds = 600
+    )
+
+    Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_detected' -HealthSummary $HealthSummary
+    Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" is partitioned. Triggering object repair (resync)."
+    $repairSucceeded = Invoke-VsanClusterObjectRepairAndWait -ClusterName $ClusterName -TimeoutSeconds $RepairTaskTimeoutSeconds
+    if (-not $repairSucceeded) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'repair_failed'
+        $err = "vSAN object repair did not complete successfully for cluster `"$ClusterName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    Write-LogMessage -Type INFO -Message "Rechecking partition status for cluster `"$ClusterName`"."
+    $newHealthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
+    if (-not $newHealthSummary) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'health_summary_null'
+        $err = "Could not retrieve vSAN health summary after repair."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    $clusterPartitioned = Test-VsanClusterPartitioned -HealthSummary $newHealthSummary
+    if ($clusterPartitioned) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_after_repair' -HealthSummary $newHealthSummary
+        $err = "vSAN cluster `"$ClusterName`" is still partitioned after repair."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    Write-LogMessage -Type INFO -Message "Partition resolved for cluster `"$ClusterName`". Proceeding to health check."
+    return $newHealthSummary
+}
+function Invoke-VsanStatsPrimaryRetry {
+
+    <#
+        .SYNOPSIS
+        Re-triggers vSAN health evaluation when the only non-green finding is Stats Primary
+        election/selection, waiting between attempts and checking if health resolves to green.
+
+        .DESCRIPTION
+        Runs up to RetryMaxAttempts iterations of: invoke health retrigger, wait, refetch health.
+        If health becomes green during retries, returns $null to signal the caller should return.
+        If after all retries only Stats Primary election remains, proceeds with a warning and
+        returns $null. If the health issue is something other than Stats Primary, returns a
+        PSCustomObject with the updated HealthSummary and OverallHealth for the caller to continue.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name.
+
+        .PARAMETER HealthSummary
+        The health summary after the green check failed.
+
+        .PARAMETER OverallHealth
+        The overallHealth string (e.g. "yellow", "red", "unknown").
+
+        .PARAMETER RetryMaxAttempts
+        Maximum retry attempts. Default is 4.
+
+        .PARAMETER RetryWaitSeconds
+        Seconds to wait after each re-trigger. Default is 45.
+
+        .PARAMETER VmCreateTimeoutSeconds
+        Passed to Invoke-VsanClusterHealthRetriggerForStatsPrimary. Default is 120.
+
+        .EXAMPLE
+        $result = Invoke-VsanStatsPrimaryRetry -ClusterName "cl-site1" -HealthSummary $summary -OverallHealth "yellow" -RetryMaxAttempts 4 -RetryWaitSeconds 45 -VmCreateTimeoutSeconds 120
+        if ($null -eq $result) { return }
+
+        .NOTES
+        Returns $null when the situation is fully handled (green or proceed-with-warning).
+        Returns a PSCustomObject with HealthSummary and OverallHealth when the caller should continue.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$HealthSummary,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$OverallHealth,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 12)] [Int]$RetryMaxAttempts = 4,
+        [Parameter(Mandatory = $false)] [ValidateRange(5, 600)] [Int]$RetryWaitSeconds = 45,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 900)] [Int]$VmCreateTimeoutSeconds = 120
+    )
+
+    $retryIdx = 0
+    while (
+        ($OverallHealth -ne 'green') -and
+        (Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection -HealthSummary $HealthSummary) -and
+        ($retryIdx -lt $RetryMaxAttempts)
+    ) {
+        $retryIdx++
+        Write-LogMessage -Type INFO -Message "vSAN health is not green but only Stats Primary election/selection is reported for cluster `"$ClusterName`"; re-triggering health evaluation (attempt $retryIdx of $RetryMaxAttempts). No silent-check API calls are used."
+        Invoke-VsanClusterHealthRetriggerForStatsPrimary -ClusterName $ClusterName -Server $Script:vCenterName -VmCreateTimeoutSeconds $VmCreateTimeoutSeconds -WaitAfterTriggerSeconds $RetryWaitSeconds
+        $HealthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
+        if (-not $HealthSummary) {
+            Write-LogMessage -Type WARNING -Message "Could not refresh vSAN health summary after Stats Primary re-trigger for cluster `"$ClusterName`"; stopping retry loop."
+            break
+        }
+        $OverallHealth = if ($HealthSummary.overallHealth) { $HealthSummary.overallHealth } else { 'unknown' }
+        if ($OverallHealth -eq 'green') {
+            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $HealthSummary
+            Write-LogMessage -Type INFO -Message "vSAN cluster health is green for cluster `"$ClusterName`" after Stats Primary re-trigger. Proceeding."
+            return $null
+        }
+    }
+
+    if (($OverallHealth -ne 'green') -and $HealthSummary -and (Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection -HealthSummary $HealthSummary)) {
+        Write-LogMessage -Type WARNING -Message "Stats Primary election/selection still reported after $RetryMaxAttempts re-trigger attempt(s) for cluster `"$ClusterName`"; treating as transient and proceeding. Monitor vSAN Health and Broadcom KB 401679 if the performance service stays unhealthy."
+        Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $HealthSummary
+        return $null
+    }
+
+    return [PSCustomObject]@{ HealthSummary = $HealthSummary; OverallHealth = $OverallHealth }
+}
+function Invoke-VsanSuppressedAlarmRecheck {
+
+    <#
+        .SYNOPSIS
+        Rechecks vSAN health after re-skipping the HCI workflow when the only non-green finding is
+        "vSAN health alarms are suppressed".
+
+        .DESCRIPTION
+        Waits HciWorkflowClearWaitSeconds, re-abandons the HCI workflow, then refetches the health
+        summary. Returns $null to signal the caller should return when health is green or when the
+        suppressed-alarm warning persists (proceed with warning). Returns a PSCustomObject with
+        updated HealthSummary, OverallHealth, and FailureReasons when other non-green issues appear.
+        Returns a PSCustomObject with the original values when the health refetch fails.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name.
+
+        .PARAMETER FailureReasons
+        The failure reasons string from the current health summary.
+
+        .PARAMETER HealthSummary
+        The current health summary (used as fallback when refetch fails).
+
+        .PARAMETER HciWorkflowClearWaitSeconds
+        Seconds to wait before abandoning HCI workflow and rechecking.
+
+        .PARAMETER OverallHealth
+        The current overallHealth string (used as fallback when refetch fails).
+
+        .EXAMPLE
+        $result = Invoke-VsanSuppressedAlarmRecheck -ClusterName "cl-site1" -HealthSummary $summary -FailureReasons $reasons -OverallHealth "yellow" -HciWorkflowClearWaitSeconds 20
+        if ($null -eq $result) { return }
+
+        .NOTES
+        Returns $null when handled (caller should return). Returns a PSCustomObject when the caller
+        should continue with the returned HealthSummary, OverallHealth, and FailureReasons.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$FailureReasons,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$HciWorkflowClearWaitSeconds = 20,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$HealthSummary,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$OverallHealth
+    )
+
+    Write-LogMessage -Type INFO -Message "Only failure is vSAN health alarms suppressed; waiting $HciWorkflowClearWaitSeconds seconds and re-skipping HCI workflow before recheck."
+    Start-Sleep -Seconds $HciWorkflowClearWaitSeconds
+    Invoke-AbandonHciWorkflowIfInProgress -ClusterName $ClusterName
+    $newHealthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
+    if (-not $newHealthSummary) {
+        return [PSCustomObject]@{ HealthSummary = $HealthSummary; OverallHealth = $OverallHealth; FailureReasons = $FailureReasons }
+    }
+
+    $newOverallHealth = if ($newHealthSummary.overallHealth) { $newHealthSummary.overallHealth } else { 'unknown' }
+    if ($newOverallHealth -eq 'green') {
+        Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $newHealthSummary
+        Write-LogMessage -Type INFO -Message "vSAN cluster health is green after HCI workflow re-skip for cluster `"$ClusterName`". Proceeding."
+        return $null
+    }
+
+    $newFailureReasons = Get-VsanHealthFailureReasons -HealthSummary $newHealthSummary
+    $stillOnlySuppressed = ($newFailureReasons -match 'alarms are suppressed|hciskip') -and ($newFailureReasons -notmatch 'partition|Network misconfiguration|resync')
+    if ($stillOnlySuppressed) {
+        Write-LogMessage -Type WARNING -Message "vSAN health alarms suppressed warning persists for `"$ClusterName`"; proceeding. Alarm may clear shortly in vCenter."
+        return $null
+    }
+
+    return [PSCustomObject]@{ HealthSummary = $newHealthSummary; OverallHealth = $newOverallHealth; FailureReasons = $newFailureReasons }
+}
+function Invoke-VsanNetworkPartitionRepairAndRecheck {
+
+    <#
+        .SYNOPSIS
+        Triggers vSAN object repair when health suggests a network partition or initial sync, then
+        rechecks health to determine if the cluster recovered.
+
+        .DESCRIPTION
+        Called when Test-VsanHealthSuggestsPartitionOrNetwork returns $true after non-green health
+        evaluation. Triggers repair, waits, then refetches health. Returns $null to signal green
+        (caller should return). Returns a PSCustomObject with updated health state when the cluster
+        is not yet green (so the caller can delegate to Invoke-VsanHealthCheckRound). Throws
+        VcfDeploymentException if the cluster is partitioned after repair.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name.
+
+        .PARAMETER FailureReasons
+        The current failure reasons string (used as fallback when refetch fails).
+
+        .PARAMETER HealthSummary
+        The current health summary object (used as fallback when refetch fails or repair fails).
+
+        .PARAMETER OverallHealth
+        The current overallHealth string (used as fallback when refetch fails or repair fails).
+
+        .PARAMETER RepairTaskTimeoutSeconds
+        Maximum seconds to wait for repair. Default is 600.
+
+        .EXAMPLE
+        $result = Invoke-VsanNetworkPartitionRepairAndRecheck -ClusterName "cl-site1" -HealthSummary $summary -FailureReasons $reasons -OverallHealth "yellow" -RepairTaskTimeoutSeconds 600
+        if ($null -eq $result) { return }
+
+        .NOTES
+        Returns $null when handled (green, caller should return). Returns a PSCustomObject with
+        HealthSummary, OverallHealth, and FailureReasons when caller should continue.
+        Throws VcfDeploymentException on partition-after-repair.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$FailureReasons,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$HealthSummary,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$OverallHealth,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$RepairTaskTimeoutSeconds = 600
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Treating as possible network partition or initial sync; triggering object repair (resync) for cluster `"$ClusterName`"."
+    Write-LogMessage -Type INFO -Message "Triggering vSAN object repair (resync) for cluster `"$ClusterName`" (possible network/partition or initial sync)."
+    $repairSucceeded = Invoke-VsanClusterObjectRepairAndWait -ClusterName $ClusterName -TimeoutSeconds $RepairTaskTimeoutSeconds
+    if (-not $repairSucceeded) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'repair_failed'
+        Write-LogMessage -Type WARNING -Message "vSAN object repair did not complete successfully for cluster `"$ClusterName`"; will wait and recheck health."
+        return [PSCustomObject]@{ HealthSummary = $HealthSummary; OverallHealth = $OverallHealth; FailureReasons = $FailureReasons }
+    }
+
+    Write-LogMessage -Type INFO -Message "Rechecking health after repair for cluster `"$ClusterName`"."
+    $newHealthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
+    if (-not $newHealthSummary) {
+        return [PSCustomObject]@{ HealthSummary = $HealthSummary; OverallHealth = $OverallHealth; FailureReasons = $FailureReasons }
+    }
+
+    $clusterPartitioned = Test-VsanClusterPartitioned -HealthSummary $newHealthSummary
+    if ($clusterPartitioned) {
+        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_after_repair' -HealthSummary $newHealthSummary
+        $err = "vSAN cluster `"$ClusterName`" is partitioned after repair."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    $newOverallHealth = if ($newHealthSummary.overallHealth) { $newHealthSummary.overallHealth } else { 'unknown' }
+    if ($newOverallHealth -eq 'green') {
+        Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $newHealthSummary
+        Write-LogMessage -Type INFO -Message "vSAN cluster health is green after repair for cluster `"$ClusterName`". Proceeding."
+        return $null
+    }
+
+    $newFailureReasons = Get-VsanHealthFailureReasons -HealthSummary $newHealthSummary
+    Write-LogMessage -Type DEBUG -Message "Health still not green after repair. overallHealth=$newOverallHealth, failureReasons=$newFailureReasons"
+    return [PSCustomObject]@{ HealthSummary = $newHealthSummary; OverallHealth = $newOverallHealth; FailureReasons = $newFailureReasons }
 }
 function Invoke-VsanClusterHealthCheckAfterWitness {
 
@@ -6850,16 +8966,19 @@ function Invoke-VsanClusterHealthCheckAfterWitness {
         .NOTES
         Requires connection to vCenter. Uses Get-VsanView and vSAN Health API (VCF PowerCLI 9).
         When vSAN health is red and the user chooses not to proceed (N), this function initiates Invoke-VsanDeploymentRollback before throwing, so the cluster is cleaned up.
+    
+        .EXAMPLE
+        Invoke-VsanClusterHealthCheckAfterWitness -ClusterName "edge-cluster-1"
     #>
 
     [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
-        [Parameter(Mandatory = $false)] [ValidateRange(0, 120)] [int]$HciWorkflowClearWaitSeconds = 20,
-        [Parameter(Mandatory = $false)] [bool]$LabEnvironment = $false,
-        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [int]$RepairTaskTimeoutSeconds = 600,
-        [Parameter(Mandatory = $false)] [ValidateRange(60, 600)] [int]$RetryWaitSeconds = 180,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 120)] [Int]$HciWorkflowClearWaitSeconds = 20,
+        [Parameter(Mandatory = $false)] [Switch]$LabEnvironment,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 3600)] [Int]$RepairTaskTimeoutSeconds = 600,
+        [Parameter(Mandatory = $false)] [ValidateRange(60, 600)] [Int]$RetryWaitSeconds = 180,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 12)] [Int]$StatsPrimaryElectionRetryMaxAttempts = 4,
         [Parameter(Mandatory = $false)] [ValidateRange(5, 600)] [Int]$StatsPrimaryElectionRetryWaitSeconds = 45,
         [Parameter(Mandatory = $false)] [ValidateRange(60, 900)] [Int]$StatsPrimaryHealthTestVmCreateTimeoutSeconds = 120,
@@ -6868,246 +8987,88 @@ function Invoke-VsanClusterHealthCheckAfterWitness {
 
     Write-LogMessage -Type DEBUG -Message "Running vSAN cluster health check for cluster `"$ClusterName`" (after witness)."
 
-    # Validate vCenter connection before proceeding.
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter: $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Deployment failed. vSAN health check requires vCenter connection.")
+        $err = "Not connected to vCenter: $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
-    # Re-enable vSAN health alarms if they are suppressed so we evaluate real health and get full findings.
     Enable-VsanHealthAlarms -ClusterName $ClusterName | Out-Null
-
-    # Skip vCenter Quickstart (HCI) workflow so the "vSAN health alarms are suppressed" (hciskip) warning can clear.
     Invoke-AbandonHciWorkflowIfInProgress -ClusterName $ClusterName
-
     if ($HciWorkflowClearWaitSeconds -gt 0) {
         Write-LogMessage -Type DEBUG -Message "Waiting $HciWorkflowClearWaitSeconds seconds for vSAN health service to reflect HCI workflow skip."
         Start-Sleep -Seconds $HciWorkflowClearWaitSeconds
     }
-
-    # When lab environment is enabled, silence additional lab-oriented checks so lab deployments do not fail on those findings.
     if ($LabEnvironment) {
         Set-VsanLabSilentChecksIfRequested -ClusterName $ClusterName -LabEnvironmentEnabled $true
     }
 
-    # Get the health summary for the cluster.
-    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
+    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache:$false
     if (-not $healthSummary) {
         Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'health_summary_null'
-        Write-LogMessage -Type ERROR -Message "Could not retrieve vSAN health summary for cluster `"$ClusterName`"."
-        throw [VcfDeploymentException]::new("Deployment failed. vSAN health check could not retrieve health summary.")
+        $err = "Could not retrieve vSAN health summary for cluster `"$ClusterName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
-    # Check if the cluster is partitioned.
-    $clusterPartitioned = Test-VsanClusterPartitioned -HealthSummary $healthSummary
-    if ($clusterPartitioned) {
-        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_detected' -HealthSummary $healthSummary
-        # Partition detected: trigger repair, wait for task, then recheck partition.
-        Write-LogMessage -Type WARNING -Message "vSAN cluster `"$ClusterName`" is partitioned. Triggering object repair (resync)."
-        $repairSucceeded = Invoke-VsanClusterObjectRepairAndWait -ClusterName $ClusterName -TimeoutSeconds $RepairTaskTimeoutSeconds
-        if (-not $repairSucceeded) {
-            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'repair_failed'
-            Write-LogMessage -Type ERROR -Message "vSAN object repair did not complete successfully for cluster `"$ClusterName`"."
-            throw [VcfDeploymentException]::new("Deployment failed. vSAN cluster is partitioned and repair did not complete. Resolve partition (e.g. network/unicast) and retry.")
-        }
-        # Recheck the health summary after repair.
-        Write-LogMessage -Type INFO -Message "Rechecking partition status for cluster `"$ClusterName`"."
-        $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
-        if (-not $healthSummary) {
-            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'health_summary_null'
-            Write-LogMessage -Type ERROR -Message "Could not retrieve vSAN health summary after repair."
-            throw [VcfDeploymentException]::new("Deployment failed. vSAN health recheck failed after repair.")
-        }
-        # Check if the cluster is partitioned again after repair.
-        $clusterPartitioned = Test-VsanClusterPartitioned -HealthSummary $healthSummary
-        if ($clusterPartitioned) {
-            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_after_repair' -HealthSummary $healthSummary
-            Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" is still partitioned after repair."
-            throw [VcfDeploymentException]::new("Deployment failed. vSAN cluster remains partitioned after repair. Resolve network/partition (e.g. unicast agent list) and retry.")
-        }
-        Write-LogMessage -Type INFO -Message "Partition resolved for cluster `"$ClusterName`". Proceeding to health check."
+    if (Test-VsanClusterPartitioned -HealthSummary $healthSummary) {
+        $healthSummary = Invoke-VsanInitialPartitionRepair -ClusterName $ClusterName -HealthSummary $healthSummary -RepairTaskTimeoutSeconds $RepairTaskTimeoutSeconds
     }
-    # Check if the cluster is green.
-    $overallHealth = $healthSummary.overallHealth
-    if (-not $overallHealth) { $overallHealth = 'unknown' }
+
+    $overallHealth = if ($healthSummary.overallHealth) { $healthSummary.overallHealth } else { 'unknown' }
     if ($overallHealth -eq 'green') {
         Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
         Write-LogMessage -Type INFO -Message "vSAN cluster health is green for cluster `"$ClusterName`". Proceeding."
         return
     }
 
-    # Transient Stats Primary election/selection: re-enable performance service, run Test-VsanClusterHealth when available, wait, and re-fetch—without silencing health checks.
-    $statsRetryIdx = 0
-    while (
-        ($overallHealth -ne 'green') -and
-        (Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection -HealthSummary $healthSummary) -and
-        ($statsRetryIdx -lt $StatsPrimaryElectionRetryMaxAttempts)
-    ) {
-        $statsRetryIdx++
-        Write-LogMessage -Type INFO -Message "vSAN health is not green but only Stats Primary election/selection is reported for cluster `"$ClusterName`"; re-triggering health evaluation (attempt $statsRetryIdx of $StatsPrimaryElectionRetryMaxAttempts). No silent-check API calls are used."
-        Invoke-VsanClusterHealthRetriggerForStatsPrimary -ClusterName $ClusterName -Server $Script:vCenterName -VmCreateTimeoutSeconds $StatsPrimaryHealthTestVmCreateTimeoutSeconds -WaitAfterTriggerSeconds $StatsPrimaryElectionRetryWaitSeconds
-        $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
-        if (-not $healthSummary) {
-            Write-LogMessage -Type WARNING -Message "Could not refresh vSAN health summary after Stats Primary re-trigger for cluster `"$ClusterName`"; stopping retry loop."
-            break
-        }
-        $overallHealth = $healthSummary.overallHealth
-        if (-not $overallHealth) { $overallHealth = 'unknown' }
-        if ($overallHealth -eq 'green') {
-            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
-            Write-LogMessage -Type INFO -Message "vSAN cluster health is green for cluster `"$ClusterName`" after Stats Primary re-trigger. Proceeding."
-            return
-        }
-    }
-    if (($overallHealth -ne 'green') -and ($healthSummary) -and (Test-VsanHealthSummaryNonGreenOnlyStatsPrimaryElection -HealthSummary $healthSummary)) {
-        Write-LogMessage -Type WARNING -Message "Stats Primary election/selection still reported after $StatsPrimaryElectionRetryMaxAttempts re-trigger attempt(s) for cluster `"$ClusterName`"; treating as transient and proceeding. Monitor vSAN Health and Broadcom KB 401679 if the performance service stays unhealthy."
-        Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
-        return
-    }
+    # Transient Stats Primary election/selection: re-trigger health evaluation without silencing checks.
+    $statsResult = Invoke-VsanStatsPrimaryRetry -ClusterName $ClusterName -HealthSummary $healthSummary `
+        -OverallHealth $overallHealth -RetryMaxAttempts $StatsPrimaryElectionRetryMaxAttempts `
+        -RetryWaitSeconds $StatsPrimaryElectionRetryWaitSeconds -VmCreateTimeoutSeconds $StatsPrimaryHealthTestVmCreateTimeoutSeconds
+    if ($null -eq $statsResult) { return }
+    $healthSummary = $statsResult.HealthSummary
+    $overallHealth = $statsResult.OverallHealth
 
     $failureReasons = Get-VsanHealthFailureReasons -HealthSummary $healthSummary
     $overallDescription = $healthSummary.overallHealthDescription
     $networkDesc = if ($healthSummary.networkHealth -and $healthSummary.networkHealth.description) { $healthSummary.networkHealth.description } else { $null }
-
     Write-LogMessage -Type DEBUG -Message "vSAN health not green. overallHealth=$overallHealth, overallHealthDescription=$overallDescription, failureReasons=$failureReasons, networkHealthDescription=$networkDesc"
     Write-LogMessage -Type WARNING -Message "vSAN cluster health is not green for `"$ClusterName`" (status: $overallHealth): $failureReasons"
 
-    # When the only reported issue is "vSAN health alarms are suppressed", wait and re-abandon HCI workflow then recheck; proceed if still suppressed so deployment does not block.
+    # When the only reported issue is "vSAN health alarms are suppressed", recheck after re-skipping HCI workflow.
     $onlySuppressedAlarm = ($failureReasons -match 'alarms are suppressed|hciskip') -and ($failureReasons -notmatch 'partition|Network misconfiguration|resync')
     if ($onlySuppressedAlarm -and $HciWorkflowClearWaitSeconds -gt 0) {
-        Write-LogMessage -Type INFO -Message "Only failure is vSAN health alarms suppressed; waiting $HciWorkflowClearWaitSeconds seconds and re-skipping HCI workflow before recheck."
-        Start-Sleep -Seconds $HciWorkflowClearWaitSeconds
-        Invoke-AbandonHciWorkflowIfInProgress -ClusterName $ClusterName
-        $healthSummarySuppressed = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
-        if ($healthSummarySuppressed) {
-            $overallSuppressed = $healthSummarySuppressed.overallHealth
-            if (-not $overallSuppressed) { $overallSuppressed = 'unknown' }
-            if ($overallSuppressed -eq 'green') {
-                Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummarySuppressed
-                Write-LogMessage -Type INFO -Message "vSAN cluster health is green after HCI workflow re-skip for cluster `"$ClusterName`". Proceeding."
-                return
-            }
-            $failureReasonsSuppressed = Get-VsanHealthFailureReasons -HealthSummary $healthSummarySuppressed
-            $stillOnlySuppressed = ($failureReasonsSuppressed -match 'alarms are suppressed|hciskip') -and ($failureReasonsSuppressed -notmatch 'partition|Network misconfiguration|resync')
-            if ($stillOnlySuppressed) {
-                Write-LogMessage -Type WARNING -Message "vSAN health alarms suppressed warning persists for `"$ClusterName`"; proceeding. Alarm may clear shortly in vCenter."
-                return
-            }
-            # Other issues appeared; use the refreshed summary and fall through to partition/repair and retry logic.
-            $healthSummary = $healthSummarySuppressed
-            $failureReasons = $failureReasonsSuppressed
-            $overallHealth = $overallSuppressed
-        }
+        $suppressedResult = Invoke-VsanSuppressedAlarmRecheck -ClusterName $ClusterName -HealthSummary $healthSummary `
+            -FailureReasons $failureReasons -OverallHealth $overallHealth -HciWorkflowClearWaitSeconds $HciWorkflowClearWaitSeconds
+        if ($null -eq $suppressedResult) { return }
+        $healthSummary = $suppressedResult.HealthSummary
+        $failureReasons = $suppressedResult.FailureReasons
+        $overallHealth = $suppressedResult.OverallHealth
     }
 
-    $suggestsPartitionOrNetwork = Test-VsanHealthSuggestsPartitionOrNetwork -HealthSummary $healthSummary
-
-    if ($suggestsPartitionOrNetwork) {
-
-        Write-LogMessage -Type DEBUG -Message "Treating as possible network partition or initial sync; triggering object repair (resync) for cluster `"$ClusterName`"."
-        Write-LogMessage -Type INFO -Message "Triggering vSAN object repair (resync) for cluster `"$ClusterName`" (possible network/partition or initial sync)."
-
-        $repairSucceeded = Invoke-VsanClusterObjectRepairAndWait -ClusterName $ClusterName -TimeoutSeconds $RepairTaskTimeoutSeconds
-
-        if (-not $repairSucceeded) {
-            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'repair_failed'
-            Write-LogMessage -Type WARNING -Message "vSAN object repair did not complete successfully for cluster `"$ClusterName`"; will wait and recheck health."
-        } else {
-            Write-LogMessage -Type INFO -Message "Rechecking health after repair for cluster `"$ClusterName`"."
-            $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $false
-
-            if ($healthSummary) {
-                $clusterPartitioned = Test-VsanClusterPartitioned -HealthSummary $healthSummary
-                if ($clusterPartitioned) {
-                    Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'partition_after_repair' -HealthSummary $healthSummary
-                    Write-LogMessage -Type ERROR -Message "vSAN cluster `"$ClusterName`" is partitioned after repair."
-                    throw [VcfDeploymentException]::new("Deployment failed. vSAN cluster is partitioned after repair. Resolve network/partition (e.g. unicast agent list) and retry.")
-                }
-                $overallHealth = $healthSummary.overallHealth
-
-                if (-not $overallHealth) { $overallHealth = 'unknown' }
-                if ($overallHealth -eq 'green') {
-                    Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
-                    Write-LogMessage -Type INFO -Message "vSAN cluster health is green after repair for cluster `"$ClusterName`". Proceeding."
-                    return
-                }
-                $failureReasons = Get-VsanHealthFailureReasons -HealthSummary $healthSummary
-                Write-LogMessage -Type DEBUG -Message "Health still not green after repair. overallHealth=$overallHealth, failureReasons=$failureReasons"
-            }
-        }
+    if (Test-VsanHealthSuggestsPartitionOrNetwork -HealthSummary $healthSummary) {
+        $repairResult = Invoke-VsanNetworkPartitionRepairAndRecheck -ClusterName $ClusterName -HealthSummary $healthSummary `
+            -FailureReasons $failureReasons -OverallHealth $overallHealth -RepairTaskTimeoutSeconds $RepairTaskTimeoutSeconds
+        if ($null -eq $repairResult) { return }
+        $healthSummary = $repairResult.HealthSummary
+        $overallHealth = $repairResult.OverallHealth
+        $failureReasons = $repairResult.FailureReasons
     }
-    # Not green: wait, then recheck once. Yellow proceeds with warning; red fails.
-    Write-LogMessage -Type INFO -Message "Waiting $RetryWaitSeconds seconds before rechecking health."
-    Start-Sleep -Seconds $RetryWaitSeconds
-    # Recheck the health summary after waiting.
-    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache $true
-    if (-not $healthSummary) {
-        Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'health_summary_null'
-        Write-LogMessage -Type WARNING -Message "Could not retrieve health on retry; using previous status."
-    } else {
-        # Get the overall health from the health summary.
-        $overallHealth = $healthSummary.overallHealth
-        if (-not $overallHealth) { $overallHealth = 'unknown' }
+
+    $roundParams = @{
+        ClusterName            = $ClusterName
+        RetryWaitSeconds       = $RetryWaitSeconds
+        FallbackFailureReasons = $failureReasons
+        FallbackOverallHealth  = $overallHealth
+        AcceptBadCheckResults  = $AcceptBadCheckResults.IsPresent
     }
-    # Evaluate retry result: green proceed, yellow warn and proceed, red fail.
-    # When retry failed to get a new summary ($healthSummary is null), keep using pre-wait $failureReasons.
-    if ($healthSummary) {
-        $retryFailureReasons = Get-VsanHealthFailureReasons -HealthSummary $healthSummary
-    } else {
-        $retryFailureReasons = $failureReasons
-    }
-    $proceedReason = $null
-    switch ($overallHealth) {
-        'green' {
-            $proceedReason = 'green'
-        }
-        'yellow' {
-            $proceedReason = 'yellow'
-        }
-        'red' {
-            Write-VsanHealthFailureDebugInfo -ClusterName $ClusterName -Context 'health_red' -HealthSummary $healthSummary
-            Write-LogMessage -Type ERROR -Message "vSAN cluster health is red for `"$ClusterName`" (second check): $retryFailureReasons"
-            if ($AcceptBadCheckResults.IsPresent) {
-                Write-LogMessage -Type WARNING -Message "AcceptBadCheckResults is set; proceeding despite vSAN red health for cluster `"$ClusterName`"."
-                return
-            }
-            Write-LogMessage -Type WARNING -Message "vSAN cluster health is red. You may proceed and accept the risk (Y), or decline (N) to stop deployment and run rollback so you can resolve vSAN issues first."
-            $proceedPrompt = "Proceed anyway and accept the risk? (Y/N)"
-            do {
-                $proceedResponse = Read-Host $proceedPrompt
-                $proceedResponse = if ($proceedResponse) { $proceedResponse.Trim() } else { "" }
-                if ($proceedResponse -match '^Y(es)?$') {
-                    Write-LogMessage -Type WARNING -Message "User chose to proceed despite vSAN red health for cluster `"$ClusterName`". Accepting risk."
-                    return
-                }
-                if ($proceedResponse -match '^N(o)?$') {
-                    Write-LogMessage -Type INFO -Message "User chose not to proceed due to vSAN red health for cluster `"$ClusterName`". You will be prompted whether to roll back (same sequence as cleanup)."
-                    if (-not $StoragePolicyType) {
-                        Write-LogMessage -Type WARNING -Message "StoragePolicyType not passed to health check; caller will need to perform rollback."
-                    }
-                    Write-LogMessage -Type ERROR -Message "Deployment failed. vSAN cluster health is red: $retryFailureReasons"
-                    throw [VcfDeploymentException]::new()
-                }
-                Write-LogMessage -Type WARNING -Message "Invalid response. Please enter Y or N."
-            } while ($true)
-        }
-        default {
-            $proceedReason = 'unknown'
-        }
-    }
-    if ($proceedReason) {
-        if ($healthSummary) {
-            Test-VsanAdvCfgSyncAndWaitIfNeeded -ClusterName $ClusterName -HealthSummary $healthSummary
-        }
-        switch ($proceedReason) {
-            'green' { Write-LogMessage -Type INFO -Message "vSAN cluster health is green on retry for cluster `"$ClusterName`". Proceeding." }
-            'yellow' { Write-LogMessage -Type WARNING -Message "vSAN cluster health is yellow for `"$ClusterName`" after retry: $retryFailureReasons. Proceeding with warning." }
-            default { Write-LogMessage -Type WARNING -Message "vSAN cluster health status is `"$overallHealth`" for `"$ClusterName`". Proceeding with warning." }
-        }
-    }
+    if ($StoragePolicyType) { $roundParams["StoragePolicyType"] = $StoragePolicyType }
+    Invoke-VsanHealthCheckRound @roundParams
 }
 function Remove-StorageTag {
+
     <#
         .SYNOPSIS
         Removes the storage tag (tag definition) from vCenter. Used during vSAN deployment rollback to clean up the tag created for the storage policy.
@@ -7135,9 +9096,9 @@ function Remove-StorageTag {
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagName
     )
 
     try {
@@ -7185,8 +9146,8 @@ function Remove-TagCategoryIfEmpty {
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog,
-        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TagCatalog
     )
 
     try {
@@ -7240,6 +9201,9 @@ function Invoke-PauseBeforeRollbackIfRequested {
         Uses Read-Host for Y/N/A in prompt mode. One invalid response skips rollback (DoNotRollback) to avoid log flood in non-interactive runs. MaxPromptRetries prevents runaway if Read-Host returns immediately. Use -RollbackOnFailure $true to rollback without prompt.
 
         Answering N (or -RollbackOnFailure $false) is intended for extended manual debugging while the site stays in its failed state. When you are done debugging, run the appropriate scoped cleanup (for example -CleanUp ArgoCD, -CleanUp Harbor, -CleanUp Supervisor, -CleanUp Compute, or -CleanUp All with -EdgeSite as needed) before the next full deployment so the retry starts from a consistent baseline.
+    
+        .EXAMPLE
+        Invoke-PauseBeforeRollbackIfRequested
     #>
 
     [CmdletBinding()]
@@ -7285,7 +9249,7 @@ function Invoke-PauseBeforeRollbackIfRequested {
             }
             $response = Read-Host $prompt
             $response = if ($response) { $response.Trim() } else { "" }
-            if ([string]::IsNullOrWhiteSpace($response)) {
+            if ([String]::IsNullOrWhiteSpace($response)) {
                 Write-LogMessage -Type INFO -Message "No input (default no rollback); leaving site in broken state, continuing to next site if any ($RollbackContext)."
                 return "DoNotRollback"
             }
@@ -7320,27 +9284,31 @@ function Get-CanonicalNameFromVsanStoragePoolDisk {
         Checks CanonicalName, Disk.CanonicalName, ExtensionData.disk.canonicalName, and any property whose name contains Canonical.
         .OUTPUTS
         String or $null.
+    
+        .EXAMPLE
+        $canonicalNameFromVsanStoragePoolDisk = Get-CanonicalNameFromVsanStoragePoolDisk -VsanStoragePoolDisk "value"
     #>
     [CmdletBinding()]
+    [OutputType([String])]
     Param ([Parameter(Mandatory = $true)] $VsanStoragePoolDisk)
     $disk = $VsanStoragePoolDisk
-    if ($disk.PSObject.Properties['CanonicalName'] -and -not [string]::IsNullOrWhiteSpace([string]$disk.CanonicalName)) {
+    if ($disk.PSObject.Properties['CanonicalName'] -and -not [String]::IsNullOrWhiteSpace([String]$disk.CanonicalName)) {
         return $disk.CanonicalName
     }
-    if ($disk.PSObject.Properties['Disk'] -and $null -ne $disk.Disk -and $disk.Disk.PSObject.Properties['CanonicalName'] -and -not [string]::IsNullOrWhiteSpace([string]$disk.Disk.CanonicalName)) {
+    if ($disk.PSObject.Properties['Disk'] -and $null -ne $disk.Disk -and $disk.Disk.PSObject.Properties['CanonicalName'] -and -not [String]::IsNullOrWhiteSpace([String]$disk.Disk.CanonicalName)) {
         return $disk.Disk.CanonicalName
     }
     $extensionData = $disk.ExtensionData
     if ($null -ne $extensionData) {
-        if ($extensionData.PSObject.Properties['disk'] -and $null -ne $extensionData.disk -and $extensionData.disk.PSObject.Properties['canonicalName'] -and -not [string]::IsNullOrWhiteSpace([string]$extensionData.disk.canonicalName)) {
+        if ($extensionData.PSObject.Properties['disk'] -and $null -ne $extensionData.disk -and $extensionData.disk.PSObject.Properties['canonicalName'] -and -not [String]::IsNullOrWhiteSpace([String]$extensionData.disk.canonicalName)) {
             return $extensionData.disk.canonicalName
         }
-        if ($extensionData.PSObject.Properties['Disk'] -and $null -ne $extensionData.Disk -and $extensionData.Disk.PSObject.Properties['CanonicalName'] -and -not [string]::IsNullOrWhiteSpace([string]$extensionData.Disk.CanonicalName)) {
+        if ($extensionData.PSObject.Properties['Disk'] -and $null -ne $extensionData.Disk -and $extensionData.Disk.PSObject.Properties['CanonicalName'] -and -not [String]::IsNullOrWhiteSpace([String]$extensionData.Disk.CanonicalName)) {
             return $extensionData.Disk.CanonicalName
         }
     }
     foreach ($property in $disk.PSObject.Properties) {
-        if ($property.Name -match 'canonical|Canonical' -and $null -ne $property.Value -and -not [string]::IsNullOrWhiteSpace([string]$property.Value)) {
+        if ($property.Name -match 'canonical|Canonical' -and $null -ne $property.Value -and -not [String]::IsNullOrWhiteSpace([String]$property.Value)) {
             return $property.Value
         }
     }
@@ -7354,12 +9322,16 @@ function Invoke-EsxcliVsanStoragePoolRemoveFallback {
         Runs esxcli vsan storagepool list, then remove for each disk (by disk name or UUID). Used when Get-VsanStoragePoolDisk returns objects with null Key.
         .OUTPUTS
         PSCustomObject with RemainingCount and RemovedCount, or $null on failure.
+    
+        .EXAMPLE
+        Invoke-EsxcliVsanStoragePoolRemoveFallback -HostNameForLogging "resource-name" -Server $vcenterConnection -VMHost $vmHostObject
     #>
     [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
-        [Parameter(Mandatory = $true)] $VMHost,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostNameForLogging,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostNameForLogging
+        [Parameter(Mandatory = $true)] $VMHost
     )
     $diskNamePropertyNames = @('Disk', 'disk', 'DiskName', 'diskName', 'CanonicalName', 'canonicalName', 'Device', 'device')
     $uuidPropertyNames = @('UUID', 'Uuid', 'uuid', 'vsanUuid', 'VsanUuid', 'diskUuid')
@@ -7381,26 +9353,26 @@ function Invoke-EsxcliVsanStoragePoolRemoveFallback {
             $diskIdentifier = $null
             $useUuidParam = $false
             foreach ($propertyName in $diskNamePropertyNames) {
-                if ($listItem.PSObject.Properties[$propertyName] -and -not [string]::IsNullOrWhiteSpace([string]$listItem.$propertyName)) {
+                if ($listItem.PSObject.Properties[$propertyName] -and -not [String]::IsNullOrWhiteSpace([String]$listItem.$propertyName)) {
                     $diskIdentifier = $listItem.$propertyName
                     break
                 }
             }
             if (-not $diskIdentifier) {
                 foreach ($propertyName in $uuidPropertyNames) {
-                    if ($listItem.PSObject.Properties[$propertyName] -and -not [string]::IsNullOrWhiteSpace([string]$listItem.$propertyName)) {
+                    if ($listItem.PSObject.Properties[$propertyName] -and -not [String]::IsNullOrWhiteSpace([String]$listItem.$propertyName)) {
                         $diskIdentifier = $listItem.$propertyName
                         $useUuidParam = $true
                         break
                     }
                 }
             }
-            if ([string]::IsNullOrWhiteSpace([string]$diskIdentifier)) { continue }
+            if ([String]::IsNullOrWhiteSpace([String]$diskIdentifier)) { continue }
             $removeParamName = $null
             $createArgs = $removeCmd.CreateArgs()
             if ($createArgs) {
                 foreach ($param in $createArgs.PSObject.Properties) {
-                    if ([string]::IsNullOrWhiteSpace([string]$param.Name)) { continue }
+                    if ([String]::IsNullOrWhiteSpace([String]$param.Name)) { continue }
                     if ($useUuidParam -and $param.Name -match '^uuid$|^u$') { $removeParamName = $param.Name; break }
                     if (-not $useUuidParam -and $param.Name -match '^disk$|^d$') { $removeParamName = $param.Name; break }
                 }
@@ -7428,7 +9400,170 @@ function Invoke-EsxcliVsanStoragePoolRemoveFallback {
         return $null
     }
 }
+function Invoke-VsanOsaDiskGroupRemoval {
+
+    <#
+        .SYNOPSIS
+        Removes a single vSAN OSA disk group from a host and returns whether it succeeded.
+
+        .DESCRIPTION
+        Calls Remove-VsanDiskGroup in no-data-migration mode. Logs a DEBUG message before and after
+        removal. On failure, logs a WARNING and returns $false. Returns $true on success.
+
+        .PARAMETER DiskGroup
+        The vSAN OSA disk group object to remove.
+
+        .PARAMETER HostName
+        The host name string (used in log messages).
+
+        .EXAMPLE
+        if (-not (Invoke-VsanOsaDiskGroupRemoval -DiskGroup $diskGroup -HostName $hostName)) { $removeFailCount++ }
+
+        .OUTPUTS
+        Bool: $true if removal succeeded, $false if it failed.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $DiskGroup,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName
+    )
+
+    try {
+        Write-LogMessage -Type DEBUG -Message "Removing vSAN OSA disk group from host `"$HostName`"."
+        Remove-VsanDiskGroup -VsanDiskGroup $DiskGroup -DataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
+        Write-LogMessage -Type DEBUG -Message "Removed vSAN OSA disk group from host `"$HostName`"."
+        return $true
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Failed to remove vSAN OSA disk group on host `"$HostName`": $($_.Exception.Message)"
+        return $false
+    }
+}
+function Invoke-VsanEsaStoragePoolDiskRemoval {
+
+    <#
+        .SYNOPSIS
+        Removes a single vSAN ESA storage pool disk from a host, with null-key and retry handling.
+
+        .DESCRIPTION
+        Attempts to remove one vSAN ESA storage pool disk from the host. Handles the null-key corner case
+        (disk object with a missing Key property) by first attempting removal as-is, then re-querying by
+        CanonicalName to obtain a key-bearing object. For normal disks, retries once on retryable vSAN
+        errors (e.g. "Failed to delete storage pool disk", "General vSAN error").
+
+        Returns 1 if the disk was removed, or 0 if it was skipped or removal failed.
+
+        .PARAMETER Disk
+        The vSAN storage pool disk object to remove.
+
+        .PARAMETER HostName
+        The host name string (used in log messages).
+
+        .PARAMETER MaxRemoveAttempts
+        Number of removal attempts for retryable errors. Default is 2.
+
+        .PARAMETER RemoveRetryDelaySeconds
+        Seconds to wait between removal retries. Default is 15.
+
+        .PARAMETER Server
+        vCenter server name. Default is $Script:vCenterName.
+
+        .PARAMETER VMHost
+        The VMHost object (used to re-query by canonical name when the disk Key is null).
+
+        .EXAMPLE
+        $removedCount = Invoke-VsanEsaStoragePoolDiskRemoval -Disk $disk -HostName $hostName -VMHost $vmHost -Server $Script:vCenterName
+
+        .OUTPUTS
+        Int: 1 if the disk was removed, 0 if skipped or failed.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Int])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $Disk,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HostName,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$MaxRemoveAttempts = 2,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$RemoveRetryDelaySeconds = 15,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server = $Script:vCenterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $VMHost
+    )
+
+    $diskId = $null
+    if ($Disk.PSObject.Properties['Id']) { $diskId = $Disk.PSObject.Properties['Id'].Value }
+    if ($null -eq $diskId -or [String]::IsNullOrWhiteSpace([String]$diskId)) {
+        Write-LogMessage -Type DEBUG -Message "Skipping vSAN ESA storage pool disk with null or missing Id on host `"$HostName`" (avoids Remove-VsanStoragePoolDisk 'key' error)."
+        return 0
+    }
+    $diskKey = $null
+    if ($Disk.PSObject.Properties['Key']) { $diskKey = $Disk.PSObject.Properties['Key'].Value }
+    $keyIsNull = ($null -eq $diskKey -or [String]::IsNullOrWhiteSpace([String]$diskKey))
+    if ($keyIsNull) {
+        $removedViaNullKeyAttempt = $false
+        try {
+            $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $Disk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
+            $removedViaNullKeyAttempt = $true
+            Write-LogMessage -Type DEBUG -Message "Removed vSAN ESA storage pool disk (object with null Key accepted) from host `"$HostName`"."
+        } catch {
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -match "Parameter 'key'|Value cannot be null.*key") {
+                $canonicalName = Get-CanonicalNameFromVsanStoragePoolDisk -VsanStoragePoolDisk $Disk
+                if ($canonicalName) {
+                    $refetchedDisks = @(Get-VsanStoragePoolDisk -VMHost $VMHost -DiskCanonicalName $canonicalName -Server $Server -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ })
+                    foreach ($refetchedDisk in $refetchedDisks) {
+                        $refetchedKey = $null
+                        if ($refetchedDisk.PSObject.Properties['Key']) { $refetchedKey = $refetchedDisk.PSObject.Properties['Key'].Value }
+                        if ($null -ne $refetchedKey -and -not [String]::IsNullOrWhiteSpace([String]$refetchedKey)) {
+                            try {
+                                $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $refetchedDisk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
+                                Write-LogMessage -Type DEBUG -Message "Removed vSAN ESA storage pool disk (re-queried by canonical name) from host `"$HostName`"."
+                                $removedViaNullKeyAttempt = $true
+                            } catch {
+                                Write-LogMessage -Type DEBUG -Message "Remove-VsanStoragePoolDisk after re-query by canonical name failed: $($_.Exception.Message)."
+                            }
+                            break
+                        }
+                    }
+                }
+                if (-not $removedViaNullKeyAttempt) {
+                    $diskPropertyNames = @($Disk.PSObject.Properties | Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
+                    Write-LogMessage -Type DEBUG -Message "Skipping vSAN ESA storage pool disk with null Key and no CanonicalName on host `"$HostName`". Disk object properties: $($diskPropertyNames -join ', '). Remove manually in vCenter if needed."
+                }
+            } else {
+                Write-LogMessage -Type WARNING -Message "Remove-VsanStoragePoolDisk failed for disk with null Key on host `"$HostName`": $errorMessage"
+            }
+        }
+        return [Int]$removedViaNullKeyAttempt
+    }
+    for ($attempt = 1; $attempt -le $MaxRemoveAttempts; $attempt++) {
+        try {
+            $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $Disk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
+            Write-LogMessage -Type DEBUG -Message "Removed one vSAN ESA storage pool disk from host `"$HostName`"."
+            return 1
+        } catch {
+            $errorMessage = $_.Exception.Message
+            if ($errorMessage -match "Parameter 'key'|Value cannot be null.*key") {
+                Write-LogMessage -Type WARNING -Message "Skipping vSAN ESA storage pool disk on host `"$HostName`" (cmdlet reported null key). Remove manually in vCenter if needed."
+                return 0
+            }
+            $isRetryableVsanError = ($errorMessage -match "Failed to delete storage pool disk|General vSAN error")
+            if ($attempt -lt $MaxRemoveAttempts -and $isRetryableVsanError) {
+                Write-LogMessage -Type DEBUG -Message "Remove-VsanStoragePoolDisk failed (attempt $attempt of $MaxRemoveAttempts); retrying in $RemoveRetryDelaySeconds seconds. Error: $errorMessage"
+                Start-Sleep -Seconds $RemoveRetryDelaySeconds
+            } else {
+                Write-LogMessage -Type WARNING -Message "Failed to remove one vSAN ESA storage pool disk from host `"$HostName`": $errorMessage"
+                if ($isRetryableVsanError) {
+                    Write-LogMessage -Type WARNING -Message "If the cluster is still in use or rebalancing, remove the disk manually via vCenter (put host in maintenance mode first if needed) or retry rollback when vSAN is idle."
+                }
+                return 0
+            }
+        }
+    }
+    return 0
+}
 function Remove-VsanDiskClaimsFromHost {
+
     <#
         .SYNOPSIS
         Removes vSAN disk pools and their claimed disks (ESA storage pool or OSA disk groups) from a single host. Best-effort; logs warnings.
@@ -7453,6 +9588,9 @@ function Remove-VsanDiskClaimsFromHost {
 
         .NOTES
         Caller must run disk removal before vsan cluster leave (Broadcom KB 326861). Removing the disk from the storage pool (Remove-VsanStoragePoolDisk) is what unclaims it (KB 394820).         ESA and OSA: removal uses no-data-migration mode. ESA: re-queries each round (up to 5). CanonicalName from disk, ExtensionData.disk, or property name containing Canonical. When PowerCLI cannot remove (null Key, no CanonicalName), esxcli vsan storagepool list/remove fallback. DEBUG logs disk property names when skipping; verifies unclaim (0 = all unclaimed).
+    
+        .EXAMPLE
+        Remove-VsanDiskClaimsFromHost -StoragePolicyType "storage-policy" -VMHost $vmHostObject
     #>
     [CmdletBinding()]
     Param (
@@ -7491,84 +9629,9 @@ function Remove-VsanDiskClaimsFromHost {
                 }
                 $removedThisRound = 0
                 foreach ($disk in $validDisks) {
-                    $diskId = $null
-                    if ($disk.PSObject.Properties['Id']) { $diskId = $disk.PSObject.Properties['Id'].Value }
-                    if ($null -eq $diskId -or [string]::IsNullOrWhiteSpace([string]$diskId)) {
-                        Write-LogMessage -Type DEBUG -Message "Skipping vSAN ESA storage pool disk with null or missing Id on host `"$hostName`" (avoids Remove-VsanStoragePoolDisk 'key' error)."
-                        continue
-                    }
-                    $diskKey = $null
-                    if ($disk.PSObject.Properties['Key']) { $diskKey = $disk.PSObject.Properties['Key'].Value }
-                    $keyIsNull = ($null -eq $diskKey -or [string]::IsNullOrWhiteSpace([string]$diskKey))
-                    if ($keyIsNull) {
-                        $removedViaNullKeyAttempt = $false
-                        try {
-                            $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $disk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
-                            $removedThisRound++
-                            $totalRemoved++
-                            $removedViaNullKeyAttempt = $true
-                            Write-LogMessage -Type DEBUG -Message "Removed vSAN ESA storage pool disk (object with null Key accepted) from host `"$hostName`"."
-                        } catch {
-                            $errorMessage = $_.Exception.Message
-                            $isKeyError = ($errorMessage -match "Parameter 'key'|Value cannot be null.*key")
-                            if ($isKeyError) {
-                                $canonicalName = Get-CanonicalNameFromVsanStoragePoolDisk -VsanStoragePoolDisk $disk
-                                if ($canonicalName) {
-                                    $refetchedDisks = @(Get-VsanStoragePoolDisk -VMHost $VMHost -DiskCanonicalName $canonicalName -Server $Server -ErrorAction SilentlyContinue | Where-Object { $null -ne $_ })
-                                    foreach ($refetchedDisk in $refetchedDisks) {
-                                        $refetchedKey = $null
-                                        if ($refetchedDisk.PSObject.Properties['Key']) { $refetchedKey = $refetchedDisk.PSObject.Properties['Key'].Value }
-                                        if ($null -ne $refetchedKey -and -not [string]::IsNullOrWhiteSpace([string]$refetchedKey)) {
-                                            try {
-                                                $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $refetchedDisk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
-                                                Write-LogMessage -Type DEBUG -Message "Removed vSAN ESA storage pool disk (re-queried by canonical name) from host `"$hostName`"."
-                                                $removedThisRound++
-                                                $totalRemoved++
-                                                $removedViaNullKeyAttempt = $true
-                                            } catch {
-                                                Write-LogMessage -Type DEBUG -Message "Remove-VsanStoragePoolDisk after re-query by canonical name failed: $($_.Exception.Message)."
-                                            }
-                                            break
-                                        }
-                                    }
-                                }
-                                if (-not $removedViaNullKeyAttempt) {
-                                    $diskPropertyNames = @($disk.PSObject.Properties | Where-Object { $_.Name } | Select-Object -ExpandProperty Name)
-                                    Write-LogMessage -Type DEBUG -Message "Skipping vSAN ESA storage pool disk with null Key and no CanonicalName on host `"$hostName`". Disk object properties: $($diskPropertyNames -join ', '). Remove manually in vCenter if needed."
-                                }
-                            } else {
-                                Write-LogMessage -Type WARNING -Message "Remove-VsanStoragePoolDisk failed for disk with null Key on host `"$hostName`": $errorMessage"
-                            }
-                        }
-                        continue
-                    }
-                    for ($attempt = 1; $attempt -le $maxRemoveAttempts; $attempt++) {
-                        try {
-                            $null = Remove-VsanStoragePoolDisk -VsanStoragePoolDisk $disk -VsanDataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
-                            Write-LogMessage -Type DEBUG -Message "Removed one vSAN ESA storage pool disk from host `"$hostName`"."
-                            $removedThisRound++
-                            $totalRemoved++
-                            break
-                        } catch {
-                            $errorMessage = $_.Exception.Message
-                            $isKeyNullError = ($errorMessage -match "Parameter 'key'|Value cannot be null.*key")
-                            if ($isKeyNullError) {
-                                Write-LogMessage -Type WARNING -Message "Skipping vSAN ESA storage pool disk on host `"$hostName`" (cmdlet reported null key). Remove manually in vCenter if needed."
-                                break
-                            }
-                            $isRetryableVsanError = ($errorMessage -match "Failed to delete storage pool disk|General vSAN error")
-                            if ($attempt -lt $maxRemoveAttempts -and $isRetryableVsanError) {
-                                Write-LogMessage -Type DEBUG -Message "Remove-VsanStoragePoolDisk failed (attempt $attempt of $maxRemoveAttempts); retrying in $RemoveRetryDelaySeconds seconds. Error: $errorMessage"
-                                Start-Sleep -Seconds $RemoveRetryDelaySeconds
-                            } else {
-                                Write-LogMessage -Type WARNING -Message "Failed to remove one vSAN ESA storage pool disk from host `"$hostName`": $errorMessage"
-                                if ($isRetryableVsanError) {
-                                    Write-LogMessage -Type WARNING -Message "If the cluster is still in use or rebalancing, remove the disk manually via vCenter (put host in maintenance mode first if needed) or retry rollback when vSAN is idle."
-                                }
-                                break
-                            }
-                        }
-                    }
+                    $removedCount = Invoke-VsanEsaStoragePoolDiskRemoval -Disk $disk -HostName $hostName -MaxRemoveAttempts $maxRemoveAttempts -RemoveRetryDelaySeconds $RemoveRetryDelaySeconds -Server $Server -VMHost $VMHost
+                    $removedThisRound += $removedCount
+                    $totalRemoved += $removedCount
                 }
                 if ($removedThisRound -eq 0) { break }
                 Start-Sleep -Seconds $DiskRemovalRoundDelaySeconds
@@ -7601,14 +9664,7 @@ function Remove-VsanDiskClaimsFromHost {
             Write-LogMessage -Type DEBUG -Message "Removing $diskGroupCount vSAN OSA disk group(s) from host `"$hostName`"."
             $removeFailCount = 0
             foreach ($diskGroup in @($diskGroups)) {
-                try {
-                    Write-LogMessage -Type DEBUG -Message "Removing vSAN OSA disk group from host `"$hostName`"."
-                    Remove-VsanDiskGroup -VsanDiskGroup $diskGroup -DataMigrationMode NoDataMigration -Confirm:$false -ErrorAction Stop
-                    Write-LogMessage -Type DEBUG -Message "Removed vSAN OSA disk group from host `"$hostName`"."
-                } catch {
-                    $removeFailCount++
-                    Write-LogMessage -Type WARNING -Message "Failed to remove vSAN OSA disk group on host `"$hostName`": $($_.Exception.Message)"
-                }
+                if (-not (Invoke-VsanOsaDiskGroupRemoval -DiskGroup $diskGroup -HostName $hostName)) { $removeFailCount++ }
             }
             if ($removeFailCount -eq 0) {
                 Write-LogMessage -Type DEBUG -Message "Completed vSAN OSA disk group removal from host `"$hostName`" ($diskGroupCount group(s))."
@@ -7633,11 +9689,20 @@ function Remove-VmfsDatastoreForCluster {
         If the datastore does not exist, logs at DEBUG and returns. Failures during removal are logged as warnings and not rethrown.
         Call this after supervisor deactivation and VDS removal when cleaning up a VMFS-based edge cluster.
 
+        When the datastore reports "in use" (typically a brief window after VDS removal while the host
+        reconfiguration settles), the removal is retried up to MaxRetries times before giving up.
+
         .PARAMETER ClusterName
         Name of the cluster (for logging context). Not used for datastore lookup.
 
         .PARAMETER DatastoreName
         Name of the VMFS datastore to remove (e.g. from Get-DatastoreNameFromPrefix).
+
+        .PARAMETER MaxRetries
+        Number of additional attempts to make when the datastore reports "in use". Defaults to 3.
+
+        .PARAMETER RetryDelaySeconds
+        Seconds to wait between retry attempts. Defaults to 15.
 
         .PARAMETER Server
         vCenter server name or connection. Defaults to $Script:vCenterName when not specified.
@@ -7653,6 +9718,8 @@ function Remove-VmfsDatastoreForCluster {
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 10)] [Int]$MaxRetries = 3,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$RetryDelaySeconds = 15,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Server
     )
 
@@ -7686,13 +9753,31 @@ function Remove-VmfsDatastoreForCluster {
         return
     }
 
-    try {
-        Write-LogMessage -Type INFO -NoNewline -Message "Removing VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`"... "
-        Remove-Datastore -Datastore $datastore -VMHost $vmhost -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
-        Write-LogMessage -Type INFO -CompletePending -Message "Success"
-    } catch {
-        Write-LogMessage -Type WARNING -CompletePending -Message " Failed."
-        Write-LogMessage -Type WARNING -Message "Could not remove VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`": $($_.Exception.Message). Remove the datastore manually in vCenter if desired."
+    $attempt = 0
+    while ($attempt -le $MaxRetries) {
+        try {
+            Write-LogMessage -Type INFO -NoNewline -Message "Removing VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`"... "
+            Remove-Datastore -Datastore $datastore -VMHost $vmhost -Confirm:$false -WarningAction SilentlyContinue -ErrorAction Stop
+            Write-LogMessage -Type INFO -CompletePending -Message "Done"
+            return
+        } catch {
+            $errMsg = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { $_.Exception.Message }
+            # Strip the PowerCLI warning prefix (e.g. "5/28/2026 7:32:21 AM       Remove-Datastore                ") that
+            # PowerCLI embeds in the exception message when a non-terminating error is promoted by -ErrorAction Stop.
+            $errMsg = ($errMsg -replace '^\d{1,2}/\d{1,2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}\s+[AP]M\s+\S+\s+', '').Trim()
+            # "in use" is a transient condition that occurs briefly after VDS removal while the host
+            # reconfiguration task settles. Retry with a delay rather than failing immediately.
+            $isInUse = $errMsg -match "in use"
+            if ($isInUse -and $attempt -lt $MaxRetries) {
+                Write-LogMessage -Type INFO -CompletePending -Message "In use (attempt $($attempt + 1)/$($MaxRetries + 1)); retrying in $RetryDelaySeconds s..."
+                Start-Sleep -Seconds $RetryDelaySeconds
+                $attempt++
+            } else {
+                Write-LogMessage -Type INFO -CompletePending -Message "Failed."
+                Write-LogMessage -Type WARNING -Message "Could not remove VMFS datastore `"$DatastoreName`" for cluster `"$ClusterName`": $errMsg. Remove the datastore manually in vCenter if desired."
+                return
+            }
+        }
     }
 }
 
@@ -7704,18 +9789,22 @@ function Invoke-VsanClusterLeaveOnHostWithRetry {
         Runs esxcli vsan cluster leave on a single host with retries. Used by Invoke-VsanDeploymentRollback.
         .OUTPUTS
         $true if leave succeeded or host was not in a vSAN cluster; $false if leave failed after retries or command not available.
+    
+        .EXAMPLE
+        Invoke-VsanClusterLeaveOnHostWithRetry -Server $vcenterConnection -VMHost $vmHostObject
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
-        [Parameter(Mandatory = $true)] $VMHost,
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
+        [Parameter(Mandatory = $false)] [String]$LogContext = "",
         [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$MaxRetries = 3,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$RetryDelaySeconds = 15,
-        [Parameter(Mandatory = $false)] [String]$LogContext = ""
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Server,
+        [Parameter(Mandatory = $true)] $VMHost
     )
     $hostNameForLogging = $VMHost.Name
-    $contextSuffix = if ([string]::IsNullOrWhiteSpace($LogContext)) { "" } else { " ($LogContext)" }
+    $contextSuffix = if ([String]::IsNullOrWhiteSpace($LogContext)) { "" } else { " ($LogContext)" }
     for ($attempt = 1; $attempt -le $MaxRetries; $attempt++) {
         try {
             $esxcli = Get-EsxCli -VMHost $VMHost -V2 -Server $Server -ErrorAction Stop
@@ -7744,7 +9833,223 @@ function Invoke-VsanClusterLeaveOnHostWithRetry {
     }
     return $false
 }
+function Invoke-VsanOrphanedHostCleanup {
+
+    <#
+        .SYNOPSIS
+        Cleans up vSAN disk claims and runs vSAN cluster leave on orphaned config hosts when the target cluster is no longer in vCenter.
+
+        .DESCRIPTION
+        Called by Invoke-VsanDeploymentRollback when the target cluster object is not found.
+        Resolves each host from EsxHostNames, removes disk claims (or disk groups for OSA) per
+        Broadcom KB 326861, runs esxcli vsan cluster leave, and removes the storage tag/category
+        when provided. The witness host is never modified. Hosts not found in vCenter are skipped
+        with a DEBUG log.
+
+        .PARAMETER ClusterName
+        Cluster name used for log messages only (the cluster is not present).
+
+        .PARAMETER EsxHostNames
+        Array of ESX host names from the deployment configuration to resolve and clean.
+
+        .PARAMETER MaxVsanLeaveRetries
+        Maximum number of retry attempts for esxcli vsan cluster leave per host.
+
+        .PARAMETER StoragePolicyTagCatalog
+        Tag category containing the storage tag. Required when StoragePolicyTagName is provided.
+
+        .PARAMETER StoragePolicyTagName
+        Name of the storage tag to delete during cleanup.
+
+        .PARAMETER StoragePolicyType
+        vSAN type: vSAN-ESA or vSAN-OSA.
+
+        .PARAMETER VsanLeaveRetryDelaySeconds
+        Seconds to wait between retry attempts for esxcli vsan cluster leave.
+
+        .PARAMETER WitnessHostName
+        Witness host name for logging only; cleanup never modifies the witness.
+
+        .EXAMPLE
+        Invoke-VsanOrphanedHostCleanup -ClusterName "cl0" -EsxHostNames @("esx1.lab") -StoragePolicyType "vSAN-OSA" -MaxVsanLeaveRetries 3 -VsanLeaveRetryDelaySeconds 15
+
+        .NOTES
+        Private helper for Invoke-VsanDeploymentRollback. Optional string parameters
+        ($StoragePolicyTagCatalog, $StoragePolicyTagName, $WitnessHostName) intentionally omit
+        [ValidateNotNullOrEmpty()] because the parent forwards them as $null when the caller
+        did not supply them; each is guarded by an explicit null check before use.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String[]]$EsxHostNames,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$MaxVsanLeaveRetries = 3,
+        [Parameter(Mandatory = $false)] [String]$StoragePolicyTagCatalog,
+        [Parameter(Mandatory = $false)] [String]$StoragePolicyTagName,
+        [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$VsanLeaveRetryDelaySeconds = 15,
+        [Parameter(Mandatory = $false)] [String]$WitnessHostName
+    )
+
+    $hostsToClean = [System.Collections.Generic.List[object]]::new()
+    if ($EsxHostNames -and $EsxHostNames.Count -gt 0) {
+        foreach ($hostNameInConfig in $EsxHostNames) {
+            $resolvedHost = Get-VMHost -Name $hostNameInConfig -Server $Script:vCenterName -ErrorAction SilentlyContinue
+            if ($resolvedHost) { $hostsToClean.Add($resolvedHost) } else { Write-LogMessage -Type DEBUG -Message "Orphaned host `"$hostNameInConfig`" not found in vCenter; skipping." }
+        }
+    }
+    $isVsanOrphaned = ($StoragePolicyType -eq "vSAN-ESA" -or $StoragePolicyType -eq "vSAN-OSA") -and $hostsToClean.Count -gt 0
+    if ($hostsToClean.Count -gt 0) {
+        if ($isVsanOrphaned) {
+            Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found; cleaning orphaned disk pools and their claimed disks from $($hostsToClean.Count) config host(s) (witness not modified)."
+        } else {
+            Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found; running cleanup on $($hostsToClean.Count) config host(s)."
+        }
+    }
+    # Per Broadcom KB 326861: remove disks (or disk groups) first, then vsan cluster leave. Same for ESA and OSA.
+    if ($hostsToClean.Count -gt 0 -and $StoragePolicyType -eq "vSAN-ESA") {
+        Write-LogMessage -Type INFO -Message "vSAN ESA orphaned cleanup: removing storage pool disks from $($hostsToClean.Count) host(s), then vSAN cluster leave."
+    }
+    if ($hostsToClean.Count -gt 0 -and $StoragePolicyType -eq "vSAN-OSA") {
+        Write-LogMessage -Type INFO -Message "Removing vSAN disk claims from $($hostsToClean.Count) orphaned host(s) (OSA disk groups), then vSAN cluster leave."
+    }
+    if ($WitnessHostName -and $hostsToClean.Count -gt 0) {
+        Write-LogMessage -Type DEBUG -Message "Witness host `"$WitnessHostName`" is shared by multiple clusters; cleanup never modifies witness storage pool or disk claims."
+    }
+    foreach ($vmHost in $hostsToClean) {
+        Remove-VsanDiskClaimsFromHost -VMHost $vmHost -StoragePolicyType $StoragePolicyType -Server $Script:vCenterName
+    }
+    if ($hostsToClean.Count -gt 0 -and ($StoragePolicyType -eq "vSAN-OSA" -or $StoragePolicyType -eq "vSAN-ESA")) {
+        Write-LogMessage -Type INFO -Message "vSAN disk removal completed for $($hostsToClean.Count) host(s)."
+    }
+    foreach ($vmHost in $hostsToClean) {
+        $null = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $vmHost -Server $Script:vCenterName -MaxRetries $MaxVsanLeaveRetries -RetryDelaySeconds $VsanLeaveRetryDelaySeconds -LogContext "orphaned cleanup"
+    }
+    if ($StoragePolicyTagName -and $StoragePolicyTagCatalog) {
+        Remove-StorageTag -TagName $StoragePolicyTagName -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
+        Remove-TagCategoryIfEmpty -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
+    }
+    if ($hostsToClean.Count -gt 0) {
+        Write-LogMessage -Type INFO -Message "vSAN deployment rollback completed for cluster `"$ClusterName`"."
+    }
+}
+function Invoke-VsanDataHostDiskCleanup {
+
+    <#
+        .SYNOPSIS
+        Removes vSAN disk claims, runs vSAN cluster leave, and removes the storage tag for data hosts in an existing cluster.
+
+        .DESCRIPTION
+        Called by Invoke-VsanDeploymentRollback when the target cluster exists. Determines the hosts
+        to clean from the live cluster object (preferred) or from EsxHostNames as fallback. Removes
+        disk claims per Broadcom KB 326861 (disks first, then vSAN cluster leave), then removes the
+        storage tag and category when provided. Logs the SkipClusterRemoval warning when the caller
+        must handle VDS and cluster removal separately.
+
+        .PARAMETER ClusterHosts
+        Resolved host objects from Get-VMHost on the cluster. May be $null when HasHosts is $false.
+
+        .PARAMETER ClusterName
+        Cluster name used for log messages.
+
+        .PARAMETER EsxHostNames
+        Fallback host name list from configuration. Used when HasHosts is $false.
+
+        .PARAMETER HasHosts
+        Pre-computed flag: $true when ClusterHosts is non-empty.
+
+        .PARAMETER MaxVsanLeaveRetries
+        Maximum number of retry attempts for esxcli vsan cluster leave per host.
+
+        .PARAMETER SkipClusterRemoval
+        When set, emits the caller-responsibility warning. Indicates the caller will handle VDS and cluster removal.
+
+        .PARAMETER StoragePolicyTagCatalog
+        Tag category containing the storage tag. Required when StoragePolicyTagName is provided.
+
+        .PARAMETER StoragePolicyTagName
+        Name of the storage tag to delete during cleanup.
+
+        .PARAMETER StoragePolicyType
+        vSAN type: vSAN-ESA or vSAN-OSA.
+
+        .PARAMETER VsanLeaveRetryDelaySeconds
+        Seconds to wait between retry attempts for esxcli vsan cluster leave.
+
+        .PARAMETER WitnessHostName
+        Witness host name for logging only; cleanup never modifies the witness.
+
+        .EXAMPLE
+        Invoke-VsanDataHostDiskCleanup -ClusterHosts $clusterHosts -ClusterName "cl0" -HasHosts $true -StoragePolicyType "vSAN-OSA" -MaxVsanLeaveRetries 3 -VsanLeaveRetryDelaySeconds 15
+
+        .NOTES
+        Private helper for Invoke-VsanDeploymentRollback. Optional string parameters
+        ($StoragePolicyTagCatalog, $StoragePolicyTagName, $WitnessHostName) intentionally omit
+        [ValidateNotNullOrEmpty()] because the parent forwards them as $null when the caller
+        did not supply them; each is guarded by an explicit null check before use.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [AllowNull()] [Object[]]$ClusterHosts,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String[]]$EsxHostNames,
+        [Parameter(Mandatory = $true)] [Bool]$HasHosts,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$MaxVsanLeaveRetries = 3,
+        [Parameter(Mandatory = $false)] [Switch]$SkipClusterRemoval,
+        [Parameter(Mandatory = $false)] [String]$StoragePolicyTagCatalog,
+        [Parameter(Mandatory = $false)] [String]$StoragePolicyTagName,
+        [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
+        [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$VsanLeaveRetryDelaySeconds = 15,
+        [Parameter(Mandatory = $false)] [String]$WitnessHostName
+    )
+
+    if (-not $HasHosts) {
+        Write-LogMessage -Type DEBUG -Message "No hosts in cluster `"$ClusterName`"; will try config hosts (EsxHostNames) for disk removal and vsan leave if provided, then tag cleanup and cluster removal."
+    }
+    if ($WitnessHostName) {
+        Write-LogMessage -Type DEBUG -Message "Witness host `"$WitnessHostName`" is shared by multiple clusters; cleanup never modifies witness storage pool or disk claims."
+    }
+    $hostsForDiskRemoval = [System.Collections.Generic.List[object]]::new()
+    if ($HasHosts) {
+        foreach ($clusterHost in $ClusterHosts) { $hostsForDiskRemoval.Add($clusterHost) }
+    } elseif ($EsxHostNames -and $EsxHostNames.Count -gt 0) {
+        foreach ($hostNameInConfig in $EsxHostNames) {
+            $resolvedHost = Get-VMHost -Name $hostNameInConfig -Server $Script:vCenterName -ErrorAction SilentlyContinue
+            if ($resolvedHost) { $hostsForDiskRemoval.Add($resolvedHost) } else { Write-LogMessage -Type DEBUG -Message "Config host `"$hostNameInConfig`" not found in vCenter; skipping disk removal for this host." }
+        }
+    }
+    # Per Broadcom KB 326861: remove disks (or disk groups) first, then run vsan cluster leave. Same order for ESA and OSA.
+    if ($hostsForDiskRemoval.Count -gt 0 -and $StoragePolicyType -eq "vSAN-OSA") {
+        Write-LogMessage -Type INFO -Message "Removing vSAN disk claims from $($hostsForDiskRemoval.Count) host(s) (OSA disk groups), then vsan cluster leave."
+    }
+    if ($hostsForDiskRemoval.Count -gt 0 -and $StoragePolicyType -eq "vSAN-ESA") {
+        Write-LogMessage -Type INFO -Message "Removing vSAN ESA storage pool disk claims from $($hostsForDiskRemoval.Count) host(s), then vsan cluster leave."
+    }
+    foreach ($vmHost in $hostsForDiskRemoval) {
+        Remove-VsanDiskClaimsFromHost -VMHost $vmHost -StoragePolicyType $StoragePolicyType -Server $Script:vCenterName
+    }
+    if ($hostsForDiskRemoval.Count -gt 0 -and ($StoragePolicyType -eq "vSAN-OSA" -or $StoragePolicyType -eq "vSAN-ESA")) {
+        Write-LogMessage -Type INFO -Message "vSAN disk removal completed for $($hostsForDiskRemoval.Count) host(s)."
+    }
+    if ($hostsForDiskRemoval.Count -gt 0) {
+        foreach ($vmHost in $hostsForDiskRemoval) {
+            $null = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $vmHost -Server $Script:vCenterName -MaxRetries $MaxVsanLeaveRetries -RetryDelaySeconds $VsanLeaveRetryDelaySeconds
+        }
+        Write-LogMessage -Type INFO -Message "vSAN cluster leave completed for cluster `"$ClusterName`"."
+    }
+    if ($StoragePolicyTagName -and $StoragePolicyTagCatalog) {
+        Remove-StorageTag -TagName $StoragePolicyTagName -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
+        Remove-TagCategoryIfEmpty -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
+    }
+    Write-LogMessage -Type INFO -Message "vSAN deployment rollback completed for cluster `"$ClusterName`"."
+    if (-not $SkipClusterRemoval.IsPresent) {
+        Write-LogMessage -Type WARNING -Message "vSAN rollback only performs disk/leave/tags. Caller must remove VDS then cluster (same order as cleanup: VMkernel removal, management restore, VDS removal, cluster removal). Use -CleanUp Compute or run the full teardown sequence; do not call Invoke-VsanDeploymentRollback without -SkipClusterRemoval for full teardown."
+    }
+}
 function Invoke-VsanDeploymentRollback {
+
     <#
         .SYNOPSIS
         Best-effort rollback when vSAN (ESA or OSA) deployment fails: removes disk pools and their claimed disks, then attempts to disable vSAN on the cluster.
@@ -7793,6 +10098,8 @@ function Invoke-VsanDeploymentRollback {
 
         .NOTES
         This function only performs vSAN teardown (disk/leave/tags). It never removes the VDS or cluster. Callers must use -SkipClusterRemoval and then run the same sequence as cleanup: Remove-NonVmk0VmkernelInterfacesFromVds, Invoke-ManagementRestoreForCleanup, Invoke-VsanDeploymentRollback (with -SkipClusterRemoval), Remove-EdgeClusterDistributedSwitch for each VDS, then Remove-ClusterSafely. Disk cleanup order follows Broadcom KB 326861: remove disks or disk groups first, then vsan cluster leave. (1) Remove disks from disk groups (OSA) or storage pools (ESA) on each cluster (data) host only; the witness is shared. (2) Run esxcli vsan cluster leave on each data host. (3) Remove storage tag and category if provided.
+        Sets $Script:RollbackAttempted = $true to signal that a rollback was performed;
+        the deployment orchestrator checks this flag to determine the final run status.
     #>
 
     [CmdletBinding()]
@@ -7800,11 +10107,11 @@ function Invoke-VsanDeploymentRollback {
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
         [Parameter(Mandatory = $false)] [String[]]$EsxHostNames,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 10)] [Int]$MaxVsanLeaveRetries = 3,
-        [Parameter(Mandatory = $false)] [switch]$SkipClusterRemoval,
+        [Parameter(Mandatory = $false)] [Switch]$SkipClusterRemoval,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyTagCatalog,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$StoragePolicyTagName,
         [Parameter(Mandatory = $true)] [ValidateSet("vSAN-ESA", "vSAN-OSA")] [String]$StoragePolicyType,
-        [Parameter(Mandatory = $false)] [switch]$SuppressPrompt,
+        [Parameter(Mandatory = $false)] [Switch]$SuppressPrompt,
         [Parameter(Mandatory = $false)] [ValidateRange(1, 120)] [Int]$VsanLeaveRetryDelaySeconds = 15,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$WitnessHostName
     )
@@ -7834,106 +10141,456 @@ function Invoke-VsanDeploymentRollback {
         }
 
         if (-not $clusterObject) {
-            #Orphaned cluster cleanup (cluster not found)
-            $hostsToClean = [System.Collections.Generic.List[object]]::new()
-            if ($EsxHostNames -and $EsxHostNames.Count -gt 0) {
-                foreach ($hostNameInConfig in $EsxHostNames) {
-                    $resolvedHost = Get-VMHost -Name $hostNameInConfig -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                    if ($resolvedHost) { $hostsToClean.Add($resolvedHost) } else { Write-LogMessage -Type DEBUG -Message "Orphaned host `"$hostNameInConfig`" not found in vCenter; skipping." }
-                }
-            }
-            $isVsanOrphaned = ($StoragePolicyType -eq "vSAN-ESA" -or $StoragePolicyType -eq "vSAN-OSA") -and $hostsToClean.Count -gt 0
-            if ($hostsToClean.Count -eq 0) {
-                # No message here; caller will log "cluster not found; nothing to remove" when appropriate.
-            }
-            elseif ($isVsanOrphaned) {
-                Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found; cleaning orphaned disk pools and their claimed disks from $($hostsToClean.Count) config host(s) (witness not modified)."
-            }
-            else {
-                Write-LogMessage -Type WARNING -Message "Cluster `"$ClusterName`" not found; running cleanup on $($hostsToClean.Count) config host(s)."
-            }
-            # Per Broadcom KB 326861: remove disks (or disk groups) first, then vsan cluster leave. Same for ESA and OSA.
-            if ($hostsToClean.Count -gt 0 -and $StoragePolicyType -eq "vSAN-ESA") {
-                Write-LogMessage -Type INFO -Message "vSAN ESA orphaned cleanup: removing storage pool disks from $($hostsToClean.Count) host(s), then vSAN cluster leave."
-            }
-            if ($hostsToClean.Count -gt 0 -and $StoragePolicyType -eq "vSAN-OSA") {
-                Write-LogMessage -Type INFO -Message "Removing vSAN disk claims from $($hostsToClean.Count) orphaned host(s) (OSA disk groups), then vSAN cluster leave."
-            }
-            if ($WitnessHostName -and $hostsToClean.Count -gt 0) {
-                Write-LogMessage -Type DEBUG -Message "Witness host `"$WitnessHostName`" is shared by multiple clusters; cleanup never modifies witness storage pool or disk claims."
-            }
-            foreach ($vmHost in $hostsToClean) {
-                Remove-VsanDiskClaimsFromHost -VMHost $vmHost -StoragePolicyType $StoragePolicyType -Server $Script:vCenterName
-            }
-            if ($hostsToClean.Count -gt 0 -and ($StoragePolicyType -eq "vSAN-OSA" -or $StoragePolicyType -eq "vSAN-ESA")) {
-                Write-LogMessage -Type INFO -Message "vSAN disk removal completed for $($hostsToClean.Count) host(s)."
-            }
-            foreach ($vmHost in $hostsToClean) {
-                $null = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $vmHost -Server $Script:vCenterName -MaxRetries $MaxVsanLeaveRetries -RetryDelaySeconds $VsanLeaveRetryDelaySeconds -LogContext "orphaned cleanup"
-            }
-            if ($StoragePolicyTagName -and $StoragePolicyTagCatalog) {
-                Remove-StorageTag -TagName $StoragePolicyTagName -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
-                Remove-TagCategoryIfEmpty -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
-            }
-            if ($hostsToClean.Count -gt 0) {
-                Write-LogMessage -Type INFO -Message "vSAN deployment rollback completed for cluster `"$ClusterName`"."
-            }
+            Invoke-VsanOrphanedHostCleanup `
+                -ClusterName $ClusterName `
+                -EsxHostNames $EsxHostNames `
+                -MaxVsanLeaveRetries $MaxVsanLeaveRetries `
+                -StoragePolicyTagCatalog $StoragePolicyTagCatalog `
+                -StoragePolicyTagName $StoragePolicyTagName `
+                -StoragePolicyType $StoragePolicyType `
+                -VsanLeaveRetryDelaySeconds $VsanLeaveRetryDelaySeconds `
+                -WitnessHostName $WitnessHostName
             return
         }
 
-        #Data host disk removal and vsan leave
-        if (-not $hasHosts) {
-            Write-LogMessage -Type DEBUG -Message "No hosts in cluster `"$ClusterName`"; will try config hosts (EsxHostNames) for disk removal and vsan leave if provided, then tag cleanup and cluster removal."
-        }
-
-        if ($WitnessHostName) {
-            Write-LogMessage -Type DEBUG -Message "Witness host `"$WitnessHostName`" is shared by multiple clusters; cleanup never modifies witness storage pool or disk claims."
-        }
-
-        $hostsForDiskRemoval = [System.Collections.Generic.List[object]]::new()
-        if ($hasHosts) {
-            foreach ($h in $clusterHosts) { $hostsForDiskRemoval.Add($h) }
-        } elseif ($EsxHostNames -and $EsxHostNames.Count -gt 0) {
-            foreach ($hostNameInConfig in $EsxHostNames) {
-                $resolvedHost = Get-VMHost -Name $hostNameInConfig -Server $Script:vCenterName -ErrorAction SilentlyContinue
-                if ($resolvedHost) { $hostsForDiskRemoval.Add($resolvedHost) } else { Write-LogMessage -Type DEBUG -Message "Config host `"$hostNameInConfig`" not found in vCenter; skipping disk removal for this host." }
-            }
-        }
-
-        # Per Broadcom KB 326861: remove disks (or disk groups) first, then run vsan cluster leave. Same order for ESA and OSA.
-        if ($hostsForDiskRemoval.Count -gt 0 -and $StoragePolicyType -eq "vSAN-OSA") {
-            Write-LogMessage -Type INFO -Message "Removing vSAN disk claims from $($hostsForDiskRemoval.Count) host(s) (OSA disk groups), then vsan cluster leave."
-        }
-        if ($hostsForDiskRemoval.Count -gt 0 -and $StoragePolicyType -eq "vSAN-ESA") {
-            Write-LogMessage -Type INFO -Message "Removing vSAN ESA storage pool disk claims from $($hostsForDiskRemoval.Count) host(s), then vsan cluster leave."
-        }
-        foreach ($vmHost in $hostsForDiskRemoval) {
-            Remove-VsanDiskClaimsFromHost -VMHost $vmHost -StoragePolicyType $StoragePolicyType -Server $Script:vCenterName
-        }
-        if ($hostsForDiskRemoval.Count -gt 0 -and ($StoragePolicyType -eq "vSAN-OSA" -or $StoragePolicyType -eq "vSAN-ESA")) {
-            Write-LogMessage -Type INFO -Message "vSAN disk removal completed for $($hostsForDiskRemoval.Count) host(s)."
-        }
-        if ($hostsForDiskRemoval.Count -gt 0) {
-            foreach ($vmHost in $hostsForDiskRemoval) {
-                $null = Invoke-VsanClusterLeaveOnHostWithRetry -VMHost $vmHost -Server $Script:vCenterName -MaxRetries $MaxVsanLeaveRetries -RetryDelaySeconds $VsanLeaveRetryDelaySeconds
-            }
-            Write-LogMessage -Type INFO -Message "vSAN cluster leave completed for cluster `"$ClusterName`"."
-        }
-
-        if ($StoragePolicyTagName -and $StoragePolicyTagCatalog) {
-            Remove-StorageTag -TagName $StoragePolicyTagName -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
-            Remove-TagCategoryIfEmpty -TagCatalog $StoragePolicyTagCatalog -Server $Script:vCenterName
-        }
-
-        Write-LogMessage -Type INFO -Message "vSAN deployment rollback completed for cluster `"$ClusterName`"."
-        if (-not $SkipClusterRemoval.IsPresent) {
-            Write-LogMessage -Type WARNING -Message "vSAN rollback only performs disk/leave/tags. Caller must remove VDS then cluster (same order as cleanup: VMkernel removal, management restore, VDS removal, cluster removal). Use -CleanUp Compute or run the full teardown sequence; do not call Invoke-VsanDeploymentRollback without -SkipClusterRemoval for full teardown."
-        }
+        Invoke-VsanDataHostDiskCleanup `
+            -ClusterHosts $clusterHosts `
+            -ClusterName $ClusterName `
+            -EsxHostNames $EsxHostNames `
+            -HasHosts $hasHosts `
+            -MaxVsanLeaveRetries $MaxVsanLeaveRetries `
+            -SkipClusterRemoval:$SkipClusterRemoval.IsPresent `
+            -StoragePolicyTagCatalog $StoragePolicyTagCatalog `
+            -StoragePolicyTagName $StoragePolicyTagName `
+            -StoragePolicyType $StoragePolicyType `
+            -VsanLeaveRetryDelaySeconds $VsanLeaveRetryDelaySeconds `
+            -WitnessHostName $WitnessHostName
     } catch {
         $Script:RollbackFailed = $true
         Write-LogMessage -Type ERROR -Message "vSAN rollback encountered an error: $($_.Exception.Message). Script will exit with failure."
         throw
     }
+}
+
+#endregion
+function Find-Datastore {
+
+    <#
+        .SYNOPSIS
+        Locates a datastore on an ESX host or selects the largest available unformatted disk for VMFS creation.
+
+        .DESCRIPTION
+        The Find-Datastore function searches for a specified datastore on an ESX host and validates its configuration.
+        If the datastore is not found, the function selects the largest available unformatted disk by capacity (then
+        CanonicalName) for VMFS datastore creation. No interactive disk selection; the only deployment option for VMFS
+        is to use the largest free disk.
+
+        The function performs the following operations:
+        1. Checks if the specified datastore exists and is mounted on the ESX host
+        2. If found, validates that the datastore is VMFS formatted and reports its status
+        3. If not found, scans for available unformatted disks and selects the largest by capacity
+        4. Returns the canonical name of the selected or existing disk for subsequent datastore creation
+
+        Key features:
+        - Validates existing datastore mount status and VMFS formatting
+        - When datastore is not found, automatically selects the largest unformatted disk (no menu or prompt)
+        - Returns canonical disk name for programmatic use in datastore creation workflows
+        - Exits with error if no valid datastore or no unformatted disks are available
+
+        .PARAMETER EsxHostName
+        The hostname or IP address of the ESX host to scan. This parameter is mandatory.
+        Requires an active direct connection to the ESX host.
+
+        .PARAMETER DatastoreName
+        The name of the datastore to locate on the ESX host. This parameter is mandatory.
+        If the datastore is not found, the function selects the largest available unformatted disk.
+
+        .EXAMPLE
+        Find-Datastore -EsxHostName "esx01.example.com" -DatastoreName "datastore1"
+
+        Searches for "datastore1" on the specified ESX host.
+        If found and VMFS formatted, reports the datastore status.
+        If not found, selects the largest available unformatted disk and returns its canonical name.
+
+        .EXAMPLE
+        $diskCanonicalName = Find-Datastore -EsxHostName $EsxHost -DatastoreName $requiredDatastore
+        Set-NewDatastore -EsxHost $EsxHost -DiskCanonicalName $diskCanonicalName -DatastoreName $requiredDatastore
+
+        Uses the function within a deployment workflow to locate or select storage (largest free disk only).
+
+        .OUTPUTS
+        String. Returns the canonical name of either the largest unformatted disk (when datastore does not exist)
+        or the existing datastore's underlying disk canonical name. Throws if no valid selection or unexpected type.
+
+        .NOTES
+        - Requires an active direct connection to the ESX host
+        - VMFS deployment uses only the largest available unformatted disk; no interactive selection
+        - If datastore exists but is not VMFS formatted, the function throws an exception
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$EsxHostName
+    )
+    Write-LogMessage -Type DEBUG -Message "Entered Find-Datastore function..."
+
+    $getDatastoreParams = @{
+        esxHostName = $EsxHostName
+        datastoreName = $DatastoreName
+        silence = $true
+    }
+    $result = Get-EsxDatastoreInfo @getDatastoreParams
+
+    if (-not $result.MountedDatastoreStatus.IsMounted) {
+        Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" not found on ESX host `"$EsxHostName`"."
+        $unformattedOnlyParams = @{
+            EsxHostName = $EsxHostName
+            Silence = $true
+        }
+        $unformattedResult = Get-EsxDatastoreInfo @unformattedOnlyParams
+        $unformattedDisks = $unformattedResult.UnformattedDisks
+        if (-not $unformattedDisks -or $unformattedDisks.Count -eq 0) {
+            $err = "No unformatted disks found on ESX host `"$EsxHostName`". Cannot create VMFS datastore `"$DatastoreName`"."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        $selectedDisk = $unformattedDisks | Sort-Object -Property @{ Expression = { [Double]$_.CapacityGB }; Descending = $true }, @{ Expression = { $_.CanonicalName }; Ascending = $true } | Select-Object -First 1
+        Write-LogMessage -Type INFO -Message "Selected largest available drive for VMFS (CapacityGB=$($selectedDisk.CapacityGB), CanonicalName=$($selectedDisk.CanonicalName))."
+        return $selectedDisk.CanonicalName
+    }
+    else {
+        # Datastore found - verify it's VMFS and healthy.
+        if ($result.MountedDatastoreStatus.IsVMFS) {
+            Write-LogMessage -Type INFO -Message "Datastore `"$DatastoreName`" is already mounted on ESX host `"$EsxHostName`" and has $($result.MountedDatastoreStatus.FreeSpaceGB) GB free space."
+            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "$DatastoreName UUID is $($result.MountedDatastoreStatus.UUID)"
+            # Datastore already exists - return its canonical name from the result object.
+
+            if ($result.MountedDatastoreStatus.CanonicalName) {
+                Write-LogMessage -Type INFO -Message "Retrieved canonical name for existing datastore `"$DatastoreName`": $($result.MountedDatastoreStatus.CanonicalName)."
+                return $result.MountedDatastoreStatus.CanonicalName
+            }
+            else {
+                $err = "Could not retrieve canonical name for datastore `"$DatastoreName`""
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
+            }
+        }
+        else {
+            $err = "Datastore `"$DatastoreName`" is mounted, but in unexpected type: (Type: $($result.MountedDatastoreStatus.Type)). Cannot proceed."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+    }
+}
+function Get-SoftwareSpecComponents {
+
+    <#
+        .SYNOPSIS
+        Extracts vLCM SoftwareSpec components into a flat ordered hashtable for display.
+
+        .DESCRIPTION
+        Handles two input forms returned by different VCF PowerCLI / vCenter versions:
+        - PSObject: walks properties using a field map with IsVersion and IsCollection flags.
+        - String:   parses the serialized representation (e.g. "BaseImage: Version: 9.0.0").
+        Returns an ordered hashtable keyed by component name (AlternativeImages, AddOn, BaseImage,
+        Components, HardwareSupport, RemovedComponents, Solutions); missing fields are $null.
+
+        .PARAMETER SoftwareSpec
+        The SoftwareSpec value from a vLCM image record. May be a PSObject, string, or $null.
+
+        .OUTPUTS
+        [ordered] hashtable with one key per SoftwareSpec component field.
+
+        .NOTES
+        The field map drives both the PSObject and string-parsing paths so both stay in sync when
+        new fields are added. Internal helper for Find-VlcmImage — not intended for direct use.
+    
+        .EXAMPLE
+        $softwareSpecComponents = Get-SoftwareSpecComponents -SoftwareSpec $resourceObject
+    #>
+
+    [CmdletBinding()]
+    [OutputType([System.Collections.Specialized.OrderedDictionary])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [PSObject]$SoftwareSpec
+    )
+
+    $fieldMap = @(
+        @{ Key = "AlternativeImages"; Label = "AlternativeImages"; IsCollection = $true },
+        @{ Key = "AddOn";             Label = "AddOn" },
+        @{ Key = "BaseImage";         Label = "BaseImage"; IsVersion = $true },
+        @{ Key = "Components";        Label = "Components"; IsCollection = $true },
+        @{ Key = "HardwareSupport";   Label = "HardwareSupport" },
+        @{ Key = "RemovedComponents"; Label = "RemovedComponents"; IsCollection = $true },
+        @{ Key = "Solutions";         Label = "Solutions"; IsCollection = $true }
+    )
+
+    $results = [ordered]@{ }
+    foreach ($field in $fieldMap) {
+        $results[$field.Key] = $null
+    }
+
+    if ($null -eq $SoftwareSpec) {
+        return $results
+    }
+
+    if ($SoftwareSpec -isnot [string]) {
+        foreach ($field in $fieldMap) {
+            $val = $SoftwareSpec.$($field.Key)
+            if ($null -ne $val) {
+                if ($field.IsVersion -and $null -ne $val.Version) {
+                    $results[$field.Key] = $val.Version
+                } elseif ($field.IsCollection -and $val.Count -gt 0) {
+                    $results[$field.Key] = $val.Keys -join ", "
+                } elseif ($val -ne "") {
+                    $results[$field.Key] = $val
+                }
+            }
+        }
+    } else {
+        # vCenter API returned a serialized string instead of a typed object; parse it.
+        $softwareSpecString = $SoftwareSpec.ToString()
+        foreach ($field in $fieldMap) {
+            if ($field.IsVersion) {
+                # BaseImage has special format: "BaseImage: Version: <value>".
+                if ($softwareSpecString -match "$($field.Label):\s*Version:\s*([^,]+)") {
+                    $extractedValue = $matches[1].Trim()
+                    if ($extractedValue -and $extractedValue -ne "") {
+                        $results[$field.Key] = $extractedValue
+                    }
+                }
+            } else {
+                if ($softwareSpecString -match "$($field.Label):\s*([^,]+)") {
+                    $extractedValue = $matches[1].Trim()
+                    if ($extractedValue -and $extractedValue -ne "") {
+                        $results[$field.Key] = $extractedValue
+                    }
+                }
+            }
+        }
+    }
+
+    return $results
+}
+function Build-VlcmImageSelectionData {
+
+    <#
+        .SYNOPSIS
+        Builds the numbered display list and column roster for Find-VlcmImage's interactive table.
+
+        .DESCRIPTION
+        Two-pass processing of a vLCM image record array:
+        - Pass 1: scans every record to discover which optional SoftwareSpec columns are populated.
+        - Pass 2: constructs a PSCustomObject per record containing the ID counter, DisplayName,
+          BaseImage version, ImageId (hidden), and any populated optional columns.
+        Returns a PSCustomObject with ColumnList (ordered for Select-Object / Format-Table) and
+        SelectionList (list of display rows).
+
+        .PARAMETER ImageRecords
+        The Records array from Invoke-EsxSettingsRepositorySoftwareList output.
+
+        .OUTPUTS
+        [PSCustomObject] with ColumnList ([String[]]) and SelectionList ([List[PSCustomObject]]).
+
+        .EXAMPLE
+        $data = Build-VlcmImageSelectionData -ImageRecords $imageList.Records
+        $data.SelectionList | Select-Object $data.ColumnList | Format-Table -AutoSize | Out-Host
+
+        .NOTES
+        Internal helper for Find-VlcmImage. Not intended for direct use.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [Object[]]$ImageRecords
+    )
+
+    $optionalKeys = @('AddOn', 'Components', 'Solutions', 'HardwareSupport', 'RemovedComponents', 'AlternativeImages')
+    $availableColumns = @{}
+    foreach ($key in $optionalKeys) { $availableColumns[$key] = $false }
+
+    foreach ($record in $ImageRecords) {
+        $specComponents = Get-SoftwareSpecComponents -SoftwareSpec $record.SoftwareSpec
+        foreach ($key in $optionalKeys) {
+            if ($null -ne $specComponents[$key] -and $specComponents[$key] -ne "") {
+                $availableColumns[$key] = $true
+            }
+        }
+    }
+
+    $columnList = [System.Collections.Generic.List[string]]@('ID', 'DisplayName', 'BaseImage')
+    foreach ($key in $optionalKeys) {
+        if ($availableColumns[$key]) { $columnList.Add($key) }
+    }
+
+    $selectionList = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $index = 1
+    foreach ($record in $ImageRecords) {
+        $specComponents = Get-SoftwareSpecComponents -SoftwareSpec $record.SoftwareSpec
+        $imageHash = @{
+            ID          = $index
+            DisplayName = $record.DisplayName
+            BaseImage   = if ($specComponents.BaseImage) { $specComponents.BaseImage } else { "(not available)" }
+            ImageId     = $record.Id
+        }
+        foreach ($key in $optionalKeys) {
+            if ($availableColumns[$key]) {
+                $imageHash[$key] = if ($specComponents[$key]) { $specComponents[$key] } else { "" }
+            }
+        }
+        $selectionList.Add([PSCustomObject]$imageHash)
+        $index++
+    }
+
+    return [PSCustomObject]@{ ColumnList = $columnList; SelectionList = $selectionList }
+}
+function Invoke-VlcmImageSelectionPrompt {
+
+    <#
+        .SYNOPSIS
+        Presents the numbered vLCM image table and waits for the user to pick one.
+
+        .DESCRIPTION
+        Displays the pre-built selection list, then loops on Read-Host until a valid row number
+        is entered or the user types "c" to cancel. On valid input returns the chosen ImageId.
+        On cancel throws VcfDeploymentException.
+
+        .PARAMETER ImageSelectionList
+        The numbered list of PSCustomObjects produced by Build-VlcmImageSelectionData.
+
+        .PARAMETER ColumnList
+        Column name list for Select-Object / Format-Table, also from Build-VlcmImageSelectionData.
+
+        .OUTPUTS
+        System.String — ImageId of the chosen vLCM image.
+
+        .EXAMPLE
+        $data = Build-VlcmImageSelectionData -ImageRecords $imageList.Records
+        $imageId = Invoke-VlcmImageSelectionPrompt -ImageSelectionList $data.SelectionList -ColumnList $data.ColumnList
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$ColumnList,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$ImageSelectionList
+    )
+
+    Write-LogMessage -Type INFO -Message "Available vLCM images:"
+    # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+    Write-Host ($ImageSelectionList | Select-Object $ColumnList | Format-Table -AutoSize | Out-String).TrimEnd()
+    Write-Host ""
+
+    while ($true) {
+        Write-Host "Enter the ID of the image to select (1-$($ImageSelectionList.Count)) or `"c`" to cancel: " -NoNewline
+        $userInput = Read-Host
+
+        if ($userInput -eq 'c' -or $userInput -eq 'C') {
+            Write-LogMessage -Type WARNING -Message "User cancelled vLCM image selection."
+            $err = "vLCM image selection cancelled. Cannot proceed with deployment."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+        elseif ($userInput -match '^\d+$') {
+            $selectedId = [Int]$userInput
+            if ($selectedId -ge 1 -and $selectedId -le $ImageSelectionList.Count) {
+                $selectedImage = $ImageSelectionList | Where-Object { $_.ID -eq $selectedId }
+                Write-LogMessage -Type DEBUG -Message "Selected image: $($selectedImage.DisplayName) - ID: $($selectedImage.ImageId)"
+                return $selectedImage.ImageId
+            }
+            Write-LogMessage -Type WARNING -Message "Invalid selection. Please enter a number between 1 and $($ImageSelectionList.Count), or `"c`" to cancel."
+        }
+        else {
+            Write-LogMessage -Type WARNING -Message "Invalid input. Please enter a number between 1 and $($ImageSelectionList.Count), or `"c`" to cancel."
+        }
+    }
+}
+function Find-VlcmImage {
+
+    <#
+        .SYNOPSIS
+        Retrieves available vLCM images from vCenter and prompts for interactive selection.
+
+        .DESCRIPTION
+        Calls Invoke-EsxSettingsRepositorySoftwareList, displays a numbered table of images with
+        their SoftwareSpec details, and waits for the user to select one by number.
+        Entering "c" cancels by throwing an exception. When VlcmImageName is provided, attempts
+        a non-interactive match by Id or DisplayName first; falls back to interactive if no match.
+
+        .PARAMETER VlcmImageName
+        Optional. Attempts non-interactive match by Id or DisplayName; falls back to interactive
+        selection with a warning when no match is found.
+
+        .EXAMPLE
+        $imageId = Find-VlcmImage
+        $imageId = Find-VlcmImage -VlcmImageName $inputData.common.vlcmImageName
+
+        .OUTPUTS
+        System.String — the Id of the selected vLCM image.
+
+        .NOTES
+        Requires an active vCenter connection. Interactive path cannot be automated.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $false)] [AllowNull()] [String]$VlcmImageName
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Entered Find-VlcmImage function..."
+
+    if ([String]::IsNullOrWhiteSpace($VlcmImageName)) {
+        Write-LogMessage -Type INFO -PrependNewLine -Message "Retrieving list of vLCM images from vCenter's Image Catalog..."
+    }
+    try {
+        $imageList = Invoke-EsxSettingsRepositorySoftwareList -ErrorAction Stop
+    } catch [VcfDeploymentException] {
+        throw
+    } catch {
+        $err = "Failed to retrieve vLCM images: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    $imageCount = if ($null -ne $imageList -and $null -ne $imageList.Records) { $imageList.Records.Count } else { 0 }
+    if ($imageCount -eq 0) {
+        $err = "No vLCM images found in the repository. Cannot proceed with deployment."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Found $imageCount vLCM image(s) available."
+
+    # Non-interactive path: match by Id or DisplayName and return without prompting.
+    if (-not [String]::IsNullOrWhiteSpace($VlcmImageName)) {
+        $matchedRecord = $imageList.Records | Where-Object { $_.Id -eq $VlcmImageName -or $_.DisplayName -eq $VlcmImageName } | Select-Object -First 1
+        if ($matchedRecord) {
+            $specComponents = Get-SoftwareSpecComponents -SoftwareSpec $matchedRecord.SoftwareSpec
+            $oneRow = [PSCustomObject]@{
+                DisplayName = $matchedRecord.DisplayName
+                BaseImage   = if ($specComponents.BaseImage) { $specComponents.BaseImage } else { "(not available)" }
+            }
+            Write-LogMessage -Type INFO -Message "Using vLCM image from configuration: `"$VlcmImageName`"."
+            # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+            $oneRow | Format-Table -AutoSize | Out-String | ForEach-Object { $_.TrimEnd() } | Write-Host
+            Write-LogMessage -Type DEBUG -Message "Find-VlcmImage: matched image Id=$($matchedRecord.Id), DisplayName=$($matchedRecord.DisplayName)."
+            return $matchedRecord.Id
+        }
+        Write-LogMessage -Type WARNING -Message "Specified vLcmImageName `"$VlcmImageName`" was not found in vCenter image library. Showing available images for selection."
+    }
+
+    $selectionData = Build-VlcmImageSelectionData -ImageRecords $imageList.Records
+    return Invoke-VlcmImageSelectionPrompt -ImageSelectionList $selectionData.SelectionList -ColumnList $selectionData.ColumnList
 }
 
 #endregion

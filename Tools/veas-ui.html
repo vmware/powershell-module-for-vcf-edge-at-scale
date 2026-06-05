@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<!-- VEAS-UI-VERSION: 1.0.3.1022 -->
+<!-- VEAS-UI-VERSION: 1.0.3.1023 -->
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>VCF Edge at Scale JSON Generator</title>
@@ -3828,7 +3828,7 @@ function _tRenderPillColumn(region, y, pills, C) {
     if (pill.mtu && pill.mtu !== '—') {
       rx2 -= 36;
       s += `<text x="${rx2 + 18}" y="${piY + 14}" text-anchor="middle"
-        font-family="system-ui,sans-serif" font-size="7" fill="${C.text}">MTU ${pill.mtu}</text>`;
+        font-family="system-ui,sans-serif" font-size="7" fill="${C.text}">MTU ${_svgEsc(String(pill.mtu))}</text>`;
     }
     piY += thisPH + pGap;
   });
@@ -4650,9 +4650,9 @@ function _buildSummaryTableHtml(infra, sup) {
     </div>` : '';
 
   const dnsNtp = [
-    supCommon.dnsServers          && `DNS: ${supCommon.dnsServers.join(', ')}`,
-    supCommon.networkNtpServers   && `NTP: ${supCommon.networkNtpServers.join(', ')}`,
-    supCommon.networkSearchDomains && `Search: ${supCommon.networkSearchDomains.join(', ')}`,
+    supCommon.dnsServers           && `DNS: ${supCommon.dnsServers.map(esc).join(', ')}`,
+    supCommon.networkNtpServers    && `NTP: ${supCommon.networkNtpServers.map(esc).join(', ')}`,
+    supCommon.networkSearchDomains && `Search: ${supCommon.networkSearchDomains.map(esc).join(', ')}`,
   ].filter(Boolean);
 
   return `
@@ -4682,7 +4682,7 @@ function _buildSummaryTableHtml(infra, sup) {
           <div style="font-size:12px;color:var(--text-muted);">
             FLB: <strong style="color:var(--text);">${esc(supCommon.flbSize || '?')} / ${esc(supCommon.flbAvailability || '?')}</strong>
           </div>
-          ${dnsNtp.map(s => `<div style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text);">${esc(s)}</strong></div>`).join('')}
+          ${dnsNtp.map(s => `<div style="font-size:12px;color:var(--text-muted);"><strong style="color:var(--text);">${s}</strong></div>`).join('')}
         </div>
         ${svcHtml}
       </div>

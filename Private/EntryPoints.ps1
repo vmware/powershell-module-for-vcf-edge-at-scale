@@ -42,7 +42,11 @@ function Confirm-FileOverwritePrompt {
         Full path to the file that would be overwritten.
 
         .OUTPUTS
-        [Boolean] $true to write the file; $false to keep the existing copy.
+        [Boolean] $true to write the file; $false to keep the existing copy or when the session
+        is non-interactive (error is logged before returning $false in that case).
+    
+        .EXAMPLE
+        Confirm-FileOverwritePrompt -FilePath "infrastructure.json"
     #>
 
     [CmdletBinding()]
@@ -57,7 +61,8 @@ function Confirm-FileOverwritePrompt {
     try {
         $answer = Read-Host "File `"$FilePath`" already exists. Overwrite? (y/N)"
     } catch {
-        throw "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message "Initialize requires an interactive session for overwrite prompts. $($_.Exception.Message)"
+        return $false
     }
     return $answer -match '^[yY]$'
 }
@@ -79,6 +84,9 @@ function Test-VcfEdgeAtScaleDeploymentRootInitialized {
 
         .OUTPUTS
         [Boolean]
+    
+        .EXAMPLE
+        Test-VcfEdgeAtScaleDeploymentRootInitialized -DeploymentRoot "value"
     #>
 
     [CmdletBinding()]
@@ -110,54 +118,47 @@ function Test-VcfEdgeAtScaleDeploymentRootInitialized {
     }
     return $true
 }
-function Invoke-VcfEdgeAtScaleModuleInitialize {
+function Resolve-DeploymentRootDirectory {
 
     <#
         .SYNOPSIS
-            Interactively creates the on-disk layout for VcfEdgeAtScale configuration, logs, YAML, and documentation.
+        Resolves the deployment base directory by checking the environment variable then prompting the user.
 
         .DESCRIPTION
-            Prompts for a base directory (default joins the user home directory with VCFEdgeAtScale), creates Docs,
-            Logs, and ServicesYaml when missing, and copies bundled Supervisor service YAML templates and documentation files from the
-            Templates directory (including EXAMPLE.rtf and README.rtf) with overwrite prompts (default N). Missing
-            documentation sources under Templates are skipped with a warning (initialize does not fail for those; the
-            summary block at the end lists what succeeded). Missing
-            Supervisor service YAML or infrastructure/supervisor JSON templates still fails with guidance to reinstall the
-            module or copy files from the GitHub repository. Works for a new or existing configuration directory. When -TemplatesOnly is set, only YAML and Docs files are refreshed; root
-            infrastructure.json and supervisor.json are not created or replaced. Otherwise seeds those JSON files when absent,
-            and when they already exist offers optional replacement from module templates (infrastructure.json paths under
-            ServicesYaml are updated when written from the template). Persists VcfEdgeAtScaleRootDirectory via
-            On Windows: [System.Environment]::SetEnvironmentVariable (User scope) persists it to the registry. On macOS/Linux: the line is automatically appended to $PROFILE so new sessions inherit it.
-            When VcfEdgeAtScaleRootDirectory points at an existing initialized layout, asks whether to initialize a different directory instead of re-prompting for the base path.
+        When $env:VcfEdgeAtScaleRootDirectory is set:
+          - If the path does not exist: clears the stale value and falls through to the prompt.
+          - If the path exists but is not a folder: logs a note and falls through to the prompt.
+          - If the path is a fully initialized layout: asks the operator whether to reuse it or
+            initialize a different directory.
+          - If the path exists but is not fully initialized: notes the incomplete state and prompts.
+        When the operator provides no input at the base directory prompt, DefaultBaseDirectory is used.
+        Returns $null and logs an error when the directory cannot be determined (empty input after
+        prompting, or Read-Host unavailable in a non-interactive session).
 
-        .PARAMETER TemplatesOnly
-            When set, copies only ServicesYaml and Docs templates; does not create or replace infrastructure.json or supervisor.json at the base directory.
+        .PARAMETER DefaultBaseDirectory
+        The default base directory path to offer as the default prompt value (typically
+        Join-Path $HOME $Script:DEFAULT_DEPLOY_DIR_NAME). Must be a non-empty string.
+
+        .OUTPUTS
+        [String] The operator-chosen (or defaulted) base directory path. Never null or empty.
+
+        .EXAMPLE
+        $baseDirectory = Resolve-DeploymentRootDirectory -DefaultBaseDirectory (Join-Path $HOME "VcfEdgeAtScale")
 
         .NOTES
-            Private to the module. Invoked from Start-VcfEdgeAtScale -Initialize only. Requires an interactive host for Read-Host.
-            User-visible status uses Write-Host (not Write-Output) because Start-VcfEdgeAtScale assigns this function's output to $null, which would otherwise hide success-stream output.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
     #>
 
     [CmdletBinding()]
+    [OutputType([String])]
     Param (
-        [Parameter(Mandatory = $false)] [Switch]$TemplatesOnly
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DefaultBaseDirectory
     )
 
-    $templatesPath = Get-ModuleTemplatesPath
-    $templateRestoreHint = "Reinstall the VcfEdgeAtScale module (for example Install-Module VcfEdgeAtScale -Force) or copy missing files from https://github.com/vmware/powershell-module-for-vcf-edge-at-scale (see the VcfEdgeAtScale/Templates folder in that repository)."
-    $defaultBaseDirectory = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
-
-    Write-Host ""
-    Write-Host "VcfEdgeAtScale initialize" -ForegroundColor Cyan
-    if ($TemplatesOnly) {
-        Write-Host "  Mode: templates only — refresh ServicesYaml and Docs; root JSON is not modified." -ForegroundColor Gray
-    } else {
-        Write-Host "  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace." -ForegroundColor Gray
-    }
-
     $baseDirectory = $null
-    $envRootResolved = $null
     $envRootRaw = $env:VcfEdgeAtScaleRootDirectory
+
     if (-not [String]::IsNullOrWhiteSpace($envRootRaw)) {
         $trimmedEnvRoot = $envRootRaw.Trim()
         if (-not (Test-Path -LiteralPath $trimmedEnvRoot)) {
@@ -179,8 +180,9 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
             Write-Host ""
             Write-Host "  Note: `$env:VcfEdgeAtScaleRootDirectory points at a path that exists but is not a folder:" -ForegroundColor Yellow
             Write-Host "    $trimmedEnvRoot" -ForegroundColor White
-            Write-Host "  Choose a deployment root folder below (default: $defaultBaseDirectory)." -ForegroundColor Gray
+            Write-Host "  Choose a deployment root folder below (default: $DefaultBaseDirectory)." -ForegroundColor Gray
         } else {
+            $envRootResolved = $null
             try {
                 $envRootResolved = (Resolve-Path -LiteralPath $trimmedEnvRoot -ErrorAction Stop).Path
             } catch {
@@ -195,7 +197,8 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
                 try {
                     $useDifferentDirectoryResponse = Read-Host "Initialize a different directory instead? (y/N)"
                 } catch {
-                    throw "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
+                    Write-LogMessage -Type ERROR -Message "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
+                    return $null
                 }
                 switch -Regex ($useDifferentDirectoryResponse.Trim()) {
                     "^(?i)(y|yes)$" {
@@ -209,100 +212,158 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
                 Write-Host ""
                 Write-Host "  Note: VcfEdgeAtScaleRootDirectory is set, but this folder is not a complete initialized layout:" -ForegroundColor Yellow
                 Write-Host "  $envRootResolved" -ForegroundColor Yellow
-                Write-Host "  You will be prompted for the base directory below (default: $defaultBaseDirectory)." -ForegroundColor Gray
+                Write-Host "  You will be prompted for the base directory below (default: $DefaultBaseDirectory)." -ForegroundColor Gray
             }
         }
     }
 
     if ($null -eq $baseDirectory) {
-        Write-Host ""
-        Write-Host -NoNewline "  Default base directory:" -ForegroundColor White
-        Write-Host "  $defaultBaseDirectory`n" -ForegroundColor Cyan
-        try {
-            $userBaseResponse = Read-Host "Press Enter to use the default, or type a full directory path"
-        } catch {
-            throw "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
-        }
-
-        if ([String]::IsNullOrWhiteSpace($userBaseResponse)) {
-            $baseDirectory = $defaultBaseDirectory
-        } else {
-            $baseDirectory = $userBaseResponse.Trim()
+        $baseDirectory = Read-DeploymentBaseDirectoryFromUser -DefaultBaseDirectory $DefaultBaseDirectory
+        if ($null -eq $baseDirectory) {
+            return $null
         }
     }
 
     if ([String]::IsNullOrWhiteSpace($baseDirectory)) {
-        throw "Base directory cannot be empty after input."
+        Write-LogMessage -Type ERROR -Message "Base directory cannot be empty after input."
+        return $null
     }
 
-    $baseDirectoryExistedBefore = Test-Path -LiteralPath $baseDirectory -PathType Container
-    $baseDirectoryWasCreated = $false
-    if (-not $baseDirectoryExistedBefore) {
-        try {
-            $null = New-Item -ItemType Directory -Path $baseDirectory -Force -ErrorAction Stop
-            $baseDirectoryWasCreated = $true
-        } catch {
-            throw "Failed to create base directory `"$baseDirectory`": $($_.Exception.Message)"
-        }
-    }
+    return $baseDirectory
+}
+function Read-DeploymentBaseDirectoryFromUser {
 
+    <#
+        .SYNOPSIS
+        Interactively prompts the operator for the deployment base directory path.
+
+        .DESCRIPTION
+        Displays the default path and prompts with Read-Host. Returns the default when the operator
+        presses Enter, or the trimmed user input otherwise. Returns $null when the session is
+        non-interactive and Read-Host is unavailable (error is logged before returning).
+
+        .PARAMETER DefaultBaseDirectory
+        The default base directory path shown to the operator.
+
+        .OUTPUTS
+        [String] The operator-chosen directory path, or $null when Read-Host is unavailable
+        (error already logged).
+
+        .EXAMPLE
+        $baseDirectory = Read-DeploymentBaseDirectoryFromUser -DefaultBaseDirectory (Join-Path $HOME "VcfEdgeAtScale")
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DefaultBaseDirectory
+    )
+
+    Write-Host ""
+    Write-Host -NoNewline "  Default base directory:" -ForegroundColor White
+    Write-Host "  $DefaultBaseDirectory`n" -ForegroundColor Cyan
     try {
-        $resolvedBaseDirectory = (Resolve-Path -LiteralPath $baseDirectory).Path
+        $userBaseResponse = Read-Host "Press Enter to use the default, or type a full directory path"
     } catch {
-        throw "Could not resolve the base directory path after create. Path: $baseDirectory. $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message "Initialize requires an interactive session for directory prompts. $($_.Exception.Message)"
+        return $null
     }
-    $subdirectories = $Script:DEPLOY_LAYOUT_SUBDIRECTORIES
+    if ([String]::IsNullOrWhiteSpace($userBaseResponse)) {
+        return $DefaultBaseDirectory
+    }
+    return $userBaseResponse.Trim()
+}
+function New-DeploySubdirectories {
+
+    <#
+        .SYNOPSIS
+        Creates the standard subdirectory layout under the deployment base directory.
+
+        .DESCRIPTION
+        Iterates Script:DEPLOY_LAYOUT_SUBDIRECTORIES and creates each subdirectory under
+        ResolvedBaseDirectory when it does not already exist. Returns a list of the subdirectory
+        names that were created, or $null if any creation fails (error is logged before returning).
+
+        .PARAMETER ResolvedBaseDirectory
+        The fully resolved base deployment directory path.
+
+        .EXAMPLE
+        $created = New-DeploySubdirectories -ResolvedBaseDirectory $resolvedBaseDirectory
+        if ($null -eq $created) { return $null }
+
+        .NOTES
+        Called by Invoke-VcfEdgeAtScaleModuleInitialize. Returns an empty list when all
+        subdirectories already exist.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([System.Collections.Generic.List[String]])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ResolvedBaseDirectory
+    )
+
     $subdirectoriesCreated = [System.Collections.Generic.List[String]]::new()
-    foreach ($subdirectoryName in $subdirectories) {
-        $childPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $subdirectoryName
+    foreach ($subdirectoryName in $Script:DEPLOY_LAYOUT_SUBDIRECTORIES) {
+        $childPath = Join-Path -Path $ResolvedBaseDirectory -ChildPath $subdirectoryName
         if (-not (Test-Path -LiteralPath $childPath -PathType Container)) {
             try {
                 $null = New-Item -ItemType Directory -Path $childPath -Force -ErrorAction Stop
                 $null = $subdirectoriesCreated.Add($subdirectoryName)
             } catch {
-                throw "Failed to create directory `"$childPath`": $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message "Failed to create directory `"$childPath`": $($_.Exception.Message)"
+                return $null
             }
         }
     }
+    return $subdirectoriesCreated
+}
+function Copy-TemplateDocumentationFiles {
 
-    $servicesYamlDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SERVICES_YAML_DIR_NAME
-    $docsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:DOCS_DIR_NAME
+    <#
+    .SYNOPSIS
+        Copies EXAMPLE.rtf and README.rtf from the module templates to the Docs directory.
+    .DESCRIPTION
+        For each RTF documentation file, checks whether the source exists in the templates folder,
+        prompts the user before overwriting (via Confirm-FileOverwritePrompt), then copies it.
+        Skips gracefully with a warning when the source is absent.
+    .PARAMETER DocsDirectory
+        Full path to the Docs subdirectory where documentation files will be placed.
+    .PARAMETER TemplateRestoreHint
+        User-facing hint appended to warning messages when a template file is missing.
+    .PARAMETER TemplatesPath
+        Full path to the module Templates folder.
+    .EXAMPLE
+        Copy-TemplateDocumentationFiles -DocsDirectory $docsDir -TemplateRestoreHint $hint -TemplatesPath $tmplPath
+    .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
 
-    Write-Host ""
-    Write-Host "  Supervisor service YAML (ServicesYaml)" -ForegroundColor Magenta
-    foreach ($templateFileName in $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames) {
-        $fromPath = Join-Path -Path $templatesPath -ChildPath $templateFileName
-        if (-not (Test-Path -LiteralPath $fromPath -PathType Leaf)) {
-            throw "Required module template is missing: $fromPath. $templateRestoreHint"
-        }
-        $toPath = Join-Path -Path $servicesYamlDirectory -ChildPath $templateFileName
-        if (-not (Confirm-FileOverwritePrompt -FilePath $toPath)) {
-            Write-Host "    Skipped (keep existing): $templateFileName" -ForegroundColor Yellow
-            continue
-        }
-        try {
-            Copy-Item -LiteralPath $fromPath -Destination $toPath -Force -ErrorAction Stop
-        } catch {
-            throw "Failed to copy `"$templateFileName`" to `"$toPath`": $($_.Exception.Message)"
-        }
-        Write-Host "    Copied: $templateFileName" -ForegroundColor Green
-    }
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DocsDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplateRestoreHint,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplatesPath
+    )
 
     $rtfDocumentationPairs = @(
-        @{ DestinationFileName = "EXAMPLE.rtf"; SourcePath = (Join-Path -Path $templatesPath -ChildPath "EXAMPLE.rtf") },
-        @{ DestinationFileName = "README.rtf"; SourcePath = (Join-Path -Path $templatesPath -ChildPath "README.rtf") }
+        @{ DestinationFileName = "EXAMPLE.rtf"; SourcePath = (Join-Path -Path $TemplatesPath -ChildPath "EXAMPLE.rtf") },
+        @{ DestinationFileName = "README.rtf";  SourcePath = (Join-Path -Path $TemplatesPath -ChildPath "README.rtf") }
     )
 
     Write-Host ""
     Write-Host "  Documentation (Docs)" -ForegroundColor Magenta
 
-    # RTF files may be customized by the user; prompt before overwriting.
     foreach ($documentationPair in $rtfDocumentationPairs) {
         if (-not (Test-Path -LiteralPath $documentationPair.SourcePath -PathType Leaf)) {
-            Write-Warning "Optional documentation file '$($documentationPair.DestinationFileName)' is not in the module Templates folder (source not found at $($documentationPair.SourcePath)). Skipping this copy; Initialize continues. $templateRestoreHint"
+            Write-LogMessage -Type WARNING -Message "Optional documentation file '$($documentationPair.DestinationFileName)' is not in the module Templates folder (source not found at $($documentationPair.SourcePath)). Skipping this copy; Initialize continues. $TemplateRestoreHint"
             continue
         }
-        $destinationDocumentationPath = Join-Path -Path $docsDirectory -ChildPath $documentationPair.DestinationFileName
+        $destinationDocumentationPath = Join-Path -Path $DocsDirectory -ChildPath $documentationPair.DestinationFileName
         if (-not (Confirm-FileOverwritePrompt -FilePath $destinationDocumentationPath)) {
             Write-Host "    Skipped (keep existing): $($documentationPair.DestinationFileName)" -ForegroundColor Yellow
             continue
@@ -310,17 +371,91 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         try {
             Copy-Item -LiteralPath $documentationPair.SourcePath -Destination $destinationDocumentationPath -Force -ErrorAction Stop
         } catch {
-            Write-Warning "Skipping documentation copy '$($documentationPair.DestinationFileName)' after error: $($_.Exception.Message) $templateRestoreHint"
+            Write-LogMessage -Type WARNING -Message "Skipping documentation copy '$($documentationPair.DestinationFileName)' after error: $($_.Exception.Message) $TemplateRestoreHint"
             continue
         }
         Write-Host "    Copied: $($documentationPair.DestinationFileName)" -ForegroundColor Green
     }
+}
+function Copy-InitializeTemplateFiles {
+
+    <#
+        .SYNOPSIS
+        Copies Supervisor service YAML templates, documentation files, and tool files to the initialized layout directories.
+
+        .DESCRIPTION
+        Called from Invoke-VcfEdgeAtScaleModuleInitialize after the directory structure has been created. Handles
+        five file categories: Supervisor service YAML templates (required — throws if missing), RTF documentation
+        files (optional — skips with warning if missing), help JSON files (auto-refreshed silently when stale),
+        the Python config UI tool (optional — skips with warning), and the HTML UI template (optional — silent
+        overwrite). Overwrite prompts are handled by Confirm-FileOverwritePrompt.
+
+        .PARAMETER DocsDirectory
+        Absolute path to the Docs subdirectory under the deployment root.
+
+        .PARAMETER ServicesYamlDirectory
+        Absolute path to the ServicesYaml subdirectory under the deployment root.
+
+        .PARAMETER TemplateRestoreHint
+        Guidance string appended to error messages when a required template is missing.
+
+        .PARAMETER TemplatesPath
+        Absolute path to the module Templates directory.
+
+        .PARAMETER ToolsDirectory
+        Absolute path to the Tools subdirectory under the deployment root.
+
+        .EXAMPLE
+        Copy-InitializeTemplateFiles -DocsDirectory $docsDir -ServicesYamlDirectory $yamlDir `
+            -TemplateRestoreHint $hint -TemplatesPath $tplPath -ToolsDirectory $toolsDir
+
+        .NOTES
+        Called exclusively from Invoke-VcfEdgeAtScaleModuleInitialize.
+        Returns $true when all required YAML templates were copied successfully; $false when any
+        required template is missing or a copy fails (error is logged before returning).
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DocsDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServicesYamlDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplateRestoreHint,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplatesPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ToolsDirectory
+    )
+
+    Write-Host ""
+    Write-Host "  Supervisor service YAML (ServicesYaml)" -ForegroundColor Magenta
+    foreach ($templateFileName in $Script:VcfEdgeAtScaleServiceYamlTemplateFileNames) {
+        $fromPath = Join-Path -Path $TemplatesPath -ChildPath $templateFileName
+        if (-not (Test-Path -LiteralPath $fromPath -PathType Leaf)) {
+            Write-LogMessage -Type ERROR -Message "Required module template is missing: $fromPath. $TemplateRestoreHint"
+            return $false
+        }
+        $toPath = Join-Path -Path $ServicesYamlDirectory -ChildPath $templateFileName
+        if (-not (Confirm-FileOverwritePrompt -FilePath $toPath)) {
+            Write-Host "    Skipped (keep existing): $templateFileName" -ForegroundColor Yellow
+            continue
+        }
+        try {
+            Copy-Item -LiteralPath $fromPath -Destination $toPath -Force -ErrorAction Stop
+        } catch {
+            Write-LogMessage -Type ERROR -Message "Failed to copy `"$templateFileName`" to `"$toPath`": $($_.Exception.Message)"
+            return $false
+        }
+        Write-Host "    Copied: $templateFileName" -ForegroundColor Green
+    }
+
+    Copy-TemplateDocumentationFiles -DocsDirectory $DocsDirectory -TemplateRestoreHint $TemplateRestoreHint -TemplatesPath $TemplatesPath
 
     # Help JSON files are not user-edited; auto-refresh silently when the module version changes.
     $helpJsonFileNames = @($Script:INFRA_HELP_FILENAME, $Script:SUPERVISOR_HELP_FILENAME)
     foreach ($helpFileName in $helpJsonFileNames) {
-        $helpTemplatePath = Join-Path -Path $templatesPath -ChildPath $helpFileName
-        $helpDocsPath = Join-Path -Path $docsDirectory -ChildPath $helpFileName
+        $helpTemplatePath = Join-Path -Path $TemplatesPath -ChildPath $helpFileName
+        $helpDocsPath = Join-Path -Path $DocsDirectory -ChildPath $helpFileName
         $helpWasUpdated = Update-HelpJsonIfStale -DocsPath $helpDocsPath -TemplatePath $helpTemplatePath
         if (Test-Path -LiteralPath $helpDocsPath -PathType Leaf) {
             if ($helpWasUpdated) {
@@ -331,174 +466,339 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
         }
     }
 
-    $toolsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:TOOLS_DIR_NAME
-    $moduleToolsPath = Join-Path -Path (Split-Path -Path $templatesPath -Parent) -ChildPath $Script:TOOLS_DIR_NAME
+    $moduleToolsPath = Join-Path -Path (Split-Path -Path $TemplatesPath -Parent) -ChildPath $Script:TOOLS_DIR_NAME
 
     Write-Host ""
     Write-Host "  Tools" -ForegroundColor Magenta
     $configUiFileName = "veas-json-generator.py"
     $configUiSourcePath = Join-Path -Path $moduleToolsPath -ChildPath $configUiFileName
     if (-not (Test-Path -LiteralPath $configUiSourcePath -PathType Leaf)) {
-        Write-Warning "Optional tool '$configUiFileName' is not in the module Tools folder (source not found at $configUiSourcePath). Skipping this copy; Initialize continues. $templateRestoreHint"
+        Write-LogMessage -Type WARNING -Message "Optional tool '$configUiFileName' is not in the module Tools folder (source not found at $configUiSourcePath). Skipping this copy; Initialize continues. $TemplateRestoreHint"
     } else {
-        $configUiDestinationPath = Join-Path -Path $toolsDirectory -ChildPath $configUiFileName
+        $configUiDestinationPath = Join-Path -Path $ToolsDirectory -ChildPath $configUiFileName
         if (Confirm-FileOverwritePrompt -FilePath $configUiDestinationPath) {
             $pyExeHint = (Get-PythonExecutable)?.Executable ?? "python3"
             try {
                 Copy-Item -LiteralPath $configUiSourcePath -Destination $configUiDestinationPath -Force -ErrorAction Stop
                 Write-Host "    Copied: $configUiFileName  (run: $pyExeHint `"$configUiDestinationPath`")" -ForegroundColor Green
             } catch {
-                Write-Warning "Skipping tool copy '$configUiFileName' after error: $($_.Exception.Message) $templateRestoreHint"
+                Write-LogMessage -Type WARNING -Message "Skipping tool copy '$configUiFileName' after error: $($_.Exception.Message) $TemplateRestoreHint"
             }
         } else {
             Write-Host "    Skipped (keep existing): $configUiFileName" -ForegroundColor Yellow
         }
     }
 
-    # Copy the UI HTML template (veas-ui.html) alongside the Python tool.
-    # This file is a versioned UI asset and is always silently overwritten — it is not
-    # edited by the operator, so no overwrite prompt is needed.
+    # The HTML UI template is a versioned asset; always silently overwrite.
     $uiTemplateFileName = "veas-ui.html"
     $uiTemplateSourcePath = Join-Path -Path $moduleToolsPath -ChildPath $uiTemplateFileName
     if (-not (Test-Path -LiteralPath $uiTemplateSourcePath -PathType Leaf)) {
-        Write-Warning "Optional UI template '$uiTemplateFileName' is not in the module Tools folder (source not found at $uiTemplateSourcePath). Skipping this copy; Initialize continues. $templateRestoreHint"
+        Write-LogMessage -Type WARNING -Message "Optional UI template '$uiTemplateFileName' is not in the module Tools folder (source not found at $uiTemplateSourcePath). Skipping this copy; Initialize continues. $TemplateRestoreHint"
     } else {
-        $uiTemplateDestinationPath = Join-Path -Path $toolsDirectory -ChildPath $uiTemplateFileName
+        $uiTemplateDestinationPath = Join-Path -Path $ToolsDirectory -ChildPath $uiTemplateFileName
         try {
             Copy-Item -LiteralPath $uiTemplateSourcePath -Destination $uiTemplateDestinationPath -Force -ErrorAction Stop
             Write-Host "    Copied: $uiTemplateFileName" -ForegroundColor Green
         } catch {
-            Write-Warning "Skipping UI template copy '$uiTemplateFileName' after error: $($_.Exception.Message) $templateRestoreHint"
+            Write-LogMessage -Type WARNING -Message "Skipping UI template copy '$uiTemplateFileName' after error: $($_.Exception.Message) $TemplateRestoreHint"
         }
     }
+    return $true
+}
+function Write-InfrastructureJsonFromTemplate {
 
-    $infrastructureDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:INFRA_JSON_FILENAME
-    $supervisorDestinationPath = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME
-    $infrastructureTemplatePath = Join-Path -Path $templatesPath -ChildPath $Script:INFRA_JSON_FILENAME
-    $supervisorTemplatePath = Join-Path -Path $templatesPath -ChildPath $Script:SUPERVISOR_JSON_FILENAME
+    <#
+    .SYNOPSIS
+        Writes infrastructure.json from the module template, substituting directory tokens.
+    .DESCRIPTION
+        Reads the template, patches common.supervisorServices.parentDirectory to ServicesYamlDirectory
+        and harborConfiguration.parentDirectory to BaseDirectory via regex, validates the resulting
+        JSON parses cleanly, then writes the file. Returns $false on any failure (error is logged).
+    .PARAMETER BaseDirectory
+        Resolved absolute path of the deployment base directory.
+    .PARAMETER InfrastructureDestinationPath
+        Destination path for the infrastructure JSON file.
+    .PARAMETER InfrastructureTemplatePath
+        Full path to the bundled infrastructure.json template.
+    .PARAMETER ServicesYamlDirectory
+        Full path to the ServicesYaml subdirectory.
+    .PARAMETER TemplateRestoreHint
+        User-facing hint for error messages when the template is missing.
+    .EXAMPLE
+        Write-InfrastructureJsonFromTemplate -BaseDirectory $base -InfrastructureDestinationPath $dest -InfrastructureTemplatePath $tmpl -ServicesYamlDirectory $svcDir -TemplateRestoreHint $hint
+    .NOTES
+        Returns $true on success, $false on any error (error is already logged before returning).
+    #>
 
-    if (-not $TemplatesOnly) {
-        Write-Host ""
-        Write-Host "  Root JSON files" -ForegroundColor Magenta
-        $shouldWriteInfrastructureFromTemplate = $false
-        if (-not (Test-Path -LiteralPath $infrastructureDestinationPath -PathType Leaf)) {
-            $shouldWriteInfrastructureFromTemplate = $true
-        } else {
-            Write-Host "    infrastructure.json already exists at $infrastructureDestinationPath." -ForegroundColor White
-            try {
-                $refreshInfrastructureAnswer = Read-Host "Replace infrastructure.json from the module template (supervisorServices.parentDirectory -> ServicesYaml; harborConfiguration.parentDirectory -> base directory)? (y/N)"
-            } catch {
-                throw "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
-            }
-            switch ($refreshInfrastructureAnswer) {
-                "y" { $shouldWriteInfrastructureFromTemplate = $true }
-                "Y" { $shouldWriteInfrastructureFromTemplate = $true }
-                default {
-                    Write-Host "    Kept existing infrastructure.json." -ForegroundColor Yellow
-                }
-            }
-        }
-        if ($shouldWriteInfrastructureFromTemplate) {
-            if (-not (Test-Path -LiteralPath $infrastructureTemplatePath -PathType Leaf)) {
-                throw "Cannot create infrastructure.json from module template: file not found at $infrastructureTemplatePath. $templateRestoreHint"
-            }
-            $infrastructureTemplateText = Get-Content -LiteralPath $infrastructureTemplatePath -Raw -ErrorAction Stop
-            # Set common.supervisorServices.parentDirectory to ServicesYaml and
-            # clusters[].harborConfiguration.parentDirectory to the base directory.
-            # Avoid ConvertTo-Json so template formatting (for example nicList) stays as shipped.
-            $escapedParentDirectoryForJson = $servicesYamlDirectory.Replace('\', '\\').Replace('"', '\"')
-            $supervisorParentPattern = '(?s)("common"\s*:\s*\{.*?"supervisorServices"\s*:\s*\{.*?"parentDirectory"\s*:\s*")([^"]*)(")'
-            $supervisorParentMatch = [regex]::Match($infrastructureTemplateText, $supervisorParentPattern)
-            if (-not $supervisorParentMatch.Success) {
-                throw "Module template infrastructure.json must include common.supervisorServices.parentDirectory for Initialize. $templateRestoreHint"
-            }
-            $infrastructureJsonText = $infrastructureTemplateText.Substring(0, $supervisorParentMatch.Index) + $supervisorParentMatch.Groups[1].Value + $escapedParentDirectoryForJson + $supervisorParentMatch.Groups[3].Value + $infrastructureTemplateText.Substring($supervisorParentMatch.Index + $supervisorParentMatch.Length)
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$BaseDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureDestinationPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureTemplatePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServicesYamlDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplateRestoreHint
+    )
 
-            # Replace harborConfiguration.parentDirectory with the base directory.
-            # Use a regex rather than a literal string so the replacement works regardless of what value
-            # the template ships with (avoids a silent no-op if the template placeholder ever changes).
-            $escapedBaseDirectoryForJson = $resolvedBaseDirectory.Replace('\', '\\').Replace('"', '\"')
-            $harborParentPattern = '(?s)("harborConfiguration"\s*:\s*\{[^}]*?"parentDirectory"\s*:\s*")([^"]*)(")'
-            if ([regex]::IsMatch($infrastructureJsonText, $harborParentPattern)) {
-                $infrastructureJsonText = [regex]::Replace($infrastructureJsonText, $harborParentPattern, "`${1}$escapedBaseDirectoryForJson`${3}")
-            } else {
-                Write-LogMessage -Type WARNING -Message "Module template infrastructure.json does not contain harborConfiguration.parentDirectory; skipping Harbor parentDirectory initialization."
-            }
+    if (-not (Test-Path -LiteralPath $InfrastructureTemplatePath -PathType Leaf)) {
+        Write-LogMessage -Type ERROR -Message "Cannot create infrastructure.json from module template: file not found at $InfrastructureTemplatePath. $TemplateRestoreHint"
+        return $false
+    }
 
-            try {
-                $null = $infrastructureJsonText | ConvertFrom-Json -ErrorAction Stop
-            } catch {
-                throw "After setting parentDirectory fields, infrastructure JSON did not parse: $($_.Exception.Message)"
-            }
-            try {
-                Set-Content -LiteralPath $infrastructureDestinationPath -Value $infrastructureJsonText -Encoding utf8 -ErrorAction Stop
-            } catch {
-                throw "Failed to write infrastructure JSON to `"$infrastructureDestinationPath`": $($_.Exception.Message)"
-            }
-            Write-Host "    Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; harborConfiguration.parentDirectory -> base directory)." -ForegroundColor Green
-        }
+    $infrastructureTemplateText = Get-Content -LiteralPath $InfrastructureTemplatePath -Raw -ErrorAction Stop
 
-        $shouldWriteSupervisorFromTemplate = $false
-        if (-not (Test-Path -LiteralPath $supervisorDestinationPath -PathType Leaf)) {
-            $shouldWriteSupervisorFromTemplate = $true
-        } else {
-            Write-Host "    supervisor.json already exists at $supervisorDestinationPath." -ForegroundColor White
-            try {
-                $refreshSupervisorAnswer = Read-Host "Replace supervisor.json from the module template? (y/N)"
-            } catch {
-                throw "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
-            }
-            switch ($refreshSupervisorAnswer) {
-                "y" { $shouldWriteSupervisorFromTemplate = $true }
-                "Y" { $shouldWriteSupervisorFromTemplate = $true }
-                default {
-                    Write-Host "    Kept existing supervisor.json." -ForegroundColor Yellow
-                }
-            }
-        }
-        if ($shouldWriteSupervisorFromTemplate) {
-            if (-not (Test-Path -LiteralPath $supervisorTemplatePath -PathType Leaf)) {
-                throw "Cannot copy supervisor.json from module template: file not found at $supervisorTemplatePath. $templateRestoreHint"
-            }
-            try {
-                Copy-Item -LiteralPath $supervisorTemplatePath -Destination $supervisorDestinationPath -Force -ErrorAction Stop
-            } catch {
-                throw "Failed to copy supervisor.json to `"$supervisorDestinationPath`": $($_.Exception.Message) $templateRestoreHint"
-            }
-            Write-Host "    Copied supervisor.json to deployment root." -ForegroundColor Green
-        }
+    # Set common.supervisorServices.parentDirectory to ServicesYaml and
+    # clusters[].harborConfiguration.parentDirectory to the base directory.
+    # Avoid ConvertTo-Json so template formatting (e.g. nicList) stays as shipped.
+    $escapedServicesDir = $ServicesYamlDirectory.Replace('\', '\\').Replace('"', '\"')
+    $supervisorParentPattern = '(?s)("common"\s*:\s*\{.*?"supervisorServices"\s*:\s*\{.*?"parentDirectory"\s*:\s*")([^"]*)(")'
+    $supervisorParentMatch = [Regex]::Match($infrastructureTemplateText, $supervisorParentPattern)
+    if (-not $supervisorParentMatch.Success) {
+        Write-LogMessage -Type ERROR -Message "Module template infrastructure.json must include common.supervisorServices.parentDirectory for Initialize. $TemplateRestoreHint"
+        return $false
+    }
+
+    $infrastructureJsonText = $infrastructureTemplateText.Substring(0, $supervisorParentMatch.Index) + $supervisorParentMatch.Groups[1].Value + $escapedServicesDir + $supervisorParentMatch.Groups[3].Value + $infrastructureTemplateText.Substring($supervisorParentMatch.Index + $supervisorParentMatch.Length)
+    $escapedBaseDir = $BaseDirectory.Replace('\', '\\').Replace('"', '\"')
+    $harborParentPattern = '(?s)("harborConfiguration"\s*:\s*\{[^}]*?"parentDirectory"\s*:\s*")([^"]*)(")'
+    if ([Regex]::IsMatch($infrastructureJsonText, $harborParentPattern)) {
+        $infrastructureJsonText = [Regex]::Replace($infrastructureJsonText, $harborParentPattern, "`${1}$escapedBaseDir`${3}")
     } else {
-        Write-Host ""
-        Write-Host "  Templates-only mode: skipped root infrastructure.json and supervisor.json." -ForegroundColor Gray
+        Write-LogMessage -Type WARNING -Message "Module template infrastructure.json does not contain harborConfiguration.parentDirectory; skipping Harbor parentDirectory initialization."
     }
 
-    # Set for the current session.
-    $env:VcfEdgeAtScaleRootDirectory = $resolvedBaseDirectory
+    try {
+        $null = $infrastructureJsonText | ConvertFrom-Json -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type ERROR -Message "After setting parentDirectory fields, infrastructure JSON did not parse: $($_.Exception.Message)"
+        return $false
+    }
+
+    try {
+        Set-Content -LiteralPath $InfrastructureDestinationPath -Value $infrastructureJsonText -Encoding utf8 -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type ERROR -Message "Failed to write infrastructure JSON to `"$InfrastructureDestinationPath`": $($_.Exception.Message)"
+        return $false
+    }
+
+    Write-LogMessage -Type INFO -Message "Wrote infrastructure.json (common.supervisorServices.parentDirectory -> ServicesYaml; harborConfiguration.parentDirectory -> base directory)."
+    return $true
+}
+function Initialize-RootJsonFilesFromTemplate {
+
+    <#
+        .SYNOPSIS
+        Seeds or replaces infrastructure.json and supervisor.json from bundled module templates.
+
+        .DESCRIPTION
+        Prompts the user if either JSON file already exists, then copies or writes the file from the
+        module template. For infrastructure.json the parentDirectory fields for supervisorServices and
+        harborConfiguration are patched via regex to match the current deployment layout before writing.
+        Validation-parses the final JSON before writing to catch any substitution errors early.
+        Returns $true on success and $false on any error (error is logged via Write-LogMessage -Type ERROR
+        before returning $false; the caller should check the return value and return early on $false).
+
+        .OUTPUTS
+        [Bool] $true on success, $false on any error.
+
+        .PARAMETER BaseDirectory
+        Resolved absolute path of the deployment base directory. Used to set
+        harborConfiguration.parentDirectory in the infrastructure template.
+
+        .PARAMETER InfrastructureDestinationPath
+        Full path where infrastructure.json should be written.
+
+        .PARAMETER InfrastructureTemplatePath
+        Full path to the bundled infrastructure.json template in the module Templates folder.
+
+        .PARAMETER ServicesYamlDirectory
+        Full path to the ServicesYaml subdirectory. Used to set
+        common.supervisorServices.parentDirectory in the infrastructure template.
+
+        .PARAMETER SupervisorDestinationPath
+        Full path where supervisor.json should be written.
+
+        .PARAMETER SupervisorTemplatePath
+        Full path to the bundled supervisor.json template in the module Templates folder.
+
+        .PARAMETER TemplateRestoreHint
+        User-facing hint appended to error messages when a template file is missing.
+
+        .EXAMPLE
+        Initialize-RootJsonFilesFromTemplate `
+            -BaseDirectory               $resolvedBase `
+            -InfrastructureDestinationPath (Join-Path $resolvedBase "infrastructure.json") `
+            -InfrastructureTemplatePath  (Join-Path $templatesPath "infrastructure.json") `
+            -ServicesYamlDirectory       (Join-Path $resolvedBase "ServicesYaml") `
+            -SupervisorDestinationPath   (Join-Path $resolvedBase "supervisor.json") `
+            -SupervisorTemplatePath      (Join-Path $templatesPath "supervisor.json") `
+            -TemplateRestoreHint         $hint
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+        Private to the module. Called from Invoke-VcfEdgeAtScaleModuleInitialize.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Bool])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$BaseDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureDestinationPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureTemplatePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServicesYamlDirectory,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorDestinationPath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorTemplatePath,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TemplateRestoreHint
+    )
+
+    Write-Host ""
+    Write-Host "  Root JSON files" -ForegroundColor Magenta
+    $shouldWriteInfrastructureFromTemplate = $false
+    if (-not (Test-Path -LiteralPath $InfrastructureDestinationPath -PathType Leaf)) {
+        $shouldWriteInfrastructureFromTemplate = $true
+    } else {
+        Write-Host "    infrastructure.json already exists at $InfrastructureDestinationPath." -ForegroundColor White
+        try {
+            $refreshInfrastructureAnswer = Read-Host "Replace infrastructure.json from the module template (supervisorServices.parentDirectory -> ServicesYaml; harborConfiguration.parentDirectory -> base directory)? (y/N)"
+        } catch {
+            Write-LogMessage -Type ERROR -Message "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
+            return $false
+        }
+        switch ($refreshInfrastructureAnswer) {
+            "y" { $shouldWriteInfrastructureFromTemplate = $true }
+            "Y" { $shouldWriteInfrastructureFromTemplate = $true }
+            default {
+                Write-Host "    Kept existing infrastructure.json." -ForegroundColor Yellow
+            }
+        }
+    }
+    if ($shouldWriteInfrastructureFromTemplate) {
+        $writeInfraParams = @{
+            BaseDirectory                  = $BaseDirectory
+            InfrastructureDestinationPath  = $InfrastructureDestinationPath
+            InfrastructureTemplatePath     = $InfrastructureTemplatePath
+            ServicesYamlDirectory          = $ServicesYamlDirectory
+            TemplateRestoreHint            = $TemplateRestoreHint
+        }
+        if (-not (Write-InfrastructureJsonFromTemplate @writeInfraParams)) {
+            return $false
+        }
+    }
+
+    $shouldWriteSupervisorFromTemplate = $false
+    if (-not (Test-Path -LiteralPath $SupervisorDestinationPath -PathType Leaf)) {
+        $shouldWriteSupervisorFromTemplate = $true
+    } else {
+        Write-Host "    supervisor.json already exists at $SupervisorDestinationPath." -ForegroundColor White
+        try {
+            $refreshSupervisorAnswer = Read-Host "Replace supervisor.json from the module template? (y/N)"
+        } catch {
+            Write-LogMessage -Type ERROR -Message "Initialize requires an interactive session for refresh prompts. $($_.Exception.Message)"
+            return $false
+        }
+        switch ($refreshSupervisorAnswer) {
+            "y" { $shouldWriteSupervisorFromTemplate = $true }
+            "Y" { $shouldWriteSupervisorFromTemplate = $true }
+            default {
+                Write-Host "    Kept existing supervisor.json." -ForegroundColor Yellow
+            }
+        }
+    }
+    if ($shouldWriteSupervisorFromTemplate) {
+        if (-not (Test-Path -LiteralPath $SupervisorTemplatePath -PathType Leaf)) {
+            Write-LogMessage -Type ERROR -Message "Cannot copy supervisor.json from module template: file not found at $SupervisorTemplatePath. $TemplateRestoreHint"
+            return $false
+        }
+        try {
+            Copy-Item -LiteralPath $SupervisorTemplatePath -Destination $SupervisorDestinationPath -Force -ErrorAction Stop
+        } catch {
+            Write-LogMessage -Type ERROR -Message "Failed to copy supervisor.json to `"$SupervisorDestinationPath`": $($_.Exception.Message) $TemplateRestoreHint"
+            return $false
+        }
+        Write-Host "    Copied supervisor.json to deployment root." -ForegroundColor Green
+    }
+
+    return $true
+}
+function Invoke-PersistDeploymentRootDirectory {
+
+    <#
+        .SYNOPSIS
+        Persists VcfEdgeAtScaleRootDirectory for future sessions and writes the Initialize summary.
+
+        .DESCRIPTION
+        Sets VcfEdgeAtScaleRootDirectory in the current session. On Windows, also writes it to the
+        user environment registry so Explorer-launched processes inherit it. On all platforms,
+        appends the assignment to $PROFILE so SSH and other non-Explorer sessions also pick it up.
+        After all persistence operations, writes the Initialize summary to the console.
+
+        .PARAMETER BaseDirectoryWasCreated
+        True when the base directory was created by Initialize (was not pre-existing). Used in the
+        summary line that distinguishes "created" from "already existed."
+
+        .PARAMETER ResolvedBaseDirectory
+        Fully resolved absolute path of the deployment root directory. Written to the env var,
+        registry, and profile.
+
+        .PARAMETER SubdirectoriesCreated
+        List of subdirectory names created during this Initialize run. Used in the summary.
+
+        .PARAMETER TemplatesOnly
+        When set, adjusts the summary line for the root JSON section to note that JSON was
+        not modified.
+
+        .EXAMPLE
+        Invoke-PersistDeploymentRootDirectory `
+            -BaseDirectoryWasCreated $true `
+            -ResolvedBaseDirectory   $resolvedBase `
+            -SubdirectoriesCreated   $subdirectoriesCreated `
+            -TemplatesOnly:          $TemplatesOnly.IsPresent
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+        Private to the module. Called from Invoke-VcfEdgeAtScaleModuleInitialize.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [Bool]$BaseDirectoryWasCreated,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ResolvedBaseDirectory,
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [System.Collections.Generic.List[String]]$SubdirectoriesCreated,
+        [Parameter(Mandatory = $false)] [Switch]$TemplatesOnly
+    )
+
+    $env:VcfEdgeAtScaleRootDirectory = $ResolvedBaseDirectory
     $persistedEnvSucceeded = $false
 
     if ($IsWindows) {
         # On Windows, persist to the user environment registry so new sessions inherit it automatically.
         try {
-            [System.Environment]::SetEnvironmentVariable($Script:ENV_VAR_NAME, $resolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
-            $persistedEnvSucceeded = $true
+            [System.Environment]::SetEnvironmentVariable($Script:ENV_VAR_NAME, $ResolvedBaseDirectory, [System.EnvironmentVariableTarget]::User)
+            # Read back to confirm the write landed; some Windows configurations silently no-op.
+            $verifyValue = [System.Environment]::GetEnvironmentVariable($Script:ENV_VAR_NAME, [System.EnvironmentVariableTarget]::User)
+            $persistedEnvSucceeded = ($verifyValue -eq $ResolvedBaseDirectory)
+            if (-not $persistedEnvSucceeded) {
+                Write-LogMessage -Type WARNING -Message "VcfEdgeAtScaleRootDirectory registry write appeared to succeed but read-back returned '$verifyValue' instead of '$ResolvedBaseDirectory'."
+            }
         } catch {
-            Write-Warning "Could not persist VcfEdgeAtScaleRootDirectory to the user environment: $($_.Exception.Message)"
+            Write-LogMessage -Type WARNING -Message "Could not persist VcfEdgeAtScaleRootDirectory to the user environment: $($_.Exception.Message)"
         }
     }
     # On macOS/Linux, [System.EnvironmentVariableTarget]::User is not supported by .NET
-    # and will throw PlatformNotSupportedException. The user is prompted below to add
-    # the variable to their $PROFILE instead.
+    # and will throw PlatformNotSupportedException. The $PROFILE append below covers both platforms.
 
     Write-Host ""
     Write-Host "=== Initialize summary ===" -ForegroundColor Cyan
-    Write-Host "  Deployment root: $resolvedBaseDirectory" -ForegroundColor White
-    if ($baseDirectoryWasCreated) {
+    Write-Host "  Deployment root: $ResolvedBaseDirectory" -ForegroundColor White
+    if ($BaseDirectoryWasCreated) {
         Write-Host "  Base directory: created (it did not exist before)." -ForegroundColor Green
     } else {
         Write-Host "  Base directory: already existed; files kept unless you chose overwrite." -ForegroundColor Gray
     }
-    if ($subdirectoriesCreated.Count -gt 0) {
-        Write-Host "  Subdirectories created: $($subdirectoriesCreated -join ', ')." -ForegroundColor Green
+    if ($SubdirectoriesCreated.Count -gt 0) {
+        Write-Host "  Subdirectories created: $($SubdirectoriesCreated -join ', ')." -ForegroundColor Green
     } else {
         Write-Host "  Subdirectories Docs, Logs, ServicesYaml, Tools: already present." -ForegroundColor Gray
     }
@@ -511,44 +811,160 @@ function Invoke-VcfEdgeAtScaleModuleInitialize {
     }
     if ($IsWindows) {
         if ($persistedEnvSucceeded) {
-            Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (session + user environment persisted)." -ForegroundColor Green
+            Write-Host "  VcfEdgeAtScaleRootDirectory -> $ResolvedBaseDirectory (session + user environment persisted)." -ForegroundColor Green
         } else {
-            Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (current session only; user-level persist failed — see warning above)." -ForegroundColor Yellow
+            Write-Host "  VcfEdgeAtScaleRootDirectory -> $ResolvedBaseDirectory (current session only; user-level persist failed — see warning above)." -ForegroundColor Yellow
             Write-Host '  To set manually: [System.Environment]::SetEnvironmentVariable("VcfEdgeAtScaleRootDirectory", "<path>", [System.EnvironmentVariableTarget]::User)' -ForegroundColor Cyan
         }
     } else {
-        Write-Host "  VcfEdgeAtScaleRootDirectory -> $resolvedBaseDirectory (set for this session)." -ForegroundColor Green
-        Write-Host ""
+        Write-Host "  VcfEdgeAtScaleRootDirectory -> $ResolvedBaseDirectory (set for this session)." -ForegroundColor Green
+    }
+    Write-Host ""
 
-        # Append to $PROFILE automatically so new sessions inherit the variable,
-        # creating the profile file if it does not yet exist.
-        $profileLine = "`$env:VcfEdgeAtScaleRootDirectory = `"$resolvedBaseDirectory`""
-        $appendedToProfile = $false
-        try {
-            $profileDir = Split-Path $PROFILE -Parent
-            if (-not (Test-Path $profileDir)) {
-                New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
-            }
-            if (-not (Test-Path $PROFILE)) {
-                New-Item -ItemType File -Path $PROFILE -Force | Out-Null
-            }
-            $existingContent = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
-            if ($existingContent -notmatch [Regex]::Escape($Script:ENV_VAR_NAME)) {
-                Add-Content -LiteralPath $PROFILE -Value "`n$profileLine" -Encoding UTF8
-                $appendedToProfile = $true
-            }
-        } catch {
-            Write-Warning "Could not append to `$PROFILE ($PROFILE): $($_.Exception.Message)"
+    $profileLine = "`$env:VcfEdgeAtScaleRootDirectory = `"$ResolvedBaseDirectory`""
+    $appendedToProfile = $false
+    try {
+        $profileDir = Split-Path $PROFILE -Parent
+        if (-not (Test-Path $profileDir)) {
+            New-Item -ItemType Directory -Path $profileDir -Force | Out-Null
         }
+        if (-not (Test-Path $PROFILE)) {
+            New-Item -ItemType File -Path $PROFILE -Force | Out-Null
+        }
+        $existingContent = Get-Content -LiteralPath $PROFILE -Raw -ErrorAction SilentlyContinue
+        if ($existingContent -notmatch [Regex]::Escape($Script:ENV_VAR_NAME)) {
+            Add-Content -LiteralPath $PROFILE -Value "`n$profileLine" -Encoding UTF8
+            $appendedToProfile = $true
+        }
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not append to `$PROFILE ($PROFILE): $($_.Exception.Message)"
+    }
 
-        if ($appendedToProfile) {
-            Write-Host "  Line appended to: $PROFILE" -ForegroundColor Green
-            Write-Host "  New terminal sessions will inherit this variable automatically." -ForegroundColor Gray
-        } else {
-            Write-Host "  Note: `$PROFILE already contains VcfEdgeAtScaleRootDirectory — no change made." -ForegroundColor Gray
-            Write-Host "  Profile: $PROFILE" -ForegroundColor Gray
+    if ($appendedToProfile) {
+        Write-Host "  Line appended to: $PROFILE" -ForegroundColor Green
+        Write-Host "  New terminal sessions will inherit this variable automatically." -ForegroundColor Gray
+    } else {
+        Write-Host "  Note: `$PROFILE already contains VcfEdgeAtScaleRootDirectory — no change made." -ForegroundColor Gray
+        Write-Host "  Profile: $PROFILE" -ForegroundColor Gray
+    }
+}
+function Invoke-VcfEdgeAtScaleModuleInitialize {
+
+    <#
+        .SYNOPSIS
+            Interactively creates the on-disk layout for VcfEdgeAtScale configuration, logs, YAML, and documentation.
+
+        .DESCRIPTION
+            Prompts for a base directory (default joins the user home directory with VCFEdgeAtScale), creates Docs,
+            Logs, and ServicesYaml when missing, and copies bundled Supervisor service YAML templates and documentation files from the
+            Templates directory (including EXAMPLE.rtf and README.rtf) with overwrite prompts (default N). Missing
+            documentation sources under Templates are skipped with a warning (initialize does not fail for those; the
+            summary block at the end lists what succeeded). Missing
+            Supervisor service YAML or infrastructure/supervisor JSON templates still fails with guidance to reinstall the
+            module or copy files from the GitHub repository. Works for a new or existing configuration directory. When -TemplatesOnly is set, only YAML and Docs files are refreshed; root
+            infrastructure.json and supervisor.json are not created or replaced. Otherwise seeds those JSON files when absent,
+            and when they already exist offers optional replacement from module templates (infrastructure.json paths under
+            ServicesYaml are updated when written from the template).             Persists VcfEdgeAtScaleRootDirectory via two mechanisms on all platforms: on Windows, also writes to
+            [System.Environment]::SetEnvironmentVariable (User scope) so Explorer-launched processes inherit it from the registry.
+            On all platforms, the variable assignment line is appended to $PROFILE so sessions not spawned by Explorer
+            (SSH, some terminal emulators) also pick it up automatically.
+            When VcfEdgeAtScaleRootDirectory points at an existing initialized layout, asks whether to initialize a different directory instead of re-prompting for the base path.
+
+        .PARAMETER TemplatesOnly
+            When set, copies only ServicesYaml and Docs templates; does not create or replace infrastructure.json or supervisor.json at the base directory.
+
+        .NOTES
+            Private to the module. Invoked from Start-VcfEdgeAtScale -Initialize only. Requires an interactive host for Read-Host.
+            User-visible status uses Write-Host (not Write-Output) because Start-VcfEdgeAtScale assigns this function's output to $null, which would otherwise hide success-stream output.
+            Write-Host is the primary output mechanism in this function; all Write-Host calls are
+            intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleModuleInitialize
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$TemplatesOnly
+    )
+
+    $templatesPath = Get-ModuleTemplatesPath
+    $templateRestoreHint = "Reinstall the VcfEdgeAtScale module (for example Install-Module VcfEdgeAtScale -Force) or copy missing files from https://github.com/vmware/powershell-module-for-vcf-edge-at-scale (see the VcfEdgeAtScale/Templates folder in that repository)."
+    $defaultBaseDirectory = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
+
+    Write-Host ""
+    Write-Host "VcfEdgeAtScale initialize" -ForegroundColor Cyan
+    if ($TemplatesOnly) {
+        Write-Host "  Mode: templates only — refresh ServicesYaml and Docs; root JSON is not modified." -ForegroundColor Gray
+    } else {
+        Write-Host "  Mode: full — configuration base, Logs, ServicesYaml, Docs, optional JSON seed/replace." -ForegroundColor Gray
+    }
+
+    $baseDirectory = Resolve-DeploymentRootDirectory -DefaultBaseDirectory $defaultBaseDirectory
+    if ([String]::IsNullOrWhiteSpace($baseDirectory)) {
+        return $null
+    }
+
+    $baseDirectoryExistedBefore = Test-Path -LiteralPath $baseDirectory -PathType Container
+    $baseDirectoryWasCreated = $false
+    if (-not $baseDirectoryExistedBefore) {
+        try {
+            $null = New-Item -ItemType Directory -Path $baseDirectory -Force -ErrorAction Stop
+            $baseDirectoryWasCreated = $true
+        } catch {
+            Write-LogMessage -Type ERROR -Message "Failed to create base directory `"$baseDirectory`": $($_.Exception.Message)"
+            return $null
         }
     }
+
+    if (-not (Test-Path -LiteralPath $baseDirectory)) {
+        Write-LogMessage -Type ERROR -Message "Could not resolve the base directory path after create — directory not found: `"$baseDirectory`"."
+        return $null
+    }
+    $resolvedBaseDirectory = (Resolve-Path -LiteralPath $baseDirectory).Path
+
+    $subdirectoriesCreated = New-DeploySubdirectories -ResolvedBaseDirectory $resolvedBaseDirectory
+    if ($null -eq $subdirectoriesCreated) {
+        return $null
+    }
+
+    $servicesYamlDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SERVICES_YAML_DIR_NAME
+    $docsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:DOCS_DIR_NAME
+    $toolsDirectory = Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:TOOLS_DIR_NAME
+
+    $templatesCopied = Copy-InitializeTemplateFiles `
+        -DocsDirectory         $docsDirectory `
+        -ServicesYamlDirectory $servicesYamlDirectory `
+        -TemplateRestoreHint   $templateRestoreHint `
+        -TemplatesPath         $templatesPath `
+        -ToolsDirectory        $toolsDirectory
+    if (-not $templatesCopied) {
+        return $null
+    }
+
+    if (-not $TemplatesOnly) {
+        $jsonResult = Initialize-RootJsonFilesFromTemplate `
+            -BaseDirectory                 $resolvedBaseDirectory `
+            -InfrastructureDestinationPath (Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:INFRA_JSON_FILENAME) `
+            -InfrastructureTemplatePath    (Join-Path -Path $templatesPath -ChildPath $Script:INFRA_JSON_FILENAME) `
+            -ServicesYamlDirectory         $servicesYamlDirectory `
+            -SupervisorDestinationPath     (Join-Path -Path $resolvedBaseDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME) `
+            -SupervisorTemplatePath        (Join-Path -Path $templatesPath -ChildPath $Script:SUPERVISOR_JSON_FILENAME) `
+            -TemplateRestoreHint           $templateRestoreHint
+        if (-not $jsonResult) {
+            return $null
+        }
+    } else {
+        Write-Host ""
+        Write-Host "  Templates-only mode: skipped root infrastructure.json and supervisor.json." -ForegroundColor Gray
+    }
+
+    Invoke-PersistDeploymentRootDirectory `
+        -BaseDirectoryWasCreated $baseDirectoryWasCreated `
+        -ResolvedBaseDirectory   $resolvedBaseDirectory `
+        -SubdirectoriesCreated   $subdirectoriesCreated `
+        -TemplatesOnly:          $TemplatesOnly.IsPresent
 
     return $resolvedBaseDirectory
 }
@@ -567,10 +983,17 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
         [String] Full path to the created zip file.
 
         .NOTES
-        Private to the module. Invoked from Start-VcfEdgeAtScale -CollectLogs only. Uses Write-Host so output is visible when the caller assigns the result to $null.
+        Private to the module. Invoked from Start-VcfEdgeAtScale -CollectLogs only.
+        Returns $null on any error (error is logged via Write-LogMessage -Type ERROR before returning).
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleCollectLogs
     #>
 
     [CmdletBinding()]
+    [OutputType([String])]
     Param ()
 
     $deploymentRootRaw = $env:VcfEdgeAtScaleRootDirectory
@@ -579,17 +1002,19 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
         try {
             $deploymentRootRaw = Read-Host "Enter deployment root (folder that contains Logs and ServicesYaml)"
         } catch {
-            throw "CollectLogs requires an interactive session or set VcfEdgeAtScaleRootDirectory. $($_.Exception.Message)"
+            Write-LogMessage -Type ERROR -Message "CollectLogs requires an interactive session or set VcfEdgeAtScaleRootDirectory. $($_.Exception.Message)"
+            return $null
         }
     }
     if ([String]::IsNullOrWhiteSpace($deploymentRootRaw)) {
-        throw "A deployment root directory is required for CollectLogs."
+        Write-LogMessage -Type ERROR -Message "A deployment root directory is required for CollectLogs."
+        return $null
     }
-    try {
-        $deploymentRoot = (Resolve-Path -LiteralPath $deploymentRootRaw.Trim()).Path
-    } catch {
-        throw "Could not resolve deployment root: $deploymentRootRaw. $($_.Exception.Message)"
+    if (-not (Test-Path -LiteralPath $deploymentRootRaw.Trim())) {
+        Write-LogMessage -Type ERROR -Message "Could not resolve deployment root — path does not exist: `"$deploymentRootRaw`"."
+        return $null
     }
+    $deploymentRoot = (Resolve-Path -LiteralPath $deploymentRootRaw.Trim()).Path
 
     $defaultInfrastructurePath = Join-Path -Path $deploymentRoot -ChildPath $Script:INFRA_JSON_FILENAME
     $defaultSupervisorPath = Join-Path -Path $deploymentRoot -ChildPath $Script:SUPERVISOR_JSON_FILENAME
@@ -601,7 +1026,8 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
     try {
         $useDefaultsResponse = Read-Host "Use these two files in the zip? (Y/n)"
     } catch {
-        throw "CollectLogs requires Read-Host. $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message "CollectLogs requires an interactive session. $($_.Exception.Message)"
+        return $null
     }
 
     $infrastructureSourcePath = $null
@@ -612,7 +1038,8 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
                 $infrastructureSourcePath = Read-Host "Full path to infrastructure.json to include"
                 $supervisorSourcePath = Read-Host "Full path to supervisor.json to include"
             } catch {
-                throw "CollectLogs requires Read-Host for custom paths. $($_.Exception.Message)"
+                Write-LogMessage -Type ERROR -Message "CollectLogs requires an interactive session for custom paths. $($_.Exception.Message)"
+                return $null
             }
         }
         default {
@@ -622,20 +1049,24 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
     }
 
     if ([String]::IsNullOrWhiteSpace($infrastructureSourcePath) -or [String]::IsNullOrWhiteSpace($supervisorSourcePath)) {
-        throw "Both infrastructure.json and supervisor.json paths are required."
+        Write-LogMessage -Type ERROR -Message "Both infrastructure.json and supervisor.json paths are required."
+        return $null
     }
-    try {
-        $infrastructureSourcePath = (Resolve-Path -LiteralPath $infrastructureSourcePath.Trim()).Path
-        $supervisorSourcePath = (Resolve-Path -LiteralPath $supervisorSourcePath.Trim()).Path
-    } catch {
-        throw "Could not resolve JSON path: $($_.Exception.Message)"
-    }
+
+    # Resolve-Path emits a non-terminating error (not a throw) when the file does not exist, so
+    # try/catch cannot guard it. Test-Path first to avoid polluting the error stream.
+    $infrastructureSourcePath = $infrastructureSourcePath.Trim()
+    $supervisorSourcePath = $supervisorSourcePath.Trim()
     if (-not (Test-Path -LiteralPath $infrastructureSourcePath -PathType Leaf)) {
-        throw "infrastructure file not found: $infrastructureSourcePath"
+        Write-LogMessage -Type ERROR -Message "infrastructure file not found: $infrastructureSourcePath"
+        return $null
     }
     if (-not (Test-Path -LiteralPath $supervisorSourcePath -PathType Leaf)) {
-        throw "supervisor file not found: $supervisorSourcePath"
+        Write-LogMessage -Type ERROR -Message "supervisor file not found: $supervisorSourcePath"
+        return $null
     }
+    $infrastructureSourcePath = (Resolve-Path -LiteralPath $infrastructureSourcePath).Path
+    $supervisorSourcePath = (Resolve-Path -LiteralPath $supervisorSourcePath).Path
 
     $logsSourcePath = Join-Path -Path $deploymentRoot -ChildPath $Script:LOGS_DIR_NAME
     $servicesYamlSourcePath = Join-Path -Path $deploymentRoot -ChildPath $Script:SERVICES_YAML_DIR_NAME
@@ -663,7 +1094,7 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
                 Copy-Item -LiteralPath $logItem.FullName -Destination $logDest -Recurse -Force -ErrorAction Stop
             }
         } else {
-            Write-Warning "Logs folder not found or not a directory: $logsSourcePath. The archive includes an empty Logs folder."
+            Write-LogMessage -Type WARNING -Message "Logs folder not found or not a directory: $logsSourcePath. The archive includes an empty Logs folder."
         }
 
         if (Test-Path -LiteralPath $servicesYamlSourcePath -PathType Container) {
@@ -673,7 +1104,7 @@ function Invoke-VcfEdgeAtScaleCollectLogs {
                 Copy-Item -LiteralPath $yamlItem.FullName -Destination $yamlDest -Recurse -Force -ErrorAction Stop
             }
         } else {
-            Write-Warning "ServicesYaml folder not found or not a directory: $servicesYamlSourcePath. The archive includes an empty ServicesYaml folder."
+            Write-LogMessage -Type WARNING -Message "ServicesYaml folder not found or not a directory: $servicesYamlSourcePath. The archive includes an empty ServicesYaml folder."
         }
 
         if (Test-Path -LiteralPath $zipDestinationPath -PathType Leaf) {
@@ -716,11 +1147,15 @@ function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
 
         .NOTES
         Called at the start of every Start-VcfEdgeAtScale run, after New-LogFile opens the log.
+    
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck
     #>
 
     [CmdletBinding()]
     Param ()
 
+    [CmdletBinding()]
     $manifestPath = Join-Path -Path $Script:ModuleRoot -ChildPath "VcfEdgeAtScale.psd1"
     if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) {
         return
@@ -740,6 +1175,23 @@ function Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck {
 }
 function Write-VcfDeploymentFailureFooter {
 
+    <#
+        .SYNOPSIS
+        Writes a colored failure footer to the console after a deployment error.
+
+        .DESCRIPTION
+        Emits a colored console footer with the log file path (if one was created) and a
+        reminder to run Start-VcfEdgeAtScale -CollectLogs to bundle support artifacts.
+        When no log file was created, reports that check as well.
+
+        .EXAMPLE
+        Write-VcfDeploymentFailureFooter
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
     [CmdletBinding()]
     Param ()
 
@@ -752,6 +1204,734 @@ function Write-VcfDeploymentFailureFooter {
         Write-Host "Deployment failed. No log file was created (check prerequisites)." -ForegroundColor Red
     }
     Write-Host ""
+}
+function Invoke-YamlFileExistenceValidation {
+
+    <#
+    .SYNOPSIS
+        Validates that all required ArgoCD and Harbor YAML files exist on disk.
+
+    .DESCRIPTION
+        Checks that every ArgoCD operator YAML, ArgoCD deployment YAML, Harbor service YAML, and
+        Harbor data-values template YAML referenced by the infrastructure configuration is present
+        and accessible. Skips the check when in cleanup mode or when -ComputeOnly is set (neither
+        ArgoCD nor Harbor is deployed in those cases). Throws VcfDeploymentException when any file
+        is missing.
+
+    .PARAMETER CleanUp
+        When provided, YAML validation is skipped (cleanup does not use deployment YAMLs).
+
+    .PARAMETER ComputeOnly
+        When set, YAML validation is skipped (no supervisor services deployed in compute-only mode).
+
+    .PARAMETER EdgeSitesArray
+        Pre-resolved array of edge site identifiers to restrict which clusters are checked.
+        Pass an empty array to check all clusters.
+
+    .PARAMETER InputData
+        The parsed infrastructure JSON object.
+
+    .PARAMETER SiteIndication
+        Human-readable string describing the scope (e.g. "all sites" or "edgeSite(s) "site1"").
+
+    .EXAMPLE
+        Invoke-YamlFileExistenceValidation -InputData $inputData -SiteIndication "all sites" -EdgeSitesArray @()
+
+        Validates YAML files for all clusters.
+
+    .NOTES
+        Internal helper for Invoke-VcfEdgeAtScaleSiteDeployment. Throws VcfDeploymentException
+        when required files are missing.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
+        [Parameter(Mandatory = $false)] [AllowEmptyCollection()] [String[]]$EdgeSitesArray = @(),
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$InputData,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SiteIndication
+    )
+
+    if ($CleanUp -in @("All", "ArgoCD", "Compute", "Harbor", "Supervisor")) {
+        Write-LogMessage -Type DEBUG -Message "Not performing YAML validation during cleanup."
+        return
+    }
+    if ($ComputeOnly) {
+        Write-LogMessage -Type DEBUG -Message "ComputeOnly: skipping YAML file existence validation (Argo CD and Harbor are not deployed)."
+        return
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Validating YAML file existence for $SiteIndication..."
+    $yamlValidationStartTime = Get-Date
+
+    $clustersToCheck = if ($EdgeSitesArray.Count -gt 0) {
+        $InputData.clusters | Where-Object { $_.edgeSite -in $EdgeSitesArray }
+    } else {
+        $InputData.clusters
+    }
+
+    $missingYamlFiles = [System.Collections.Generic.List[Object]]::new()
+
+    foreach ($cluster in $clustersToCheck) {
+        $currentEdgeSite = $cluster.edgeSite
+        if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableArgoCD") {
+            Write-LogMessage -Type DEBUG -Message "ArgoCD is disabled for edgeSite `"$currentEdgeSite`"; skipping ArgoCD YAML path validation."
+            continue
+        }
+        $argoCdOperatorYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $InputData.common -PropertyName "argoCdOperatorYamlPath"
+        $argoCdDeploymentYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $InputData.common -PropertyName "argoCdDeploymentYamlPath"
+        if ($argoCdOperatorYamlPath) {
+            if (-not (Test-Path -LiteralPath $argoCdOperatorYamlPath)) {
+                $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "ArgoCD Operator YAML"; FilePath = $argoCdOperatorYamlPath })
+            }
+        } else {
+            $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "ArgoCD Operator YAML"; FilePath = "Not specified in configuration" })
+        }
+        if ($argoCdDeploymentYamlPath) {
+            if (-not (Test-Path -LiteralPath $argoCdDeploymentYamlPath)) {
+                $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "ArgoCD Deployment YAML"; FilePath = $argoCdDeploymentYamlPath })
+            }
+        } else {
+            $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "ArgoCD Deployment YAML"; FilePath = "Not specified in configuration" })
+        }
+    }
+
+    foreach ($cluster in $clustersToCheck) {
+        if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $InputData.common -FlagName "disableHarbor") {
+            continue
+        }
+        $currentEdgeSite = $cluster.edgeSite
+        $harborServiceYamlPath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
+        if ($harborServiceYamlPath) {
+            if (-not (Test-Path -LiteralPath $harborServiceYamlPath)) {
+                $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "Harbor Service YAML"; FilePath = $harborServiceYamlPath })
+            }
+        } else {
+            $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "Harbor Service YAML"; FilePath = "Not specified (supervisorServices.parentDirectory / harborServiceYamlFileName)" })
+        }
+        $harborDataValuesTemplatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $InputData.common -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
+        if ($harborDataValuesTemplatePath) {
+            if (-not (Test-Path -LiteralPath $harborDataValuesTemplatePath)) {
+                $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "Harbor Data Values YAML template"; FilePath = $harborDataValuesTemplatePath })
+            }
+        } else {
+            $missingYamlFiles.Add([PSCustomObject]@{ EdgeSite = $currentEdgeSite; FileType = "Harbor Data Values YAML template"; FilePath = "Not specified (supervisorServices.parentDirectory / harborDataTemplateYamlFileName)" })
+        }
+    }
+
+    if ($missingYamlFiles.Count -gt 0) {
+        $errorLines = [System.Collections.Generic.List[String]]::new()
+        foreach ($missingFile in $missingYamlFiles) {
+            $errorLines.Add("  - EdgeSite `"$($missingFile.EdgeSite)`": $($missingFile.FileType) - $($missingFile.FilePath)")
+        }
+        $errorMessage = "Required YAML files are missing or not accessible:`n$($errorLines -join "`n")"
+        Write-LogMessage -Type ERROR -Message $errorMessage
+        $err = "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
+    Write-LogMessage -Type DEBUG -Message "YAML file validation completed for $SiteIndication in $($yamlValidationElapsed.TotalSeconds.ToString('F2')) seconds."
+}
+function Test-TopologyUniquenessOrThrow {
+
+    <#
+        .SYNOPSIS
+        Validates network segment name uniqueness and ESX host uniqueness across all clusters.
+
+        .DESCRIPTION
+        Calls Test-NetworkSegmentNameUniqueness and Test-EsxHostUniqueness on the parsed
+        infrastructure JSON. Throws VcfDeploymentException on the first uniqueness failure
+        encountered, with a user-facing error message pointing to the conflict.
+
+        .PARAMETER EdgeSite
+        Optional edge-site filter passed to Test-NetworkSegmentNameUniqueness.
+
+        .PARAMETER InputData
+        Parsed infrastructure JSON object.
+
+        .PARAMETER SiteIndication
+        Human-readable scope string used in log messages.
+
+        .PARAMETER ValidationStartTime
+        Timestamp from the start of overall validation, used for elapsed-time reporting.
+
+        .EXAMPLE
+        Test-TopologyUniquenessOrThrow -InputData $inputData -SiteIndication "all sites" `
+            -ValidationStartTime $validationStartTime
+
+        .NOTES
+        Called by Invoke-JsonConfigurationValidation. Throws on failure; returns nothing on success.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$InputData,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SiteIndication,
+        [Parameter(Mandatory = $true)] [DateTime]$ValidationStartTime
+    )
+
+    $networkValidationStartTime = Get-Date
+    Write-LogMessage -Type DEBUG -Message "Validating network segment names for $SiteIndication..."
+    $networkSegmentValidationParams = @{ InputData = $InputData }
+    if ($EdgeSite) { $networkSegmentValidationParams.EdgeSite = $EdgeSite }
+    $networkSegmentNameValidationResult = Test-NetworkSegmentNameUniqueness @networkSegmentValidationParams
+    if (-not $networkSegmentNameValidationResult.IsValid) {
+        $err = "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
+        Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message $err
+        Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate network segment names. Please fix the naming conflicts and try again."
+        throw [VcfDeploymentException]::new($err)
+    } else {
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Network segment name uniqueness validation passed."
+    }
+    $networkValidationElapsed = (Get-Date) - $networkValidationStartTime
+    $totalElapsed = (Get-Date) - $ValidationStartTime
+    Write-LogMessage -Type DEBUG -Message "Network segment name validation completed for $SiteIndication in $($networkValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+
+    Write-LogMessage -Type DEBUG -Message "Validating ESX host uniqueness across all clusters..."
+    $esxHostValidationResult = Test-EsxHostUniqueness -InputData $InputData
+    if (-not $esxHostValidationResult.IsValid) {
+        $err = "ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
+        Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message $err
+        Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate ESX hosts. Each host must belong to exactly one edge site."
+        throw [VcfDeploymentException]::new($err)
+    } else {
+        Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "ESX host uniqueness validation passed."
+    }
+}
+function Invoke-JsonConfigurationValidation {
+
+    <#
+    .SYNOPSIS
+        Runs shallow, deeper, network-segment, and ESX-host uniqueness validation on the JSON
+        configuration files.
+
+    .DESCRIPTION
+        Performs the full pre-deployment configuration validation sequence. Skipped during cleanup.
+        Runs Test-JsonShallowValidation, the daily update check, Test-JsonDeeperValidation,
+        Test-NetworkSegmentNameUniqueness, and Test-EsxHostUniqueness. Throws on the first
+        validation failure encountered.
+
+    .PARAMETER CleanUp
+        When provided, all JSON validation is skipped (cleanup does not require a fully valid
+        configuration).
+
+    .PARAMETER ComputeOnly
+        When set, supervisor-specific properties are excluded from shallow and deeper validation.
+
+    .PARAMETER EdgeSite
+        Optional comma-delimited edge site filter passed to shallow and deeper validators.
+
+    .PARAMETER InputData
+        The parsed infrastructure JSON object (used for network-segment and ESX-host checks).
+
+    .PARAMETER InfrastructureJson
+        Resolved path to infrastructure.json.
+
+    .PARAMETER SiteIndication
+        Human-readable scope string for log messages.
+
+    .PARAMETER SupervisorJson
+        Resolved path to supervisor.json.
+
+    .PARAMETER ValidationStartTime
+        Timestamp from the start of overall validation, used for elapsed-time reporting.
+
+    .EXAMPLE
+        Invoke-JsonConfigurationValidation -InfrastructureJson $infraPath -SupervisorJson $supPath `
+            -InputData $inputData -SiteIndication "all sites" -ValidationStartTime (Get-Date)
+
+        Validates both JSON files with no edge-site filter.
+
+    .NOTES
+        Internal helper for Invoke-VcfEdgeAtScaleSiteDeployment. Reads $Script:NewLogFileCreatedThisSession
+        to gate the daily update check.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Object]$InputData,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SiteIndication,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson,
+        [Parameter(Mandatory = $true)] [DateTime]$ValidationStartTime
+    )
+
+    if ($CleanUp -in @("All", "ArgoCD", "Compute", "Harbor", "Supervisor")) {
+        Write-LogMessage -Type DEBUG -Message "Cleanup mode: skipping full JSON validation; configuration will be parsed in Initialize-VcfEdgeAtScale."
+        return
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Validating JSON configuration files for $SiteIndication..."
+
+    $shallowValidationStartTime = Get-Date
+    Write-LogMessage -Type INFO -Message "Checking for required JSON properties for $SiteIndication..."
+    $shallowValidationParams = @{
+        InfrastructureJson = $InfrastructureJson
+        SupervisorJson     = $SupervisorJson
+    }
+    if ($ComputeOnly) { $shallowValidationParams.ComputeOnly = $true }
+    if ($EdgeSite) { $shallowValidationParams.EdgeSite = $EdgeSite }
+    try {
+        Test-JsonShallowValidation @shallowValidationParams
+        $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
+        $totalElapsed = (Get-Date) - $ValidationStartTime
+        Write-LogMessage -Type DEBUG -Message "Required properties validation completed for $SiteIndication in $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+    } catch {
+        $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
+        Write-LogMessage -Type ERROR -Message "Required properties validation failed for $SiteIndication after $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds."
+        throw
+    }
+
+    if ($Script:NewLogFileCreatedThisSession) {
+        try {
+            Invoke-VcfEdgeAtScaleUpdateCheck -Quiet -InputData $InputData
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Daily update check failed silently: $($_.Exception.Message)"
+        }
+    }
+
+    $deeperValidationStartTime = Get-Date
+    Write-LogMessage -Type INFO -Message "Validating property formats and values for $SiteIndication..."
+    $deeperValidationParams = @{
+        InfrastructureJson = $InfrastructureJson
+        SupervisorJson     = $SupervisorJson
+    }
+    if ($ComputeOnly) { $deeperValidationParams.ComputeOnly = $true }
+    if ($EdgeSite) { $deeperValidationParams.EdgeSite = $EdgeSite }
+    try {
+        Test-JsonDeeperValidation @deeperValidationParams
+        $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
+        $totalElapsed = (Get-Date) - $ValidationStartTime
+        Write-LogMessage -Type DEBUG -Message "Property format validation completed for $SiteIndication in $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
+    } catch {
+        $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
+        Write-LogMessage -Type ERROR -Message "Property format validation failed for $SiteIndication after $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds."
+        throw
+    }
+
+    $topologyParams = @{ InputData = $InputData; SiteIndication = $SiteIndication; ValidationStartTime = $ValidationStartTime }
+    if ($EdgeSite) { $topologyParams.EdgeSite = $EdgeSite }
+    Test-TopologyUniquenessOrThrow @topologyParams
+
+    $validationEndTime = Get-Date
+    $totalValidationTime = $validationEndTime - $ValidationStartTime
+    Write-LogMessage -Type DEBUG -Message "JSON configuration validation completed successfully for $SiteIndication in $($totalValidationTime.TotalSeconds.ToString('F2')) seconds."
+}
+function Invoke-VcfEdgeAtScaleSiteDeployment {
+
+    <#
+    .SYNOPSIS
+        Validates configuration files and orchestrates the full per-site edge deployment workflow.
+
+    .DESCRIPTION
+        Extracted from Start-VcfEdgeAtScale to separate the deployment orchestration logic from the
+        outer parameter-dispatch shell. This function:
+
+        - Sets rollback preference and module-scope flags from caller parameters.
+        - Warns when the on-disk module has been updated since the session imported it.
+        - Enforces the VCF PowerCLI minimum version.
+        - Auto-refreshes Docs help JSON files when the module has been upgraded.
+        - Validates infrastructure JSON and supervisor JSON (shallow, deep, network segment
+          uniqueness, ESX host uniqueness, YAML file existence).
+        - Exits after validation when -ValidateOnly is set.
+        - Normalizes the -CleanUp scope string.
+        - Runs the Harbor environment-variable preflight when Harbor is enabled.
+        - Delegates to Initialize-VcfEdgeAtScale for the actual vCenter connection and per-site
+          deployment or cleanup loop.
+
+    .PARAMETER AcceptBadCheckResults
+        Forwarded to Initialize-VcfEdgeAtScale. When set, proceeds without prompting on red
+        vSAN or vLCM alarm states.
+
+    .PARAMETER CleanUp
+        Optional cleanup scope. When provided, Initialize-VcfEdgeAtScale runs cleanup instead of
+        deploying. Must be one of: All, ArgoCD, Compute, Harbor, Supervisor.
+
+    .PARAMETER ComputeOnly
+        Forwarded to Initialize-VcfEdgeAtScale. When set, skips the supervisor and post-supervisor
+        steps.
+
+    .PARAMETER DelayBeforeAddingNextHostSeconds
+        Forwarded to Initialize-VcfEdgeAtScale. Seconds to wait before adding the 2nd+ host to
+        each cluster during deployment.
+
+    .PARAMETER DeploymentRootDirectory
+        Resolved path to the deployment root directory, used for Docs help JSON auto-refresh.
+
+    .PARAMETER EdgeSite
+        Optional comma-delimited list of edge site identifiers. When provided, only the matching
+        clusters are validated and deployed.
+
+    .PARAMETER Force
+        Forwarded to Initialize-VcfEdgeAtScale. Bypasses cleanup confirmation when
+        common.labenvironment is true.
+
+    .PARAMETER InfrastructureJson
+        Resolved path to infrastructure.json.
+
+    .PARAMETER RollbackOnFailure
+        Controls rollback behavior on failure. $true = always rollback without prompting.
+        $false = never rollback (leave site in current state). $null = prompt with Y/N/Always.
+
+    .PARAMETER SaveHarborYaml
+        Forwarded to Initialize-VcfEdgeAtScale. When set, saves the rendered Harbor data values
+        YAML file after installation.
+
+    .PARAMETER SupervisorJson
+        Resolved path to supervisor.json.
+
+    .PARAMETER ValidateOnly
+        When set, exits after configuration validation without deploying or running cleanup.
+
+    .EXAMPLE
+        Invoke-VcfEdgeAtScaleSiteDeployment -DeploymentRootDirectory $rootDir -InfrastructureJson $infraPath -SupervisorJson $supPath
+
+        Validates both JSON files and runs the full deployment workflow.
+
+    .EXAMPLE
+        Invoke-VcfEdgeAtScaleSiteDeployment -DeploymentRootDirectory $rootDir -InfrastructureJson $infraPath -SupervisorJson $supPath -ValidateOnly
+
+        Validates both JSON files then exits without deploying.
+
+    .NOTES
+        Internal helper for Start-VcfEdgeAtScale. Not intended for direct consumer use.
+        Raises VcfDeploymentException on known configuration or deployment failures.
+
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$AcceptBadCheckResults,
+        [Parameter(Mandatory = $false)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(Mandatory = $false)] [Switch]$ComputeOnly,
+        [Parameter(Mandatory = $false)] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DeploymentRootDirectory,
+        [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter(Mandatory = $false)] [Switch]$Force,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$InfrastructureJson,
+        [Parameter(Mandatory = $false)] [Nullable[Bool]]$RollbackOnFailure,
+        [Parameter(Mandatory = $false)] [Switch]$SaveHarborYaml,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorJson,
+        [Parameter(Mandatory = $false)] [Switch]$ValidateOnly
+    )
+
+    # $null = prompt (Y/N/Always); $true = always rollback; $false = never rollback.
+    $Script:RollbackOnFailurePreference = $RollbackOnFailure
+    $Script:RollbackAlwaysFromPrompt = $false
+    $Script:CleanUpOnly = $false
+
+    # Warn if the module on disk has been updated since this session imported it.
+    Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck
+
+    # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
+    Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
+
+    # Silently refresh help JSON files in Docs if the module has been upgraded since they were last copied.
+    try {
+        $helpTemplatesPath = Get-ModuleTemplatesPath
+        $helpDocsDirectory = Join-Path -Path $DeploymentRootDirectory -ChildPath $Script:DOCS_DIR_NAME
+        foreach ($helpFileName in @($Script:INFRA_HELP_FILENAME, $Script:SUPERVISOR_HELP_FILENAME)) {
+            $null = Update-HelpJsonIfStale `
+                -DocsPath (Join-Path -Path $helpDocsDirectory -ChildPath $helpFileName) `
+                -TemplatePath (Join-Path -Path $helpTemplatesPath -ChildPath $helpFileName)
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Help JSON auto-refresh skipped: $($_.Exception.Message)"
+    }
+
+    Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
+
+    # Perform validation with progress indication.
+    Write-Host ""
+    $validationStartTime = Get-Date
+    $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
+    if ($null -eq $inputData) {
+        $err = "[E-CONFIG-NULL-001] Infrastructure JSON produced no data after load."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
+    if ($EdgeSite) {
+        $edgeSitesArrayForValidation = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputData
+    } else {
+        $edgeSitesArrayForValidation = @()
+    }
+    $siteIndication = if ($edgeSitesArrayForValidation.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArrayForValidation -join '", "')`"" } else { "all sites" }
+
+    $edgeSiteErrors = [System.Collections.Generic.List[String]]::new()
+    foreach ($cluster in $inputData.clusters) {
+        $siteName = [String]($cluster.edgeSite)
+        if ([String]::IsNullOrWhiteSpace($siteName)) {
+            $edgeSiteErrors.Add("clusters[].edgeSite: a required edgeSite name is missing or empty.")
+        } elseif (-not (Test-EdgeSiteNameValid -Name $siteName)) {
+            $edgeSiteErrors.Add("clusters[`"$siteName`"].edgeSite: must be 1-80 chars, lowercase letters, digits, and hyphens only; must not start or end with a hyphen.")
+        }
+    }
+    if ($edgeSiteErrors.Count -gt 0) {
+        foreach ($err in $edgeSiteErrors) {
+            Write-LogMessage -Type ERROR -Message $err
+        }
+        throw [VcfDeploymentException]::new("One or more edgeSite names failed validation. See log for details.")
+    }
+
+    $yamlValidationParams = @{
+        InputData       = $inputData
+        SiteIndication  = $siteIndication
+        EdgeSitesArray  = $edgeSitesArrayForValidation
+    }
+    if ($CleanUp) { $yamlValidationParams.CleanUp = $CleanUp }
+    if ($ComputeOnly) { $yamlValidationParams.ComputeOnly = $true }
+    Invoke-YamlFileExistenceValidation @yamlValidationParams
+
+    $jsonValidationParams = @{
+        InfrastructureJson  = $InfrastructureJson
+        SupervisorJson      = $SupervisorJson
+        InputData           = $inputData
+        SiteIndication      = $siteIndication
+        ValidationStartTime = $validationStartTime
+    }
+    if ($CleanUp) { $jsonValidationParams.CleanUp = $CleanUp }
+    if ($ComputeOnly) { $jsonValidationParams.ComputeOnly = $true }
+    if ($EdgeSite) { $jsonValidationParams.EdgeSite = $EdgeSite }
+    Invoke-JsonConfigurationValidation @jsonValidationParams
+
+    # When -ValidateOnly, exit after validation without deploying or cleaning up.
+    if ($ValidateOnly) {
+        Write-LogMessage -Type INFO -Message "ValidateOnly: validation passed. Exiting without deployment."
+        return
+    }
+
+    # If -CleanUp was specified but value is null or empty, show usage and return.
+    if ($PSBoundParameters.ContainsKey("CleanUp") -and [String]::IsNullOrWhiteSpace($CleanUp)) {
+        Write-LogMessage -Type WARNING -Message "-CleanUp requires one of: Supervisor, Compute, All, ArgoCD, Harbor."
+        Write-Host ""
+        Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
+        Write-Host "  Supervisor - Remove only the supervisor (compute remains)."
+        Write-Host "  Compute   - Remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed."
+        Write-Host "  All       - Remove supervisor first, then compute."
+        Write-Host "  ArgoCD    - Remove only the ArgoCD supervisor namespace for each cluster."
+        Write-Host "  Harbor    - Remove only the Harbor Supervisor Service from the supervisor for each cluster."
+        return
+    }
+
+    # Normalize -CleanUp to All, ArgoCD, Compute, Harbor, or Supervisor (accept lowercase).
+    if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
+        $cu = $CleanUp.Trim().ToLower()
+        switch ($cu) {
+            "all" { $CleanUp = "All" }
+            "argocd" { $CleanUp = "ArgoCD" }
+            "compute" { $CleanUp = "Compute" }
+            "harbor" { $CleanUp = "Harbor" }
+            "supervisor" { $CleanUp = "Supervisor" }
+            default {
+                Write-LogMessage -Type WARNING -Message "-CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor (got: $CleanUp)."
+                Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
+                return
+            }
+        }
+    }
+
+    # Before deployment begins, resolve any Harbor $env: secrets that are not yet set.
+    # This prompts the user now (masked input, once per variable) rather than mid-deployment.
+    # Skipped for cleanup-only, validate-only, -ComputeOnly, or when Harbor is disabled for every cluster in scope.
+    # When -ComputeOnly is set, Harbor is not deployed: operators may keep a full harborConfiguration
+    # (including $env: placeholders for a later supervisor run) without defining those variables yet.
+    if ($null -ne $inputData -and [String]::IsNullOrWhiteSpace($CleanUp) -and -not $ComputeOnly) {
+        $clustersForHarborPreflight = if ($EdgeSite -and $null -ne $edgeSitesArrayForValidation -and $edgeSitesArrayForValidation.Count -gt 0) {
+            @($inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArrayForValidation })
+        } else {
+            @($inputData.clusters)
+        }
+        $anyHarborEnabledForPreflight = $false
+        foreach ($clusterHp in $clustersForHarborPreflight) {
+            if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterHp -CommonData $inputData.common -FlagName "disableHarbor")) {
+                $anyHarborEnabledForPreflight = $true
+                break
+            }
+        }
+        if ($anyHarborEnabledForPreflight) {
+            $harborPreflightParams = @{ InputData = $inputData }
+            if ($EdgeSite) { $harborPreflightParams.EdgeSite = $EdgeSite }
+            Invoke-HarborEnvVarPreflight @harborPreflightParams
+        } else {
+            Write-LogMessage -Type DEBUG -Message "Skipping Harbor environment-variable preflight (Harbor disabled for all clusters in scope)."
+        }
+    }
+
+    # Initialize the edge deployment workflow. Forward explicit parameters (do not rely on
+    # PowerShell dynamic scoping for AcceptBadCheckResults / DelayBeforeAddingNextHostSeconds).
+    $initParams = @{
+        InfrastructureJson               = $InfrastructureJson
+        SupervisorJson                   = $SupervisorJson
+        DelayBeforeAddingNextHostSeconds = $DelayBeforeAddingNextHostSeconds
+    }
+    if ($AcceptBadCheckResults) {
+        $initParams.AcceptBadCheckResults = $true
+    }
+    if ($EdgeSite) {
+        $initParams.EdgeSite = $EdgeSite
+    }
+    if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
+        $initParams.CleanUp = $CleanUp
+    }
+    if ($ComputeOnly) {
+        $initParams.ComputeOnly = $true
+    }
+    if ($Force) {
+        $initParams.Force = $true
+    }
+    if ($SaveHarborYaml) {
+        $initParams.SaveHarborYaml = $true
+    }
+    Initialize-VcfEdgeAtScale @initParams
+}
+function Invoke-VcfEdgeAtScaleVersionDisplay {
+
+    <#
+        .SYNOPSIS
+        Resolves and logs the current VcfEdgeAtScale module version.
+
+        .DESCRIPTION
+        Looks up the version in the following order:
+        (1) Loaded module metadata via Get-Module.
+        (2) The module manifest file (.psd1) located relative to $PSScriptRoot.
+        (3) The script-scope $Script:ModuleVersion fallback.
+        Initializes the log file under $VcfEdgeRootDirectory when provided and the directory exists.
+
+        .PARAMETER VcfEdgeRootDirectory
+        Optional base directory under which to initialize the log file before logging the version.
+
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleVersionDisplay -VcfEdgeRootDirectory $env:VcfEdgeAtScaleRootDirectory
+
+        .NOTES
+        Does not throw. Logs the resolved version string via Write-LogMessage.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [String]$VcfEdgeRootDirectory = ""
+    )
+
+    if (-not [String]::IsNullOrWhiteSpace($VcfEdgeRootDirectory) -and (Test-Path -LiteralPath $VcfEdgeRootDirectory.Trim() -PathType Container)) {
+        New-LogFile -BaseDirectory $VcfEdgeRootDirectory.Trim() -Directory $Script:LOGS_DIR_NAME
+    } else {
+        New-LogFile
+    }
+
+    $versionToDisplay = $null
+    $loadedModule = Get-Module -Name "VcfEdgeAtScale" | Select-Object -First 1
+    if ($loadedModule -and $loadedModule.Version -and $loadedModule.Version -ne [version]"0.0") {
+        $versionToDisplay = $loadedModule.Version.ToString()
+    } else {
+        $modulePath = $null
+        if ($PSScriptRoot) {
+            $modulePath = $PSScriptRoot
+        } else {
+            $moduleInfo = Get-Module -Name "VcfEdgeAtScale" -ListAvailable | Select-Object -First 1
+            if ($moduleInfo -and $moduleInfo.ModuleBase) {
+                $modulePath = $moduleInfo.ModuleBase
+            }
+        }
+        if ($modulePath) {
+            $manifestPath = Join-Path -Path $modulePath -ChildPath "VcfEdgeAtScale.psd1"
+            if (Test-Path $manifestPath) {
+                try {
+                    $manifest = Import-PowerShellDataFile -Path $manifestPath
+                    if ($manifest.ModuleVersion) {
+                        $versionToDisplay = $manifest.ModuleVersion.ToString()
+                    }
+                } catch {
+                    Write-LogMessage -Type DEBUG -Message "Manifest import failed; using fallback. $($_.Exception.Message)"
+                }
+            }
+        }
+        if (-not $versionToDisplay) {
+            $versionToDisplay = $Script:ModuleVersion
+        }
+    }
+    Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $versionToDisplay"
+}
+function Resolve-VcfEdgeAtScaleDeployPaths {
+
+    <#
+        .SYNOPSIS
+        Resolves the deployment root directory and default JSON configuration paths from the environment.
+
+        .DESCRIPTION
+        Reads $env:VcfEdgeAtScaleRootDirectory, resolves the path, and defaults $InfrastructureJson and
+        $SupervisorJson to files under that directory when the caller did not provide explicit paths.
+        Returns a PSCustomObject with RootDirectory, InfrastructureJson, and SupervisorJson properties.
+        Returns $null and logs a warning when VcfEdgeAtScaleRootDirectory is not set or not resolvable,
+        or returns $null with an error when a required JSON path resolves to an empty string.
+
+        .PARAMETER InfrastructureJson
+        Optional explicit path to infrastructure.json. When empty, defaults to
+        Join-Path($RootDirectory, "infrastructure.json").
+
+        .PARAMETER SupervisorJson
+        Optional explicit path to supervisor.json. When empty, defaults to
+        Join-Path($RootDirectory, "supervisor.json").
+
+        .EXAMPLE
+        $paths = Resolve-VcfEdgeAtScaleDeployPaths -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
+
+        .NOTES
+        Returns $null on failure (caller must check and return early). Does not throw.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
+    Param (
+        [Parameter(Mandatory = $false)] [String]$InfrastructureJson = "",
+        [Parameter(Mandatory = $false)] [String]$SupervisorJson = ""
+    )
+
+    $vcfEdgeRootRaw = $env:VcfEdgeAtScaleRootDirectory
+    if ([String]::IsNullOrWhiteSpace($vcfEdgeRootRaw)) {
+        $examplePath = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
+        Write-LogMessage -Type WARNING -Message (
+            "VcfEdgeAtScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
+            "The following is an example only (your default Initialize path is Join-Path `$HOME '$($Script:DEFAULT_DEPLOY_DIR_NAME)'; use the directory you chose at Initialize if different): " +
+            "`$env:VcfEdgeAtScaleRootDirectory = `"$examplePath`""
+        )
+        return $null
+    }
+
+    if (-not (Test-Path -LiteralPath $vcfEdgeRootRaw.Trim())) {
+        Write-LogMessage -Type ERROR -Message "VcfEdgeAtScaleRootDirectory is set but the path does not exist. Ensure the directory exists. Value: `"$vcfEdgeRootRaw`"."
+        return $null
+    }
+    $rootDirectory = (Resolve-Path -LiteralPath $vcfEdgeRootRaw.Trim()).Path
+
+    if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
+        $InfrastructureJson = Join-Path -Path $rootDirectory -ChildPath $Script:INFRA_JSON_FILENAME
+    }
+    if ([String]::IsNullOrWhiteSpace($SupervisorJson)) {
+        $SupervisorJson = Join-Path -Path $rootDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME
+    }
+    if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
+        Write-LogMessage -Type ERROR -Message "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeAtScaleRootDirectory."
+        return $null
+    }
+    if ([String]::IsNullOrWhiteSpace($SupervisorJson)) {
+        Write-LogMessage -Type ERROR -Message "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeAtScaleRootDirectory."
+        return $null
+    }
+    return [PSCustomObject]@{
+        RootDirectory      = $rootDirectory
+        InfrastructureJson = $InfrastructureJson
+        SupervisorJson     = $SupervisorJson
+    }
 }
 function Start-VcfEdgeAtScale {
 
@@ -840,10 +2020,10 @@ function Start-VcfEdgeAtScale {
         When VcfEdgeAtScaleRootDirectory resolves to a fully initialized layout (Docs, Logs, ServicesYaml, root JSON, all
         shipped YAML files under ServicesYaml), asks whether to initialize a different directory; answering N reuses that path without re-typing it.
         Section output uses console colors. Sets VcfEdgeAtScaleRootDirectory for the current session. On
-        Windows, persists it via [System.Environment]::SetEnvironmentVariable (User scope). On macOS/Linux,
-        automatically appends the export line to $PROFILE so new sessions inherit it. Prints a fallback
-        manual command if the Windows persist step fails. Other switches are ignored except -LogLevel and
-        -InitializeTemplatesOnly.
+        Windows, persists it via [System.Environment]::SetEnvironmentVariable (User scope) and also appends
+        to $PROFILE so sessions not spawned by Explorer (SSH, some terminal emulators) inherit it reliably.
+        On macOS/Linux, appends the export line to $PROFILE. Prints a fallback manual command if the
+        Windows registry persist step fails. Other switches are ignored except -LogLevel and -InitializeTemplatesOnly.
 
     .PARAMETER InitializeTemplatesOnly
         Use only with -Initialize. Refreshes Supervisor service YAML and Docs files from Templates without creating or
@@ -939,36 +2119,31 @@ function Start-VcfEdgeAtScale {
 
         Checks PSGallery for a newer version of VcfEdgeAtScale and prompts to install if one is found.
 
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
     #>
 
     [CmdletBinding(DefaultParameterSetName = "Deploy")]
     Param (
         # --- Deploy (default) ---
         [Parameter(ParameterSetName = "Deploy")] [Switch]$AcceptBadCheckResults,
+        [Parameter(ParameterSetName = "CheckForUpdates", Mandatory = $true)] [Switch]$CheckForUpdates,
+        [Parameter(ParameterSetName = "CleanUp", Mandatory = $true)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(ParameterSetName = "CollectLogs", Mandatory = $true)] [Switch]$CollectLogs,
         [Parameter(ParameterSetName = "Deploy")] [Switch]$ComputeOnly,
         [Parameter(ParameterSetName = "Deploy")] [ValidateRange(0, 300)] [Int]$DelayBeforeAddingNextHostSeconds = 0,
-        [Parameter(ParameterSetName = "Deploy")] [Nullable[bool]]$RollbackOnFailure,
-        [Parameter(ParameterSetName = "Deploy")] [Switch]$SaveHarborYaml,
-        [Parameter(ParameterSetName = "Deploy")] [Switch]$ValidateOnly,
-        # --- CleanUp ---
-        [Parameter(ParameterSetName = "CleanUp", Mandatory = $true)] [ValidateSet("All", "ArgoCD", "Compute", "Harbor", "Supervisor")] [String]$CleanUp,
+        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
         [Parameter(ParameterSetName = "CleanUp")] [Switch]$Force,
-        # --- Initialize ---
+        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [Parameter(ParameterSetName = "CheckForUpdates")] [String]$InfrastructureJson,
         [Parameter(ParameterSetName = "Initialize", Mandatory = $true)] [Switch]$Initialize,
         [Parameter(ParameterSetName = "Initialize")] [Switch]$InitializeTemplatesOnly,
-        # --- CollectLogs ---
-        [Parameter(ParameterSetName = "CollectLogs", Mandatory = $true)] [Switch]$CollectLogs,
-        # --- Version ---
-        [Parameter(ParameterSetName = "Version", Mandatory = $true)] [Switch]$Version,
-        # --- CheckForUpdates ---
-        [Parameter(ParameterSetName = "CheckForUpdates", Mandatory = $true)] [Switch]$CheckForUpdates,
-        # --- Deploy + CleanUp ---
-        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [ValidateNotNullOrEmpty()] [String]$EdgeSite,
+        [Parameter()] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO",
+        [Parameter(ParameterSetName = "Deploy")] [Nullable[bool]]$RollbackOnFailure,
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$SaveHarborYaml,
         [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [String]$SupervisorJson,
-        # --- Deploy + CleanUp + CheckForUpdates ---
-        [Parameter(ParameterSetName = "Deploy")] [Parameter(ParameterSetName = "CleanUp")] [Parameter(ParameterSetName = "CheckForUpdates")] [String]$InfrastructureJson,
-        # --- All sets ---
-        [Parameter()] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$LogLevel = "INFO"
+        [Parameter(ParameterSetName = "Deploy")] [Switch]$ValidateOnly,
+        [Parameter(ParameterSetName = "Version", Mandatory = $true)] [Switch]$Version
     )
 
     # Initialize configured log level from parameter (normalize to uppercase). Set before -Version so Write-LogMessage honors the threshold.
@@ -976,9 +2151,12 @@ function Start-VcfEdgeAtScale {
 
     if ($Initialize) {
         $initBaseDirectory = Invoke-VcfEdgeAtScaleModuleInitialize -TemplatesOnly:$InitializeTemplatesOnly
-        if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $initBaseDirectory -PathType Container)) {
-            New-LogFile -BaseDirectory $initBaseDirectory -Directory $Script:LOGS_DIR_NAME
+        # $null return means an error was already logged by the callee; exit without showing next-step hints.
+        if ([String]::IsNullOrWhiteSpace($initBaseDirectory) -or -not (Test-Path -LiteralPath $initBaseDirectory -PathType Container)) {
+            return
         }
+
+        New-LogFile -BaseDirectory $initBaseDirectory -Directory $Script:LOGS_DIR_NAME
 
         # Print next-step hints for customizing JSON; direct editing first, browser UI second.
         $pyExe = (Get-PythonExecutable)?.Executable ?? "python3"
@@ -989,7 +2167,7 @@ function Start-VcfEdgeAtScale {
         Write-Host "    Run 'Start-VcfEdgeAtScale -ValidateOnly' to validate before deploying." -ForegroundColor Gray
         $toolScript = Join-Path -Path (Join-Path -Path $initBaseDirectory -ChildPath $Script:TOOLS_DIR_NAME) -ChildPath "veas-json-generator.py"
         Write-Host "  Option 2 — Browser-based UI:" -ForegroundColor White
-        if (-not [String]::IsNullOrWhiteSpace($initBaseDirectory) -and (Test-Path -LiteralPath $toolScript)) {
+        if (Test-Path -LiteralPath $toolScript) {
             Write-Host "    $pyExe `"$toolScript`"" -ForegroundColor Gray
         } else {
             Write-Host "    $pyExe `"<base-dir>\Tools\veas-json-generator.py`"" -ForegroundColor Gray
@@ -1004,55 +2182,7 @@ function Start-VcfEdgeAtScale {
     }
 
     if ($Version) {
-        $versionLogBase = $env:VcfEdgeAtScaleRootDirectory
-        if (-not [String]::IsNullOrWhiteSpace($versionLogBase) -and (Test-Path -LiteralPath $versionLogBase.Trim() -PathType Container)) {
-            New-LogFile -BaseDirectory $versionLogBase.Trim() -Directory $Script:LOGS_DIR_NAME
-        } else {
-            New-LogFile
-        }
-        $versionToDisplay = $null
-
-        # Try to get version from loaded module first.
-
-        $loadedModule = Get-Module -Name "VcfEdgeAtScale" | Select-Object -First 1
-        if ($loadedModule -and $loadedModule.Version -and $loadedModule.Version -ne [version]"0.0") {
-            $versionToDisplay = $loadedModule.Version.ToString()
-        } else {
-            # Try to get version from manifest file.
-
-            $modulePath = $null
-            if ($PSScriptRoot) {
-                $modulePath = $PSScriptRoot
-            } else {
-                # Try to find module path from loaded module.
-
-                $moduleInfo = Get-Module -Name "VcfEdgeAtScale" -ListAvailable | Select-Object -First 1
-                if ($moduleInfo -and $moduleInfo.ModuleBase) {
-                    $modulePath = $moduleInfo.ModuleBase
-                }
-            }
-
-            if ($modulePath) {
-                $manifestPath = Join-Path $modulePath "VcfEdgeAtScale.psd1"
-                if (Test-Path $manifestPath) {
-                    try {
-                        $manifest = Import-PowerShellDataFile -Path $manifestPath
-                        if ($manifest.ModuleVersion) {
-                            $versionToDisplay = $manifest.ModuleVersion.ToString()
-                        }
-                    } catch {
-                        Write-LogMessage -Type DEBUG -Message "Manifest import failed; using fallback. $($_.Exception.Message)"
-                    }
-                }
-            }
-
-            # Fall back to script variable if we couldn't get version from manifest.
-            if (-not $versionToDisplay) {
-                $versionToDisplay = $Script:ModuleVersion
-            }
-        }
-
-        Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $versionToDisplay"
+        Invoke-VcfEdgeAtScaleVersionDisplay -VcfEdgeRootDirectory $env:VcfEdgeAtScaleRootDirectory
         return
     }
 
@@ -1076,35 +2206,13 @@ function Start-VcfEdgeAtScale {
         return
     }
 
-    $vcfEdgeRootRaw = $env:VcfEdgeAtScaleRootDirectory
-    if ([String]::IsNullOrWhiteSpace($vcfEdgeRootRaw)) {
-        $exampleVcfEdgeRootDirectory = Join-Path -Path $HOME -ChildPath $Script:DEFAULT_DEPLOY_DIR_NAME
-        Write-Warning (
-            "VcfEdgeAtScaleRootDirectory is not set. Run Start-VcfEdgeAtScale -Initialize, or set it for this session. " +
-            "The following is an example only (your default Initialize path is Join-Path `$HOME '$($Script:DEFAULT_DEPLOY_DIR_NAME)'; use the directory you chose at Initialize if different): " +
-            "`$env:VcfEdgeAtScaleRootDirectory = `"$exampleVcfEdgeRootDirectory`""
-        )
+    $deployPaths = Resolve-VcfEdgeAtScaleDeployPaths -InfrastructureJson $InfrastructureJson -SupervisorJson $SupervisorJson
+    if (-not $deployPaths) {
         return
     }
-
-    try {
-        $vcfEdgeRootDirectory = (Resolve-Path -LiteralPath $vcfEdgeRootRaw.Trim()).Path
-    } catch {
-        throw "VcfEdgeAtScaleRootDirectory is set but the path could not be resolved. Ensure the directory exists. Value: $vcfEdgeRootRaw. $($_.Exception.Message)"
-    }
-
-    if (-not $PSBoundParameters.ContainsKey("InfrastructureJson") -or [String]::IsNullOrWhiteSpace($InfrastructureJson)) {
-        $InfrastructureJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:INFRA_JSON_FILENAME
-    }
-    if (-not $PSBoundParameters.ContainsKey("SupervisorJson") -or [String]::IsNullOrWhiteSpace($SupervisorJson)) {
-        $SupervisorJson = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:SUPERVISOR_JSON_FILENAME
-    }
-    if ([String]::IsNullOrWhiteSpace($InfrastructureJson)) {
-        throw "InfrastructureJson resolved to an empty path. Provide -InfrastructureJson or fix VcfEdgeAtScaleRootDirectory."
-    }
-    if ([String]::IsNullOrWhiteSpace($SupervisorJson)) {
-        throw "SupervisorJson resolved to an empty path. Provide -SupervisorJson or fix VcfEdgeAtScaleRootDirectory."
-    }
+    $vcfEdgeRootDirectory = $deployPaths.RootDirectory
+    $InfrastructureJson   = $deployPaths.InfrastructureJson
+    $SupervisorJson       = $deployPaths.SupervisorJson
 
     New-LogFile -BaseDirectory $vcfEdgeRootDirectory -Directory $Script:LOGS_DIR_NAME
 
@@ -1112,375 +2220,38 @@ function Start-VcfEdgeAtScale {
     try {
         $Global:ProgressPreference = "Continue"
 
-        # Rollback on failure: only set from parameter when explicitly passed; omitted = prompt (Y/N/Always). $true = always rollback (no prompt), $false = never rollback.
-        if ($PSBoundParameters.ContainsKey("RollbackOnFailure")) {
-            $Script:RollbackOnFailurePreference = $RollbackOnFailure
-        } else {
-            $Script:RollbackOnFailurePreference = $null
-        }
-        $Script:RollbackAlwaysFromPrompt = $false
-        $Script:CleanUpOnly = $false
-
-        # Warn if the module on disk has been updated since this session imported it.
-        Invoke-VcfEdgeAtScaleModuleVersionStalenessCheck
-
-        # Enforce VCF.PowerCLI minimum even when today's log file already existed (New-LogFile only runs Get-EnvironmentSetup on first creation).
-        Initialize-ScriptVcfPowerCliModuleVersion -MinimumVcfPowerCliVersion "9.0.0"
-
-        # Silently refresh help JSON files in Docs if the module has been upgraded since they were last copied.
-        try {
-            $helpTemplatesPath = Get-ModuleTemplatesPath
-            $helpDocsDirectory = Join-Path -Path $vcfEdgeRootDirectory -ChildPath $Script:DOCS_DIR_NAME
-            foreach ($helpFileName in @($Script:INFRA_HELP_FILENAME, $Script:SUPERVISOR_HELP_FILENAME)) {
-                $null = Update-HelpJsonIfStale `
-                    -DocsPath (Join-Path -Path $helpDocsDirectory -ChildPath $helpFileName) `
-                    -TemplatePath (Join-Path -Path $helpTemplatesPath -ChildPath $helpFileName)
-            }
-        } catch {
-            Write-LogMessage -Type DEBUG -Message "Help JSON auto-refresh skipped: $($_.Exception.Message)"
-        }
-
-        # Log the configured log level.
-        Write-LogMessage -Type DEBUG -Message "Log level set to: $Script:ConfiguredLogLevel (screen output filtered, all levels written to file)"
-
-        # Perform validation with progress indication.
-        Write-Host ""
-        $validationStartTime = Get-Date
-        $inputData = ConvertFrom-JsonSafely -JsonFilePath $InfrastructureJson
-        if ($null -eq $inputData) {
-            throw "[E-CONFIG-NULL-001] Infrastructure JSON produced no data after load. Check logs for details."
-        }
-        Update-InfrastructureJsonReferencedFilePaths -InfrastructureJsonPath $InfrastructureJson -InputData $inputData
-        if ($EdgeSite) {
-            $edgeSitesArrayForValidation = Get-EdgeSitesFromParameter -EdgeSite $EdgeSite -InputData $inputData
-        } else {
-            $edgeSitesArrayForValidation = @()
-        }
-        $siteIndication = if ($edgeSitesArrayForValidation.Count -gt 0) { "edgeSite(s) `"$($edgeSitesArrayForValidation -join '", "')`"" } else { "all sites" }
-
-        $edgeSiteErrors = [System.Collections.Generic.List[String]]::new()
-        foreach ($cluster in $inputData.clusters) {
-            $siteName = [String]($cluster.edgeSite)
-            if ([String]::IsNullOrWhiteSpace($siteName)) {
-                $edgeSiteErrors.Add("clusters[].edgeSite: a required edgeSite name is missing or empty.")
-            } elseif (-not (Test-EdgeSiteNameValid -Name $siteName)) {
-                $edgeSiteErrors.Add("clusters[`"$siteName`"].edgeSite: must be 1-80 chars, lowercase letters, digits, and hyphens only; must not start or end with a hyphen.")
-            }
-        }
-        if ($edgeSiteErrors.Count -gt 0) {
-            foreach ($err in $edgeSiteErrors) {
-                Write-LogMessage -Type ERROR -Message $err
-            }
-            throw [VcfDeploymentException]::new("One or more edgeSite names failed validation. See log for details.")
-        }
-
-        # Validate YAML file existence for required ArgoCD and Harbor files (cheap operation, do this first). Skip when -CleanUp is set (cleanup does not use deployment YAMLs). Skip when -ComputeOnly (no supervisor or services).
-        if ($CleanUp -notin @("Supervisor", "Compute", "All", "ArgoCD", "Harbor") -and -not $ComputeOnly) {
-            Write-LogMessage -Type DEBUG -Message "Validating YAML file existence for $siteIndication..."
-            $yamlValidationStartTime = Get-Date
-            $clustersToCheck = if ($edgeSitesArrayForValidation.Count -gt 0) {
-                $inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArrayForValidation }
-            } else {
-                $inputData.clusters
-            }
-
-            $missingYamlFiles = @()
-            foreach ($cluster in $clustersToCheck) {
-                $currentEdgeSite = $cluster.edgeSite
-
-                # Skip ArgoCD YAML validation for clusters where ArgoCD is disabled.
-                if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $inputData.common -FlagName "disableArgoCD") {
-                    Write-LogMessage -Type DEBUG -Message "ArgoCD is disabled for edgeSite `"$currentEdgeSite`"; skipping ArgoCD YAML path validation."
-                    continue
-                }
-
-                $argoCdOperatorYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputData.common -PropertyName "argoCdOperatorYamlPath"
-                $argoCdDeploymentYamlPath = Get-EffectiveArgoCdYamlPath -Cluster $cluster -CommonData $inputData.common -PropertyName "argoCdDeploymentYamlPath"
-
-                if ($argoCdOperatorYamlPath) {
-                    if (-not (Test-Path -LiteralPath $argoCdOperatorYamlPath)) {
-                        $missingYamlFiles += [PSCustomObject]@{
-                            EdgeSite = $currentEdgeSite
-                            FileType = "ArgoCD Operator YAML"
-                            FilePath = $argoCdOperatorYamlPath
-                        }
-                    }
-                } else {
-                    $missingYamlFiles += [PSCustomObject]@{
-                        EdgeSite = $currentEdgeSite
-                        FileType = "ArgoCD Operator YAML"
-                        FilePath = "Not specified in configuration"
-                    }
-                }
-
-                if ($argoCdDeploymentYamlPath) {
-                    if (-not (Test-Path -LiteralPath $argoCdDeploymentYamlPath)) {
-                        $missingYamlFiles += [PSCustomObject]@{
-                            EdgeSite = $currentEdgeSite
-                            FileType = "ArgoCD Deployment YAML"
-                            FilePath = $argoCdDeploymentYamlPath
-                        }
-                    }
-                } else {
-                    $missingYamlFiles += [PSCustomObject]@{
-                        EdgeSite = $currentEdgeSite
-                        FileType = "ArgoCD Deployment YAML"
-                        FilePath = "Not specified in configuration"
-                    }
-                }
-            }
-
-            # Harbor YAML validation: paths are Join-Path(supervisorServices.parentDirectory, *YamlFileName) with cluster/common fallback.
-            foreach ($cluster in $clustersToCheck) {
-                if (Get-EffectiveSupervisorServiceFlag -Cluster $cluster -CommonData $inputData.common -FlagName "disableHarbor") {
-                    continue
-                }
-                $currentEdgeSite = $cluster.edgeSite
-                $harborServiceYamlPathForValidation = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborServiceYamlPath"
-                if ($harborServiceYamlPathForValidation) {
-                    if (-not (Test-Path -LiteralPath $harborServiceYamlPathForValidation)) {
-                        $missingYamlFiles += [PSCustomObject]@{
-                            EdgeSite = $currentEdgeSite
-                            FileType = "Harbor Service YAML"
-                            FilePath = $harborServiceYamlPathForValidation
-                        }
-                    }
-                } else {
-                    $missingYamlFiles += [PSCustomObject]@{
-                        EdgeSite = $currentEdgeSite
-                        FileType = "Harbor Service YAML"
-                        FilePath = "Not specified (supervisorServices.parentDirectory / harborServiceYamlFileName)"
-                    }
-                }
-                $harborDataValuesTemplatePath = Get-EffectiveSupervisorServicesYamlPath -Cluster $cluster -CommonData $inputData.common -LogicalYamlPathPropertyName "harborDataTemplateYamlPath"
-                if ($harborDataValuesTemplatePath) {
-                    if (-not (Test-Path -LiteralPath $harborDataValuesTemplatePath)) {
-                        $missingYamlFiles += [PSCustomObject]@{
-                            EdgeSite = $currentEdgeSite
-                            FileType = "Harbor Data Values YAML template"
-                            FilePath = $harborDataValuesTemplatePath
-                        }
-                    }
-                } else {
-                    $missingYamlFiles += [PSCustomObject]@{
-                        EdgeSite = $currentEdgeSite
-                        FileType = "Harbor Data Values YAML template"
-                        FilePath = "Not specified (supervisorServices.parentDirectory / harborDataTemplateYamlFileName)"
-                    }
-                }
-            }
-
-            if ($missingYamlFiles.Count -gt 0) {
-                $errorMessage = "Required YAML files are missing or not accessible:`n"
-                foreach ($missingFile in $missingYamlFiles) {
-                    $errorMessage += "  - EdgeSite `"$($missingFile.EdgeSite)`": $($missingFile.FileType) - $($missingFile.FilePath)`n"
-                }
-                Write-LogMessage -Type ERROR -Message $errorMessage
-                Write-LogMessage -Type ERROR -Message "Deployment cannot proceed without required YAML files. Please ensure all YAML files exist at the specified paths and try again."
-                throw [VcfDeploymentException]::new("Required YAML files are missing or not accessible. Check logs for details.")
-            }
-
-            $yamlValidationElapsed = (Get-Date) - $yamlValidationStartTime
-            Write-LogMessage -Type DEBUG -Message "YAML file validation completed for $siteIndication in $($yamlValidationElapsed.TotalSeconds.ToString('F2')) seconds."
-        } elseif ($ComputeOnly) {
-            Write-LogMessage -Type DEBUG -Message "ComputeOnly: skipping YAML file existence validation (Argo CD and Harbor are not deployed)."
-        } else {
-            Write-LogMessage -Type DEBUG -Message "Not performing YAML validation during cleanup."
-        }
-
-        # During cleanup, skip full JSON validation (shallow, deeper, network segment). Initialize-VcfEdgeAtScale will parse the JSON and resolve edge sites; invalid JSON will fail there.
-        if ($CleanUp -in @("Supervisor", "Compute", "All", "ArgoCD", "Harbor")) {
-            Write-LogMessage -Type DEBUG -Message "Cleanup mode: skipping full JSON validation; configuration will be parsed in Initialize-VcfEdgeAtScale."
-        } else {
-            Write-LogMessage -Type DEBUG -Message "Validating JSON configuration files for $siteIndication..."
-
-            # Perform shallow validation of input.json and supervisor.json configuration files (presence of properties only).
-            $shallowValidationStartTime = Get-Date
-            Write-LogMessage -Type INFO -Message "Checking for required JSON properties for $siteIndication..."
-            $shallowValidationParams = @{
-                InfrastructureJson = $InfrastructureJson
-                SupervisorJson = $SupervisorJson
-            }
-            if ($ComputeOnly) {
-                $shallowValidationParams.ComputeOnly = $true
-            }
-            if ($EdgeSite) {
-                $shallowValidationParams.EdgeSite = $EdgeSite
-            }
-            try {
-                Test-JsonShallowValidation @shallowValidationParams
-                $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
-                $totalElapsed = (Get-Date) - $validationStartTime
-                Write-LogMessage -Type DEBUG -Message "Required properties validation completed for $siteIndication in $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
-            } catch {
-                $shallowValidationElapsed = (Get-Date) - $shallowValidationStartTime
-                Write-LogMessage -Type ERROR -Message "Required properties validation failed for $siteIndication after $($shallowValidationElapsed.TotalSeconds.ToString('F2')) seconds."
-                throw
-            }
-
-            # Daily auto update check: runs at most once per day (keyed to new log file creation).
-            # Placed after shallow validation so config errors surface before any update prompt.
-            if ($Script:NewLogFileCreatedThisSession) {
-                try {
-                    Invoke-VcfEdgeAtScaleUpdateCheck -Quiet -InputData $inputData
-                } catch {
-                    Write-LogMessage -Type DEBUG -Message "Daily update check failed silently: $($_.Exception.Message)"
-                }
-            }
-
-        # Perform deeper validation of input.json and supervisor.json configuration files (pattern matching of values).
-        $deeperValidationStartTime = Get-Date
-        Write-LogMessage -Type INFO -Message "Validating property formats and values for $siteIndication..."
-        $deeperValidationParams = @{
-            InfrastructureJson = $InfrastructureJson
-            SupervisorJson = $SupervisorJson
-        }
-        if ($ComputeOnly) {
-            $deeperValidationParams.ComputeOnly = $true
-        }
-        if ($EdgeSite) {
-            $deeperValidationParams.EdgeSite = $EdgeSite
-        }
-        try {
-            Test-JsonDeeperValidation @deeperValidationParams
-            $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
-            $totalElapsed = (Get-Date) - $validationStartTime
-            Write-LogMessage -Type DEBUG -Message "Property format validation completed for $siteIndication in $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
-        } catch {
-            $deeperValidationElapsed = (Get-Date) - $deeperValidationStartTime
-            Write-LogMessage -Type ERROR -Message "Property format validation failed for $siteIndication after $($deeperValidationElapsed.TotalSeconds.ToString('F2')) seconds."
-            throw
-        }
-
-        # Network segment name uniqueness validation (reuse parsed infrastructure object; paths already updated).
-        $networkValidationStartTime = Get-Date
-        Write-LogMessage -Type DEBUG -Message "Validating network segment names for $siteIndication..."
-
-        # Validate network segment name uniqueness within infrastructure.json.
-        $networkSegmentValidationParams = @{
-            InputData = $inputData
-        }
-        if ($EdgeSite) {
-            $networkSegmentValidationParams.EdgeSite = $EdgeSite
-        }
-        $networkSegmentNameValidationResult = Test-NetworkSegmentNameUniqueness @networkSegmentValidationParams
-        if (-not $networkSegmentNameValidationResult.IsValid) {
-            Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)"
-            Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate network segment names. Please fix the naming conflicts and try again."
-            throw [VcfDeploymentException]::new("Network segment name uniqueness validation failed: $($networkSegmentNameValidationResult.ErrorMessage)")
-        } else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Network segment name uniqueness validation passed."
-        }
-        $networkValidationElapsed = (Get-Date) - $networkValidationStartTime
-        $totalElapsed = (Get-Date) - $validationStartTime
-        Write-LogMessage -Type DEBUG -Message "Network segment name validation completed for $siteIndication in $($networkValidationElapsed.TotalSeconds.ToString('F2')) seconds (Total elapsed: $($totalElapsed.TotalSeconds.ToString('F2'))s)."
-
-        # ESX host uniqueness validation: each ESX host must appear in exactly one edge site.
-        Write-LogMessage -Type DEBUG -Message "Validating ESX host uniqueness across all clusters..."
-        $esxHostValidationResult = Test-EsxHostUniqueness -InputData $inputData
-        if (-not $esxHostValidationResult.IsValid) {
-            Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)"
-            Write-LogMessage -Type ERROR -Message "Deployment cannot proceed with duplicate ESX hosts. Each host must belong to exactly one edge site."
-            throw [VcfDeploymentException]::new("ESX host uniqueness validation failed: $($esxHostValidationResult.ErrorMessage)")
-        } else {
-            Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "ESX host uniqueness validation passed."
-        }
-
-        # Complete validation (only reached if all validations passed).
-        $validationEndTime = Get-Date
-        $totalValidationTime = $validationEndTime - $validationStartTime
-        Write-LogMessage -Type DEBUG -Message "JSON configuration validation completed successfully for $siteIndication in $($totalValidationTime.TotalSeconds.ToString('F2')) seconds."
-    }
-
-    # When -ValidateOnly, exit after validation without deploying or cleaning up.
-    if ($ValidateOnly) {
-        Write-LogMessage -Type INFO -Message "ValidateOnly: validation passed. Exiting without deployment."
-        return
-    }
-
-    # If -CleanUp was specified but value is null or empty, show usage and return.
-    if ($PSBoundParameters.ContainsKey("CleanUp") -and [String]::IsNullOrWhiteSpace($CleanUp)) {
-        Write-LogMessage -Type WARNING -Message "-CleanUp requires one of: Supervisor, Compute, All, ArgoCD, Harbor."
-        Write-Host ""
-        Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
-        Write-Host "  Supervisor - Remove only the supervisor (compute remains)."
-        Write-Host "  Compute   - Remove only compute (VDS, vSAN/VMFS, cluster); fails if supervisor is deployed."
-        Write-Host "  All       - Remove supervisor first, then compute."
-        Write-Host "  ArgoCD    - Remove only the ArgoCD supervisor namespace for each cluster."
-        Write-Host "  Harbor    - Remove only the Harbor Supervisor Service from the supervisor for each cluster."
-        return
-    }
-
-    # Normalize -CleanUp to All, ArgoCD, Compute, Harbor, or Supervisor (accept lowercase).
-    if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
-        $cu = $CleanUp.Trim().ToLower()
-        switch ($cu) {
-            "all" { $CleanUp = "All" }
-            "argocd" { $CleanUp = "ArgoCD" }
-            "compute" { $CleanUp = "Compute" }
-            "harbor" { $CleanUp = "Harbor" }
-            "supervisor" { $CleanUp = "Supervisor" }
-            default {
-                Write-LogMessage -Type WARNING -Message "-CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor (got: $CleanUp)."
-                Write-Host "Usage: -CleanUp must be one of: Supervisor, Compute, All, ArgoCD, Harbor"
-                return
-            }
-        }
-    }
-
-    # Before deployment begins, resolve any Harbor $env: secrets that are not yet set.
-    # This prompts the user now (masked input, once per variable) rather than mid-deployment.
-    # Skipped for cleanup-only, validate-only, -ComputeOnly, or when Harbor is disabled for every cluster in scope.
-    # When -ComputeOnly is set, Harbor is not deployed: operators may keep a full harborConfiguration
-    # (including $env: placeholders for a later supervisor run) without defining those variables yet.
-    if ($null -ne $inputData -and [String]::IsNullOrWhiteSpace($CleanUp) -and -not $ComputeOnly) {
-        $clustersForHarborPreflight = if ($EdgeSite -and $null -ne $edgeSitesArrayForValidation -and $edgeSitesArrayForValidation.Count -gt 0) {
-            @($inputData.clusters | Where-Object { $_.edgeSite -in $edgeSitesArrayForValidation })
-        } else {
-            @($inputData.clusters)
-        }
-        $anyHarborEnabledForPreflight = $false
-        foreach ($clusterHp in $clustersForHarborPreflight) {
-            if (-not (Get-EffectiveSupervisorServiceFlag -Cluster $clusterHp -CommonData $inputData.common -FlagName "disableHarbor")) {
-                $anyHarborEnabledForPreflight = $true
-                break
-            }
-        }
-        if ($anyHarborEnabledForPreflight) {
-            $harborPreflightParams = @{ InputData = $inputData }
-            if ($EdgeSite) { $harborPreflightParams.EdgeSite = $EdgeSite }
-            Invoke-HarborEnvVarPreflight @harborPreflightParams
-        } else {
-            Write-LogMessage -Type DEBUG -Message "Skipping Harbor environment-variable preflight (Harbor disabled for all clusters in scope)."
-        }
-    }
-
-        # Initialize the edge deployment workflow. Forward explicit parameters (do not rely on
-        # PowerShell dynamic scoping for AcceptBadCheckResults / DelayBeforeAddingNextHostSeconds).
-        $initParams = @{
+        $deployParams = @{
+            DeploymentRootDirectory          = $vcfEdgeRootDirectory
             InfrastructureJson               = $InfrastructureJson
             SupervisorJson                   = $SupervisorJson
             DelayBeforeAddingNextHostSeconds = $DelayBeforeAddingNextHostSeconds
         }
         if ($AcceptBadCheckResults) {
-            $initParams.AcceptBadCheckResults = $true
+            $deployParams.AcceptBadCheckResults = $true
         }
         if ($EdgeSite) {
-            $initParams.EdgeSite = $EdgeSite
+            $deployParams.EdgeSite = $EdgeSite
         }
-        if (-not [String]::IsNullOrWhiteSpace($CleanUp)) {
-            $initParams.CleanUp = $CleanUp
+        if ($PSBoundParameters.ContainsKey("CleanUp")) {
+            $deployParams.CleanUp = $CleanUp
         }
         if ($ComputeOnly) {
-            $initParams.ComputeOnly = $true
+            $deployParams.ComputeOnly = $true
         }
         if ($Force) {
-            $initParams.Force = $true
+            $deployParams.Force = $true
+        }
+        if ($PSBoundParameters.ContainsKey("RollbackOnFailure")) {
+            $deployParams.RollbackOnFailure = $RollbackOnFailure
         }
         if ($SaveHarborYaml) {
-            $initParams.SaveHarborYaml = $true
+            $deployParams.SaveHarborYaml = $true
         }
-        Initialize-VcfEdgeAtScale @initParams
+        if ($ValidateOnly) {
+            $deployParams.ValidateOnly = $true
+        }
+
+        Invoke-VcfEdgeAtScaleSiteDeployment @deployParams
     } catch [VcfDeploymentException] {
         # Known deployment failure — already surfaced to the user via Write-LogMessage -Type ERROR.
         # Show the friendly footer; no further output needed since the error was already logged.
@@ -1511,7 +2282,7 @@ function Show-VcfEdgeAtScaleVersion {
     #>
 
     [CmdletBinding()]
-    param()
+    Param ()
 
     Write-LogMessage -Type INFO -Message "VcfEdgeAtScale version: $Script:ModuleVersion"
 }
@@ -1540,18 +2311,20 @@ function Get-ModuleTemplatesPath {
     #>
 
     [CmdletBinding()]
+    [OutputType([String])]
     Param ()
 
+    [CmdletBinding()]
     $moduleBase = $null
     if ($MyInvocation.MyCommand.Module.ModuleBase) {
         $moduleBase = $MyInvocation.MyCommand.Module.ModuleBase
     } elseif ($PSScriptRoot) {
         $moduleBase = $PSScriptRoot
-        $templatesCheck = Join-Path $moduleBase "Templates"
+        $templatesCheck = Join-Path -Path $moduleBase -ChildPath "Templates"
         if (-not (Test-Path $templatesCheck)) {
-            $subDirCheck = Join-Path $moduleBase (Join-Path "VcfEdgeAtScale" "Templates")
+            $subDirCheck = Join-Path -Path $moduleBase -ChildPath (Join-Path -Path "VcfEdgeAtScale" -ChildPath "Templates")
             if (Test-Path $subDirCheck) {
-                $moduleBase = Join-Path $moduleBase "VcfEdgeAtScale"
+                $moduleBase = Join-Path -Path $moduleBase -ChildPath "VcfEdgeAtScale"
             }
         }
     } else {
@@ -1562,14 +2335,16 @@ function Get-ModuleTemplatesPath {
     }
 
     if (-not $moduleBase) {
-        Write-LogMessage -Type ERROR -Message "Unable to determine module installation path. Please ensure the module is installed correctly."
-        throw [VcfDeploymentException]::new("Unable to determine module installation path. Please ensure the module is installed correctly.")
+        $err = "Unable to determine module installation path. Please ensure the module is installed correctly."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
-    $templatesPath = Join-Path $moduleBase "Templates"
+    $templatesPath = Join-Path -Path $moduleBase -ChildPath "Templates"
     if (-not (Test-Path $templatesPath)) {
-        Write-LogMessage -Type ERROR -Message "Templates directory not found at: $templatesPath."
-        throw [VcfDeploymentException]::new("Templates directory not found at: $templatesPath.")
+        $err = "Templates directory not found at: $templatesPath."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     return $templatesPath
@@ -1586,6 +2361,9 @@ function Format-ConfigurationTable {
 
         .PARAMETER InputObject
         Array of PSCustomObject configuration items to format.
+    
+        .EXAMPLE
+        Format-ConfigurationTable -InputObject $resourceObject
     #>
 
     [CmdletBinding()]
@@ -1595,7 +2373,7 @@ function Format-ConfigurationTable {
     )
 
     Begin {
-        $allItems = @()
+        $allItems = [System.Collections.Generic.List[PSCustomObject]]::new()
         $seenKeys = @{}
     }
 
@@ -1609,7 +2387,7 @@ function Format-ConfigurationTable {
                         $key = $item.Key
                         if (-not $seenKeys.ContainsKey($key)) {
                             $seenKeys[$key] = $true
-                            $allItems += $item
+                            $allItems.Add($item)
                         }
                     }
                 }
@@ -1618,7 +2396,7 @@ function Format-ConfigurationTable {
                     $key = $InputObject.Key
                     if (-not $seenKeys.ContainsKey($key)) {
                         $seenKeys[$key] = $true
-                        $allItems += $InputObject
+                        $allItems.Add($InputObject)
                     }
                 }
             }
@@ -1630,7 +2408,8 @@ function Format-ConfigurationTable {
             return
         }
 
-        $allItems | Format-Table -Property 'Key', 'Required', 'Notes' -AutoSize -Wrap
+        # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+        $allItems | Format-Table -Property 'Key', 'Required', 'Notes' -AutoSize -Wrap | Out-Host
     }
 }
 function Get-ModulePublicVersion {
@@ -1653,7 +2432,17 @@ function Get-ModulePublicVersion {
 
         .NOTES
         Reads $Script:ModuleVersion. Does not throw; returns the raw value on any parse error.
+    
+        .EXAMPLE
+        $modulePublicVersion = Get-ModulePublicVersion
+        if ($null -eq $modulePublicVersion) {
+            Write-LogMessage -Type ERROR -Message "Get-ModulePublicVersion: result not found."
+        }
     #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param ()
 
     $parts = $Script:ModuleVersion -split '\.'
     if ($parts.Count -ge 4) {
@@ -1663,6 +2452,7 @@ function Get-ModulePublicVersion {
     return $Script:ModuleVersion
 }
 function Update-HelpJsonIfStale {
+
     <#
         .SYNOPSIS
         Silently copies a help JSON file from the module Templates directory to the user's Docs directory when the version differs or the file is missing.
@@ -1685,6 +2475,9 @@ function Update-HelpJsonIfStale {
 
         .NOTES
         Help JSON files are not user-edited, so silent replacement is safe. Called from Invoke-VcfEdgeAtScaleModuleInitialize and Start-VcfEdgeAtScale.
+    
+        .EXAMPLE
+        Update-HelpJsonIfStale -DocsPath "config.json" -TemplatePath "config.json"
     #>
     [CmdletBinding()]
     [OutputType([Boolean])]
@@ -1694,17 +2487,17 @@ function Update-HelpJsonIfStale {
     )
 
     if (-not (Test-Path -LiteralPath $TemplatePath -PathType Leaf)) {
-        Write-Warning "Help JSON template not found at '$TemplatePath'. Skipping auto-refresh for '$DocsPath'."
+        Write-LogMessage -Type WARNING -Message "Help JSON template not found at '$TemplatePath'. Skipping auto-refresh for '$DocsPath'."
         return $false
     }
 
     # Read the template version as the authoritative source.
     $templateVersion = $null
     try {
-        $templateJson = Get-Content -Path $TemplatePath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+        $templateJson = ConvertFrom-JsonSafely -JsonFilePath $TemplatePath
         $templateVersion = if ($templateJson -is [Array]) { $null } else { $templateJson.moduleVersion }
     } catch {
-        Write-Warning "Could not read template help JSON at '$TemplatePath': $($_.Exception.Message). Skipping auto-refresh."
+        Write-LogMessage -Type WARNING -Message "Could not read template help JSON at '$TemplatePath': $($_.Exception.Message). Skipping auto-refresh."
         return $false
     }
 
@@ -1722,7 +2515,7 @@ function Update-HelpJsonIfStale {
     $needsCopy = $true
     if (-not [String]::IsNullOrWhiteSpace($templateVersion) -and (Test-Path -LiteralPath $DocsPath -PathType Leaf)) {
         try {
-            $docsJson = Get-Content -Path $DocsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+            $docsJson = ConvertFrom-JsonSafely -JsonFilePath $DocsPath
             $docsVersion = if ($docsJson -is [Array]) { $null } else { $docsJson.moduleVersion }
             if ($docsVersion -eq $templateVersion) {
                 $needsCopy = $false
@@ -1743,11 +2536,71 @@ function Update-HelpJsonIfStale {
         Write-LogMessage -Type INFO -SuppressOutputToScreen -Message "Help JSON '$([System.IO.Path]::GetFileName($DocsPath))' updated to module v$versionLabel."
         return $true
     } catch {
-        Write-Warning "Could not update help JSON at '$DocsPath': $($_.Exception.Message)."
+        Write-LogMessage -Type WARNING -Message "Could not update help JSON at '$DocsPath': $($_.Exception.Message)."
         return $false
     }
 }
+function Build-HelpConfigEntries {
+
+    <#
+    .SYNOPSIS
+        Validates a help JSON entries array and returns an array of PSCustomObject config rows.
+    .DESCRIPTION
+        Validates that EntriesArray is a non-empty array, that each entry has Key, Required, and
+        Notes, then constructs and returns the trimmed config array. Applies Filter as a wildcard on
+        Key when provided. Returns $null on any validation failure (warning is logged before return).
+    .PARAMETER EntriesArray
+        The raw entries array from the help JSON (either the top-level array or jsonData.entries).
+    .PARAMETER Filter
+        Optional Key wildcard filter. Wrapped in * on both sides (e.g. "argoCD" -> *argoCD*).
+    .PARAMETER HelpJsonPath
+        Path to the help JSON file, used in warning messages.
+    .EXAMPLE
+        $config = Build-HelpConfigEntries -EntriesArray $jsonData.entries -Filter "harbor" -HelpJsonPath "infrastructure-config-help.json"
+    .NOTES
+        Returns $null on any failure; the caller should treat $null as a graceful no-result.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyCollection()] $EntriesArray,
+        [Parameter(Mandatory = $false)] [AllowNull()] [String]$Filter,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HelpJsonPath
+    )
+
+    if ($null -eq $EntriesArray -or $EntriesArray -isnot [Array]) {
+        Write-LogMessage -Type WARNING -Message "Configuration help file at '$HelpJsonPath' must contain an array of configuration elements (or an object with an 'entries' array)."
+        return $null
+    }
+    if ($EntriesArray.Count -eq 0) {
+        Write-LogMessage -Type WARNING -Message "Configuration help file at '$HelpJsonPath' contains no configuration elements."
+        return $null
+    }
+
+    $requiredFields = @('Key', 'Required', 'Notes')
+    $config = [System.Collections.Generic.List[PSCustomObject]]::new()
+    foreach ($entry in $EntriesArray) {
+        $missingFields = @($requiredFields | Where-Object { -not $entry.PSObject.Properties[$_] -or [String]::IsNullOrWhiteSpace($entry.$_) })
+        if ($missingFields.Count -gt 0) {
+            Write-LogMessage -Type WARNING -Message "Configuration help file at '$HelpJsonPath' contains entries missing required fields: $($missingFields -join ', '). Each entry must have: Key, Required, Notes."
+            return $null
+        }
+        $config.Add([PSCustomObject]@{ Key = $entry.Key; Required = $entry.Required; Notes = $entry.Notes })
+    }
+
+    if ($Filter) {
+        $config = @($config | Where-Object { $_.Key -like "*$Filter*" })
+        if ($config.Count -eq 0) {
+            Write-LogMessage -Type WARNING -Message "No configuration elements found matching filter: $Filter"
+            return $null
+        }
+    }
+
+    return $config
+}
 function Get-ConfigurationHelpData {
+
     <#
         .SYNOPSIS
         Loads and validates a configuration help JSON file from the deployment Docs directory or module Templates directory.
@@ -1766,38 +2619,38 @@ function Get-ConfigurationHelpData {
 
         .NOTES
         Uses Get-ModuleTemplatesPath; on failure writes Warning and returns $null. Does not throw.
+    
+        .EXAMPLE
+        $configurationHelpData = Get-ConfigurationHelpData -HelpFileName "config.json"
     #>
     [CmdletBinding()]
+    [OutputType([PSCustomObject[]])]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HelpFileName,
-        [Parameter(Mandatory = $false)] [AllowNull()] [String]$Filter
+        [Parameter(Mandatory = $false)] [AllowNull()] [String]$Filter,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$HelpFileName
     )
 
     try {
         $templatesPath = Get-ModuleTemplatesPath
     } catch {
-        Write-Warning "Unable to locate module Templates directory. Please ensure the module is installed correctly."
+        Write-LogMessage -Type WARNING -Message "Unable to locate module Templates directory. Please ensure the module is installed correctly."
         return $null
     }
 
-    $templateHelpJsonPath = Join-Path $templatesPath $HelpFileName
+    $templateHelpJsonPath = Join-Path -Path $templatesPath -ChildPath $HelpFileName
     $helpJsonPath = $null
     $vcfEdgeRootForHelp = $env:VcfEdgeAtScaleRootDirectory
     if (-not [String]::IsNullOrWhiteSpace($vcfEdgeRootForHelp)) {
         $docsHelpCandidatePath = Join-Path -Path $vcfEdgeRootForHelp.Trim() -ChildPath (Join-Path -Path $Script:DOCS_DIR_NAME -ChildPath $HelpFileName)
         if (Test-Path -LiteralPath $docsHelpCandidatePath -PathType Leaf) {
-            try {
-                $resolvedDocsPath = (Resolve-Path -LiteralPath $docsHelpCandidatePath).Path
-            } catch {
-                $resolvedDocsPath = $docsHelpCandidatePath
-            }
+            $resolvedDocsPath = (Resolve-Path -LiteralPath $docsHelpCandidatePath).Path
 
             # Check whether the Docs copy is current; if version differs, fall through to Templates.
             # Compare against the 3-part public version (strips the 4th build segment) so that
             # build upgrades (e.g. 1.0.3.1000 → 1.0.3.1001) do not invalidate the Docs copy.
             $docsVersionMatches = $false
             try {
-                $docsRaw = Get-Content -Path $resolvedDocsPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $docsRaw = ConvertFrom-JsonSafely -JsonFilePath $resolvedDocsPath
                 $docsVersion = if ($docsRaw -is [Array]) { $null } else { $docsRaw.moduleVersion }
                 $docsVersionMatches = ($docsVersion -eq (Get-ModulePublicVersion))
             } catch {
@@ -1816,71 +2669,30 @@ function Get-ConfigurationHelpData {
         $helpJsonPath = $templateHelpJsonPath
     }
     if (-not (Test-Path $helpJsonPath)) {
-        Write-Warning "Configuration help file not found at: $helpJsonPath. Please verify the module installation."
+        Write-LogMessage -Type WARNING -Message "Configuration help file not found at: $helpJsonPath. Please verify the module installation."
         return $null
     }
 
     if (-not (Test-JsonFile -JsonFilePath $helpJsonPath)) {
-        Write-Warning "Configuration help file at '$helpJsonPath' contains invalid JSON or cannot be read. Please verify the file exists and contains valid JSON."
+        Write-LogMessage -Type WARNING -Message "Configuration help file at '$helpJsonPath' contains invalid JSON or cannot be read. Please verify the file exists and contains valid JSON."
         return $null
     }
 
     try {
-        $jsonContent = Get-Content -Path $helpJsonPath -Raw -ErrorAction Stop
-        $jsonData = $jsonContent | ConvertFrom-Json -ErrorAction Stop
+        $jsonData = ConvertFrom-JsonSafely -JsonFilePath $helpJsonPath
     } catch {
-        Write-Warning "Failed to parse configuration help file at '$helpJsonPath': $($_.Exception.Message). Please verify the file contains valid JSON."
+        Write-LogMessage -Type WARNING -Message "Failed to parse configuration help file at '$helpJsonPath': $($_.Exception.Message). Please verify the file contains valid JSON."
         return $null
     }
 
     if ($null -eq $jsonData) {
-        Write-Warning "Configuration help file at '$helpJsonPath' parsed but returned null. File may be empty or malformed."
+        Write-LogMessage -Type WARNING -Message "Configuration help file at '$helpJsonPath' parsed but returned null. File may be empty or malformed."
         return $null
     }
 
     # Support both legacy bare-array format and wrapped { moduleVersion, entries } format.
     $entriesArray = if ($jsonData -is [Array]) { $jsonData } else { $jsonData.entries }
-
-    if ($null -eq $entriesArray -or $entriesArray -isnot [Array]) {
-        Write-Warning "Configuration help file at '$helpJsonPath' must contain an array of configuration elements (or an object with an 'entries' array)."
-        return $null
-    }
-
-    if ($entriesArray.Count -eq 0) {
-        Write-Warning "Configuration help file at '$helpJsonPath' contains no configuration elements."
-        return $null
-    }
-
-    $requiredFields = @('Key', 'Required', 'Notes')
-    $config = @()
-    foreach ($entry in $entriesArray) {
-        $missingFields = @()
-        foreach ($field in $requiredFields) {
-            if (-not $entry.PSObject.Properties[$field] -or [string]::IsNullOrWhiteSpace($entry.$field)) {
-                $missingFields += $field
-            }
-        }
-        if ($missingFields.Count -gt 0) {
-            Write-Warning "Configuration help file at '$helpJsonPath' contains entries missing required fields: $($missingFields -join ', '). Each entry must have: Key, Required, Notes."
-            return $null
-        }
-        $config += [PSCustomObject]@{
-            'Key' = $entry.Key
-            'Required' = $entry.Required
-            'Notes' = $entry.Notes
-        }
-    }
-
-    if ($Filter) {
-        $filterPattern = "*$Filter*"
-        $config = @($config | Where-Object { $_.Key -like $filterPattern })
-        if ($config.Count -eq 0) {
-            Write-Warning "No configuration elements found matching filter: $Filter"
-            return $null
-        }
-    }
-
-    return $config
+    return Build-HelpConfigEntries -EntriesArray $entriesArray -Filter $Filter -HelpJsonPath $helpJsonPath
 }
 function Show-ConfigurationHelpTable {
 
@@ -1907,14 +2719,19 @@ function Show-ConfigurationHelpTable {
 
         .NOTES
         Does not throw. On Table format failure, falls back to List.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    
+        .EXAMPLE
+        Show-ConfigurationHelpTable -Config "value" -Format "value" -Title "value"
     #>
 
     [CmdletBinding()]
     Param (
-        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Title,
-        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyCollection()] [Array]$Config,
+        [Parameter(Mandatory = $true)] [AllowNull()] [AllowEmptyCollection()] [Object[]]$Config,
         [Parameter(Mandatory = $true)] [ValidateSet('Auto', 'GridView', 'List', 'Table')] [String]$Format,
-        [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Title,
+        [Parameter(Mandatory = $false)] [ValidateRange(40, [Int]::MaxValue)] [Int]$WidthThreshold = 120
     )
 
     if (-not $Config -or $Config.Count -eq 0) {
@@ -1929,11 +2746,11 @@ function Show-ConfigurationHelpTable {
         $resolvedFormat = if ($terminalWidth -lt $WidthThreshold) { 'List' } else { 'Table' }
     }
 
-    Write-Output "`n"
+    Write-Host ""
     Write-LogMessage -Type INFO -Message ("=" * $lineWidth)
     Write-LogMessage -Type INFO -Message $Title
     Write-LogMessage -Type INFO -Message ("=" * $lineWidth)
-    Write-Output "`n"
+    Write-Host ""
 
     switch ($resolvedFormat) {
         'GridView' {
@@ -1941,25 +2758,28 @@ function Show-ConfigurationHelpTable {
             if ($gridViewAvailable) {
                 $Config | Out-GridView -Title $Title
             } else {
-                Write-Warning "Out-GridView is not available on this system (typically only available on Windows PowerShell). Using List format instead."
-                $Config | Format-List -Property 'Key', 'Required', 'Notes'
+                Write-LogMessage -Type WARNING -Message "Out-GridView is not available on this system (typically only available on Windows PowerShell). Using List format instead."
+                # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+                $Config | Format-List -Property 'Key', 'Required', 'Notes' | Out-Host
             }
         }
         'List' {
-            $Config | Format-List -Property 'Key', 'Required', 'Notes'
+            # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+            $Config | Format-List -Property 'Key', 'Required', 'Notes' | Out-Host
         }
         'Table' {
             try {
                 $Config | Format-ConfigurationTable
             } catch {
-                Write-Warning "Failed to format configuration table: $($_.Exception.Message)"
+                Write-LogMessage -Type WARNING -Message "Failed to format configuration table: $($_.Exception.Message)"
                 Write-LogMessage -Type INFO -Message "Displaying configuration as list format:"
-                $Config | Format-List -Property 'Key', 'Required', 'Notes'
+                # Write-Host: blank line and table output use Write-Host so the interactive table renders correctly; Write-Output can introduce rendering regression.
+                $Config | Format-List -Property 'Key', 'Required', 'Notes' | Out-Host
             }
         }
     }
 
-    Write-Output "`n"
+    Write-Host ""
 }
 function Show-InfrastructureJsonConfigurationHelp {
 
@@ -2021,7 +2841,7 @@ function Show-InfrastructureJsonConfigurationHelp {
     Param (
         [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$Filter,
         [Parameter(Mandatory = $false)] [ValidateSet('Auto', 'GridView', 'List', 'Table')] [String]$Format = 'Auto',
-        [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
+        [Parameter(Mandatory = $false)] [ValidateRange(40, [Int]::MaxValue)] [Int]$WidthThreshold = 120
     )
 
     $config = Get-ConfigurationHelpData -HelpFileName $Script:INFRA_HELP_FILENAME -Filter $Filter
@@ -2089,13 +2909,442 @@ function Show-SupervisorJsonConfigurationHelp {
     Param (
         [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$Filter,
         [Parameter(Mandatory = $false)] [ValidateSet('Auto', 'GridView', 'List', 'Table')] [String]$Format = 'Auto',
-        [Parameter(Mandatory = $false)] [ValidateRange(40, [int]::MaxValue)] [Int]$WidthThreshold = 120
+        [Parameter(Mandatory = $false)] [ValidateRange(40, [Int]::MaxValue)] [Int]$WidthThreshold = 120
     )
 
     $config = Get-ConfigurationHelpData -HelpFileName $Script:SUPERVISOR_HELP_FILENAME -Filter $Filter
     if ($null -ne $config) {
         Show-ConfigurationHelpTable -Config $config -Format $Format -Title "Supervisor.json Configuration Reference" -WidthThreshold $WidthThreshold
     }
+}
+
+#endregion
+function Get-VcfEdgeAtScaleConfigUiVersion {
+
+    <#
+        .SYNOPSIS
+        Returns the UI_VERSION string embedded in a veas-json-generator.py file.
+
+        .DESCRIPTION
+        Reads the first line matching the pattern UI_VERSION = "..." in the specified file and returns
+        the quoted version value. Returns $null when the file is unreadable or contains no matching line.
+
+        .PARAMETER FilePath
+        Full path to the veas-json-generator.py file to inspect.
+
+        .OUTPUTS
+        [String] Version string (e.g. "1.0.3.1004"), or $null if not found.
+
+        .EXAMPLE
+        Get-VcfEdgeAtScaleConfigUiVersion -FilePath "C:\Users\Admin\VCFEdgeAtScale\Tools\veas-json-generator.py"
+
+        Returns the UI_VERSION value from the specified file.
+
+        .NOTES
+        Private helper. Used by Sync-VcfEdgeAtScaleConfigUiTool to compare source and destination
+        Python tool versions before deciding whether to copy.
+    #>
+    [OutputType([String])]
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FilePath
+    )
+
+    try {
+        $lineMatch = Select-String -LiteralPath $FilePath -Pattern 'UI_VERSION\s*=\s*"([^"]+)"' -ErrorAction Stop
+        if ($null -ne $lineMatch) {
+            return $lineMatch.Matches[0].Groups[1].Value
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Get-VcfEdgeAtScaleConfigUiVersion: could not read '${FilePath}': $($_.Exception.Message)"
+    }
+    return $null
+}
+function Sync-VcfEdgeAtScaleConfigUiTool {
+
+    <#
+        .SYNOPSIS
+        Copies the config UI tool from the newly installed module to the deployment root Tools directory when the versions differ.
+
+        .DESCRIPTION
+        After a module upgrade, locates the newest installed VcfEdgeAtScale module via Get-Module -ListAvailable,
+        reads the UI_VERSION from its veas-json-generator.py, and compares it to the UI_VERSION in the user's
+        deployment root Tools directory. If they differ the new file is copied automatically with no user prompt.
+
+        The sync is silently skipped when:
+        - UserBaseDirectory is not set or does not exist.
+        - The tool is absent from the deployment root (the user has not run -Initialize yet).
+        - The source file is missing from the newly installed module.
+
+        .PARAMETER UserBaseDirectory
+        Path to the operator's deployment base directory (typically $env:VcfEdgeAtScaleRootDirectory).
+        Pass an empty string or omit to skip the sync.
+
+        .EXAMPLE
+        Sync-VcfEdgeAtScaleConfigUiTool -UserBaseDirectory $env:VcfEdgeAtScaleRootDirectory
+
+        Checks whether the deployed config UI tool matches the installed module version and copies it if not.
+
+        .NOTES
+        Private helper. Invoked from Invoke-VcfEdgeAtScaleUpdateCheck after a successful Update-Module call.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$UserBaseDirectory
+    )
+
+    $configUiFileName = "veas-json-generator.py"
+
+    $latestInstalledModule = Get-Module -ListAvailable -Name "VcfEdgeAtScale" |
+        Sort-Object -Property Version -Descending |
+        Select-Object -First 1
+    if ($null -eq $latestInstalledModule) {
+        Write-LogMessage -Type DEBUG -Message "Config UI sync skipped: VcfEdgeAtScale module not found via Get-Module -ListAvailable."
+        return
+    }
+
+    $moduleToolsPath = Join-Path -Path $latestInstalledModule.ModuleBase -ChildPath "Tools"
+    $sourcePath = Join-Path -Path $moduleToolsPath -ChildPath $configUiFileName
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "Config UI sync skipped: source not found at $sourcePath."
+        return
+    }
+
+    if ([String]::IsNullOrWhiteSpace($UserBaseDirectory) -or -not (Test-Path -LiteralPath $UserBaseDirectory -PathType Container)) {
+        Write-LogMessage -Type DEBUG -Message "Config UI sync skipped: deployment root is not set or does not exist."
+        return
+    }
+
+    $deploymentToolsPath = Join-Path -Path $UserBaseDirectory -ChildPath "Tools"
+    $destPath = Join-Path -Path $deploymentToolsPath -ChildPath $configUiFileName
+    if (-not (Test-Path -LiteralPath $destPath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "Config UI tool not present in deployment root; skipping auto-sync. Run Start-VcfEdgeAtScale -Initialize to install it."
+        return
+    }
+
+    $sourceVersion = Get-VcfEdgeAtScaleConfigUiVersion -FilePath $sourcePath
+    $destVersion = Get-VcfEdgeAtScaleConfigUiVersion -FilePath $destPath
+    if ($sourceVersion -eq $destVersion) {
+        Write-LogMessage -Type DEBUG -Message "Config UI tool is current (version $sourceVersion); no sync needed."
+        return
+    }
+
+    Write-LogMessage -Type INFO -Message "Updating config UI tool: version $destVersion → $sourceVersion."
+    try {
+        Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force -ErrorAction Stop
+        Write-LogMessage -Type INFO -Message "Config UI tool updated to $sourceVersion at $destPath."
+        Write-Host "  Config UI tool updated: $configUiFileName ($destVersion → $sourceVersion)" -ForegroundColor Green
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Config UI tool sync failed: $($_.Exception.Message)"
+        Write-Host "  Config UI tool could not be auto-updated. To copy manually, run:" -ForegroundColor Yellow
+        Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
+    }
+}
+function Get-VcfEdgeAtScaleUiTemplateVersion {
+
+    <#
+        .SYNOPSIS
+        Returns the VEAS-UI-VERSION string embedded in a veas-ui.html file.
+
+        .DESCRIPTION
+        Reads the first line matching the pattern <!-- VEAS-UI-VERSION: ... --> in the specified
+        file and returns the version value. Returns $null when the file is unreadable or contains
+        no matching line.
+
+        .PARAMETER FilePath
+        Full path to the veas-ui.html file to inspect.
+
+        .OUTPUTS
+        [String] Version string (e.g. "1.0.3.1004"), or $null if not found.
+
+        .EXAMPLE
+        Get-VcfEdgeAtScaleUiTemplateVersion -FilePath "C:\VCFEdgeAtScale\Tools\veas-ui.html"
+
+        Returns the VEAS-UI-VERSION value from the specified file.
+
+        .NOTES
+        Private helper. Used by Sync-VcfEdgeAtScaleUiTemplate to compare source and destination
+        HTML template versions before deciding whether to copy.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$FilePath
+    )
+
+    try {
+        $lineMatch = Select-String -LiteralPath $FilePath -Pattern 'VEAS-UI-VERSION:\s*([\d.]+)' -ErrorAction Stop
+        if ($null -ne $lineMatch) {
+            return $lineMatch.Matches[0].Groups[1].Value
+        }
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Get-VcfEdgeAtScaleUiTemplateVersion: could not read '${FilePath}': $($_.Exception.Message)"
+    }
+    return $null
+}
+function Sync-VcfEdgeAtScaleUiTemplate {
+
+    <#
+        .SYNOPSIS
+        Copies the UI HTML template from the newly installed module to the deployment root Tools directory when the versions differ.
+
+        .DESCRIPTION
+        After a module upgrade, locates the newest installed VcfEdgeAtScale module via Get-Module -ListAvailable,
+        reads the VEAS-UI-VERSION from its veas-ui.html, and compares it to the version in the user's
+        deployment root Tools directory. If they differ the new file is copied automatically with no user prompt.
+
+        The sync is silently skipped when:
+        - UserBaseDirectory is not set or does not exist.
+        - The template is absent from the deployment root (the user has not run -Initialize yet).
+        - The source file is missing from the newly installed module.
+
+        Unlike veas-json-generator.py, the HTML template is always silently overwritten because it
+        is a versioned UI asset that is not edited by the operator.
+
+        .PARAMETER UserBaseDirectory
+        Path to the operator's deployment base directory (typically $env:VcfEdgeAtScaleRootDirectory).
+        Pass an empty string or omit to skip the sync.
+
+        .EXAMPLE
+        Sync-VcfEdgeAtScaleUiTemplate -UserBaseDirectory $env:VcfEdgeAtScaleRootDirectory
+
+        Checks whether the deployed UI template matches the installed module version and copies it if not.
+
+        .NOTES
+        Private helper. Invoked from Invoke-VcfEdgeAtScaleUpdateCheck after a successful Update-Module call.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$UserBaseDirectory
+    )
+
+    $uiTemplateFileName = "veas-ui.html"
+
+    $latestInstalledModule = Get-Module -ListAvailable -Name "VcfEdgeAtScale" |
+        Sort-Object -Property Version -Descending |
+        Select-Object -First 1
+    if ($null -eq $latestInstalledModule) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: VcfEdgeAtScale module not found via Get-Module -ListAvailable."
+        return
+    }
+
+    $moduleToolsPath = Join-Path -Path $latestInstalledModule.ModuleBase -ChildPath "Tools"
+    $sourcePath = Join-Path -Path $moduleToolsPath -ChildPath $uiTemplateFileName
+    if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: source not found at $sourcePath."
+        return
+    }
+
+    if ([String]::IsNullOrWhiteSpace($UserBaseDirectory) -or -not (Test-Path -LiteralPath $UserBaseDirectory -PathType Container)) {
+        Write-LogMessage -Type DEBUG -Message "UI template sync skipped: deployment root is not set or does not exist."
+        return
+    }
+
+    $deploymentToolsPath = Join-Path -Path $UserBaseDirectory -ChildPath "Tools"
+    $destPath = Join-Path -Path $deploymentToolsPath -ChildPath $uiTemplateFileName
+    if (-not (Test-Path -LiteralPath $destPath -PathType Leaf)) {
+        Write-LogMessage -Type DEBUG -Message "UI template not present in deployment root; skipping auto-sync. Run Start-VcfEdgeAtScale -Initialize to install it."
+        return
+    }
+
+    $sourceVersion = Get-VcfEdgeAtScaleUiTemplateVersion -FilePath $sourcePath
+    $destVersion = Get-VcfEdgeAtScaleUiTemplateVersion -FilePath $destPath
+    if ($sourceVersion -eq $destVersion) {
+        Write-LogMessage -Type DEBUG -Message "UI template is current (version $sourceVersion); no sync needed."
+        return
+    }
+
+    Write-LogMessage -Type INFO -Message "Updating UI template: version $destVersion → $sourceVersion."
+    try {
+        Copy-Item -LiteralPath $sourcePath -Destination $destPath -Force -ErrorAction Stop
+        Write-LogMessage -Type INFO -Message "UI template updated to $sourceVersion at $destPath."
+        Write-Host "  UI template updated: $uiTemplateFileName ($destVersion → $sourceVersion)" -ForegroundColor Green
+    } catch {
+        Write-LogMessage -Type WARNING -Message "UI template sync failed: $($_.Exception.Message)"
+        Write-Host "  UI template could not be auto-updated. To copy manually, run:" -ForegroundColor Yellow
+        Write-Host "    Copy-Item -LiteralPath '$sourcePath' -Destination '$destPath' -Force" -ForegroundColor Cyan
+    }
+}
+function Invoke-PsGalleryModuleUpdate {
+
+    <#
+        .SYNOPSIS
+        Prompts the operator to install a PSGallery module update and performs the install when confirmed.
+
+        .DESCRIPTION
+        Displays an install prompt for the specified module/version. If the operator confirms (default Y),
+        runs Update-Module, then syncs the config UI tool and UI template. Displays manual steps on decline
+        or if the install fails.
+
+        .PARAMETER LatestVersion
+        The latest available version string from Find-Module.
+
+        .PARAMETER ModuleName
+        The module name as registered in PSGallery (e.g. "VcfEdgeAtScale").
+
+        .EXAMPLE
+        Invoke-PsGalleryModuleUpdate -ModuleName "VcfEdgeAtScale" -LatestVersion "2.1.0"
+
+        .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LatestVersion,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ModuleName
+    )
+
+    Write-Host ""
+    $installChoice = Read-Host "Install update now? [Y/n]"
+    if ([String]::IsNullOrWhiteSpace($installChoice)) {
+        $installChoice = "Y"
+    }
+    if ($installChoice -notmatch '^[Yy]') {
+        Write-Host ""
+        Write-Host "To update manually, run:" -ForegroundColor Yellow
+        Write-Host "  Update-Module -Name $ModuleName" -ForegroundColor Cyan
+        Write-Host ""
+        return
+    }
+    Write-LogMessage -Type INFO -Message "Installing $ModuleName $LatestVersion from PSGallery..."
+    try {
+        Update-Module -Name $ModuleName -ErrorAction Stop
+        Write-LogMessage -Type INFO -Message "$ModuleName $LatestVersion installed successfully."
+        Sync-VcfEdgeAtScaleConfigUiTool -UserBaseDirectory $env:VcfEdgeAtScaleRootDirectory
+        Sync-VcfEdgeAtScaleUiTemplate   -UserBaseDirectory $env:VcfEdgeAtScaleRootDirectory
+        Write-Host ""
+        Write-Host "Update complete. Open a new PowerShell window to use the new version." -ForegroundColor Green
+        Write-Host ""
+    } catch {
+        Write-LogMessage -Type ERROR -Message "Update failed: $($_.Exception.Message)"
+        Write-Host ""
+        Write-Host "To update manually, run:" -ForegroundColor Yellow
+        Write-Host "  Update-Module -Name $ModuleName" -ForegroundColor Cyan
+        Write-Host ""
+    }
+}
+function Invoke-VcfEdgeAtScaleUpdateCheck {
+
+    <#
+        .SYNOPSIS
+        Checks PSGallery for a newer version of the VcfEdgeAtScale module and optionally installs it.
+
+        .DESCRIPTION
+        Queries the PowerShell Gallery for the latest published version of VcfEdgeAtScale and compares it
+        to the currently running version. The check runs regardless of how the module was installed.
+
+        When a newer version is found:
+        - If the module was installed via PSGallery (Get-InstalledModule shows Repository = PSGallery), the
+          user is offered the option to run Update-Module automatically (default Y).
+        - If the module was installed manually (cloned/copied), the new version is announced and the manual
+          update steps are shown; no automatic install is attempted.
+
+        The check is skipped silently when:
+        - PSGallery cannot be reached (network error, proxy, air-gap). All PSGallery errors are non-fatal.
+        - The infrastructure JSON is loaded and common.autoUpdate is explicitly set to false.
+
+        Auto-checks triggered by New-LogFile (once-per-day) are quiet when no update is found; only a new
+        version produces visible output. Manual invocation (called from Start-VcfEdgeAtScale -CheckForUpdates)
+        always reports the outcome, including "already up to date."
+
+        .PARAMETER Quiet
+        When set, suppress output when the module is already up to date. Used for the daily auto-check.
+
+        .PARAMETER InputData
+        Optional parsed infrastructure JSON object. When supplied, common.autoUpdate is read to respect
+        an operator override that disables auto-checks.
+
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleUpdateCheck
+
+        Checks for an available update and prompts to install if one is found (PSGallery installs) or
+        shows manual update steps (manually installed copies).
+
+        .EXAMPLE
+        Invoke-VcfEdgeAtScaleUpdateCheck -Quiet -InputData $inputData
+
+        Daily auto-check; silent when already at the latest version, respects common.autoUpdate override.
+
+        .NOTES
+        Requires network access to the PowerShell Gallery. All PSGallery errors are non-fatal and logged
+        at DEBUG; the check is silently skipped rather than surfacing an error to the operator.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Object]$InputData,
+        [Parameter(Mandatory = $false)] [Switch]$Quiet
+    )
+
+    # Respect common.autoUpdate = false override when infrastructure JSON is loaded.
+    if ($null -ne $InputData -and $null -ne $InputData.common -and $null -ne $InputData.common.PSObject.Properties["autoUpdate"]) {
+        $autoUpdateValue = $InputData.common.autoUpdate
+        if ($autoUpdateValue -is [bool] -and -not $autoUpdateValue) {
+            Write-LogMessage -Type DEBUG -Message "Update check skipped: common.autoUpdate is false in infrastructure JSON."
+            return
+        } elseif ($autoUpdateValue -isnot [bool]) {
+            Write-LogMessage -Type DEBUG -Message "Update check: common.autoUpdate value is not a boolean ($($autoUpdateValue.GetType().Name)); treating as enabled."
+        }
+    }
+
+    # Determine the current running version and whether this was a PSGallery install.
+    # Get-InstalledModule only knows about modules registered by Install-Module/Update-Module;
+    # manually installed copies will return $null.
+    $installedModule = Get-InstalledModule -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue
+    $isGalleryInstall = $null -ne $installedModule -and $installedModule.Repository -eq "PSGallery"
+
+    # Use the running module's version as the baseline for the comparison regardless of
+    # install source; Get-Module is always available even for manual installs.
+    $runningModule = Get-Module -Name "VcfEdgeAtScale" -ErrorAction SilentlyContinue
+    if ($null -eq $runningModule) {
+        Write-LogMessage -Type DEBUG -Message "Update check skipped: VcfEdgeAtScale is not currently loaded."
+        return
+    }
+    $currentVersion = [Version]$runningModule.Version
+
+    # Query PSGallery. Any failure (network, proxy, air-gap) is non-fatal and silently skipped.
+    try {
+        $galleryModule = Find-Module -Name "VcfEdgeAtScale" -Repository "PSGallery" -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Update check skipped: could not reach PSGallery. $($_.Exception.Message)"
+        return
+    }
+
+    $latestVersion = [Version]$galleryModule.Version
+
+    if ($latestVersion -le $currentVersion) {
+        if (-not $Quiet) {
+            Write-LogMessage -Type INFO -Message "VcfEdgeAtScale is up to date (version $currentVersion)."
+        }
+        return
+    }
+
+    Write-LogMessage -Type ADVISORY -Message "A new version of VcfEdgeAtScale is available: $latestVersion (you have $currentVersion)." -PrependNewLine
+
+    if (-not $isGalleryInstall) {
+        # Module was installed manually — cannot use Update-Module; show manual steps.
+        Write-Host ""
+        Write-Host "This module was not installed from PSGallery. To update, pull the latest source and re-run the installer:" -ForegroundColor Yellow
+        Write-Host "  git pull" -ForegroundColor Cyan
+        Write-Host "  .\VcfEdgeAtScale\Install-VcfEdgeAtScaleModule.ps1" -ForegroundColor Cyan
+        Write-Host ""
+        return
+    }
+
+    # PSGallery install — prompt to update automatically. Default is Y.
+    Invoke-PsGalleryModuleUpdate -ModuleName "VcfEdgeAtScale" -LatestVersion $latestVersion
 }
 
 #endregion
