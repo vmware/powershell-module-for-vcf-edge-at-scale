@@ -31,12 +31,14 @@
 # Last modified: 2026-05-19
 #
 # Private implementation files (dot-sourced below):
-#   Private/Logging.ps1     — logging, vCenter connectivity, content library, witness prep
-#   Private/Cluster.ps1     — cluster, datastore, vSAN, VMFS, disk operations
-#   Private/Networking.ps1  — VDS, VMkernel cleanup, management restore
+#   Private/Logging.ps1     — logging, vCenter connectivity (Test-VcenterConnection, Assert-VcenterConnected), content library, witness prep
+#   Private/Cluster.ps1     — cluster, datastore, vSAN, VMFS, disk operations, vLCM helpers
+#   Private/Networking.ps1  — VDS, VMkernel cleanup, management restore, IP/network primitives
 #   Private/Supervisor.ps1  — supervisor, Harbor, Argo CD, workload networking
-#   Private/Validation.ps1  — cleanup, deployment bootstrap, validation, vLCM helpers
-#   Private/EntryPoints.ps1 — Start-VcfEdgeAtScale, configuration help (exported)
+#   Private/Yaml.ps1        — YAML serialization and deserialization
+#   Private/Validation.ps1  — deployment phase helpers, validation
+#   Private/Deployment.ps1  — cleanup orchestration, Initialize-VcfEdgeAtScale deployment entry point
+#   Private/EntryPoints.ps1 — Start-VcfEdgeAtScale, configuration help, UI sync (exported)
 #
 
 # Module-scope initialization helpers. These are private functions defined before the script-scope
@@ -47,11 +49,36 @@
 # Function: drive after use (one-shot helper). Get-VcfEdgeAtScaleVcfCmd is kept as a private
 # lazy-resolver callable by the dot-sourced private files.
 function Read-VcfEdgeAtScaleManifestVersion {
+
+    <#
+    .SYNOPSIS
+        Reads the module version string from a PowerShell manifest file.
+
+    .DESCRIPTION
+        Imports the .psd1 manifest at ManifestPath and returns its ModuleVersion string.
+        On any error (file missing, parse failure) emits a Warning and returns "unknown".
+        This function is removed from the Function: drive immediately after module
+        initialization and must not be called after that point.
+
+    .PARAMETER ManifestPath
+        Full path to the .psd1 manifest file to read.
+
+    .EXAMPLE
+        $version = Read-VcfEdgeAtScaleManifestVersion -ManifestPath "$PSScriptRoot/VcfEdgeAtScale.psd1"
+
+    .OUTPUTS
+        String. The ModuleVersion value from the manifest, or "unknown" on error.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ManifestPath
     )
+
     try {
-        return (Import-PowerShellDataFile -Path $ManifestPath).ModuleVersion
+        # -ErrorAction Stop converts the non-terminating file-not-found error into a catchable exception.
+        return (Import-PowerShellDataFile -Path $ManifestPath -ErrorAction Stop).ModuleVersion
     } catch {
         Write-Warning "VcfEdgeAtScale: Could not read module version from '$ManifestPath' — $($_.Exception.Message). Version will be reported as 'unknown'."
         return "unknown"
@@ -69,6 +96,9 @@ function Get-VcfEdgeAtScaleVcfCmd {
         the cached value immediately with no I/O. Deferring the scan from module-load time to
         first use avoids ~1-2 seconds of PATH scan latency on every new shell startup (macOS).
 
+        .EXAMPLE
+        $vcfCmd = Get-VcfEdgeAtScaleVcfCmd
+
         .OUTPUTS
         String. The resolved VCF CLI command name (e.g. "vcf" or "vcf.exe").
 
@@ -79,6 +109,10 @@ function Get-VcfEdgeAtScaleVcfCmd {
         invokes this function first. Any code path that bypasses Get-EnvironmentSetup must call
         this function explicitly before using $Script:VcfCmd.
     #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param ()
 
     if ($null -ne $Script:VcfCmd) {
         return $Script:VcfCmd
@@ -128,7 +162,7 @@ $Script:VcfCmd = $null
 # Get-VcfEdgeAtScaleVcfCmd is intentionally kept — it is a private lazy-resolver used by the dot-sourced private files.
 Remove-Item -Path Function:\Read-VcfEdgeAtScaleManifestVersion -ErrorAction SilentlyContinue
 
-# Define log level hierarchy (lower number = lower priority, higher number = higher priority)
+# Define log level hierarchy (lower number = lower priority, higher number = higher priority).
 $Script:LogLevelHierarchy = @{
     "DEBUG" = 0
     "INFO" = 1
@@ -138,7 +172,7 @@ $Script:LogLevelHierarchy = @{
     "ERROR" = 5
 }
 
-# Initialize log level (will be set by Start-VcfEdgeAtScale)
+# Initialize log level (will be set by Start-VcfEdgeAtScale).
 $Script:ConfiguredLogLevel = "INFO"
 # When $true, Invoke-PauseBeforeRollbackIfRequested will skip its prompt (cleanup confirmation is sufficient). Set during -CleanUp cleanup.
 $Script:CleanUpOnly = $false
@@ -161,7 +195,7 @@ class VcfDeploymentException : System.Exception {
 }
 # Set when Invoke-VsanDeploymentRollback (or other rollback) is entered so the main catch does not prompt/run rollback again.
 $Script:RollbackAttempted = $false
-# Set when rollback fails (e.g. Remove-Cluster failed); main catch rethrows immediately so the script fails exit.
+# Set when rollback fails (e.g. Remove-Cluster failed); main catch rethrows immediately so the script exits with a non-zero status.
 $Script:RollbackFailed = $false
 # Set when we enter the ArgoCD deployment try block (Set-ArgoCDService, Add-ArgoCDNamespace, etc.); cleared at start of each cluster. Used to choose ArgoCD-only rollback (remove namespace, keep supervisor) vs supervisor-only rollback when deployment fails after supervisor is enabled.
 $Script:ArgoCDPhaseStarted = $false
@@ -256,6 +290,51 @@ if (-not $IsWindows -and
     Remove-Item Env:\VcfEdgeatScaleRootDirectory -ErrorAction SilentlyContinue
 }
 
+# =============================================================================
+# MODULE-SCOPE STATE TIERS — contract for all $Script: variables in this module
+#
+# Tier 1 — Module constants (set above at load time, never mutate):
+#   String constants, directory names, filename constants, configurable timeouts,
+#   log-level hierarchy, ArgoCD timeouts, service YAML template names, rollback
+#   exception classes, and the supervisor service registry.
+#   These are safe to read from any function at any time.
+#
+# Tier 2 — Logging infrastructure (owned by Private/Logging.ps1):
+#   LogFile, LogFolder, LogOnly, LogLevelHierarchy, ConfiguredLogLevel,
+#   LogMessagePending, LogMessagePendingTimestamp, LogMessagePendingType,
+#   NewLogFileCreatedThisSession.
+#   Private to the logging subsystem; do not read or write from other files.
+#
+# Tier 3 — Deployment session state (set once per Initialize-VcfEdgeAtScale call):
+#   Valid from the moment Initialize-VcfEdgeAtScale begins until its finally block
+#   clears credentials. Not valid outside a deployment run — $null at load time.
+#   Set by: Get-InitializationConfigFromJson (vCenterName, VCenterUser) and
+#           Set-ScriptVcenterCredential / Connect-Vcenter (VcenterCredential).
+#   Cleared by: the finally block in Initialize-VcfEdgeAtScale (VcenterCredential).
+$Script:vCenterName           = $null  # vCenter FQDN; read by 548+ call sites via -Server parameter
+$Script:VCenterUser           = $null  # vCenter username; read by Connect-Vcenter and REST helpers
+$Script:VcenterCredential     = $null  # PSCredential; cleared in the finally block after each run
+$Script:VcenterInsecurePassword = $null  # plain-text credential path, set when VCENTER_COMMON_PASSWORD env var is used
+
+# Tier 4 — Per-cluster ephemeral flags (reset at the start of each cluster iteration):
+#   Reset by Invoke-ClusterDeploymentIteration before each cluster loop.
+#   Written by inner deployment, rollback, and service-install helpers.
+#   Read by catch blocks in Invoke-ClusterDeploymentIteration and Invoke-ClusterRollbackPhase
+#   to decide whether a rollback attempt is needed or has already been made.
+#   Not valid across cluster boundaries — always reset before each cluster starts.
+# (RollbackAttempted, RollbackFailed, ArgoCDPhaseStarted, HarborPhaseStarted declared above.)
+$Script:SupervisorName              = $null  # supervisor FQDN for current cluster; used by vSAN tag helpers
+$Script:DidMigrateVmk0ToVdsThisRun  = $false # $true when vmk0 has been migrated to VDS in this run; used by rollback to decide whether to restore VSS
+
+# Tier 5 — Performance-tuning constants (set at load time in Private/Cluster.ps1):
+#   VsanOsaEligibleDisksDelaySeconds, HaNetworkStabilizationDelaySeconds,
+#   HaPostVsanStabilizationDelaySeconds, DatastoreRenameVerificationDelaySeconds,
+#   DatastoreWaitLogIntervalSeconds, MinHostDiskRetrievalTimeoutSeconds,
+#   MaxPowerCliTimeoutSeconds, PowerCliTimeoutBufferSeconds, VsanStoragePoolDiskType.
+#   These are declared at module scope in Private/Cluster.ps1 (not here) because they
+#   belong semantically to the cluster/storage subsystem. Treat them as read-only constants.
+# =============================================================================
+
 #endregion
 
 # Dot-source private implementation files in dependency order.
@@ -264,5 +343,7 @@ if (-not $IsWindows -and
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Cluster.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Networking.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Supervisor.ps1")
+. (Join-Path -Path $PSScriptRoot -ChildPath "Private/Yaml.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/Validation.ps1")
+. (Join-Path -Path $PSScriptRoot -ChildPath "Private/Deployment.ps1")
 . (Join-Path -Path $PSScriptRoot -ChildPath "Private/EntryPoints.ps1")

@@ -36,7 +36,7 @@
 RootModule = 'VcfEdgeAtScale.psm1'
 
 # Version number of this module.
-ModuleVersion = '1.0.3.1022'
+ModuleVersion = '1.0.3.1023'
 
 # Supported PSEditions
 CompatiblePSEditions = @('Core')
@@ -150,11 +150,13 @@ FileList = @(
     'VcfEdgeAtScale.psd1',
     'VcfEdgeAtScale.psm1',
     'Private/Cluster.ps1',
+    'Private/Deployment.ps1',
     'Private/EntryPoints.ps1',
     'Private/Logging.ps1',
     'Private/Networking.ps1',
     'Private/Supervisor.ps1',
     'Private/Validation.ps1',
+    'Private/Yaml.ps1',
     'Templates/1.1.0-25100889.yml',
     'Templates/EXAMPLE.rtf',
     'Templates/README.rtf',
