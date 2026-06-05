@@ -1,25 +1,21 @@
 # API graph - VcfEdgeAtScale.psm1
 
-Generated on **2026-06-04 17:16:57 -04:00** by `internalTools/VcfScriptApiMap/New-VcfScriptApiGraph.ps1`. Regenerate at any time:
-
-```powershell
-..\internalTools\VcfScriptApiMap\New-VcfScriptApiGraph.ps1 -Path "VcfEdgeAtScale.psm1"
-```
+Generated on **2026-06-04 21:45:16 -04:00**.
 
 Sources analyzed:
 
-- `VcfEdgeAtScale.psm1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/VcfEdgeAtScale.psm1`)
+- `VcfEdgeAtScale.psm1` (`VcfEdgeAtScale/VcfEdgeAtScale.psm1`)
 
 Auto-discovered via dot-source:
 
-- `Logging.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Logging.ps1`)
-- `Cluster.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Cluster.ps1`)
-- `Networking.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Networking.ps1`)
-- `Supervisor.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Supervisor.ps1`)
-- `Yaml.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Yaml.ps1`)
-- `Validation.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Validation.ps1`)
-- `Deployment.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/Deployment.ps1`)
-- `EntryPoints.ps1` (`/Users/nthaler/git/pwsh-vcf-sa/VcfEdgeAtScale/Private/EntryPoints.ps1`)
+- `Logging.ps1` (`VcfEdgeAtScale/Private/Logging.ps1`)
+- `Cluster.ps1` (`VcfEdgeAtScale/Private/Cluster.ps1`)
+- `Networking.ps1` (`VcfEdgeAtScale/Private/Networking.ps1`)
+- `Supervisor.ps1` (`VcfEdgeAtScale/Private/Supervisor.ps1`)
+- `Yaml.ps1` (`VcfEdgeAtScale/Private/Yaml.ps1`)
+- `Validation.ps1` (`VcfEdgeAtScale/Private/Validation.ps1`)
+- `Deployment.ps1` (`VcfEdgeAtScale/Private/Deployment.ps1`)
+- `EntryPoints.ps1` (`VcfEdgeAtScale/Private/EntryPoints.ps1`)
 
 ## Legend
 
