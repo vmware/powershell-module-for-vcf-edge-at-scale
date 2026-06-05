@@ -59,8 +59,10 @@ function Initialize-ScriptVcfPowerCliModuleVersion {
         .NOTES
         Throws with an explicit message so CI consoles and catch blocks show the root cause without opening the log file.
         Write-LogMessage still records ERROR for log correlation when Script:LogFile is initialized.
+        Side effect: sets $Script:VcfPowerCliModuleVersion on success.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Version]$MinimumVcfPowerCliVersion = "9.0.0",
         [Parameter(Mandatory = $false)] [AllowNull()] [System.Management.Automation.PSModuleInfo]$PreResolvedModule = $null
@@ -108,12 +110,14 @@ function Get-VcfSdkInitializeCommand {
         System.Management.Automation.CommandInfo, or $null if no candidate exists in the current session.
     #>
 
+    [CmdletBinding()]
+    [OutputType([Object])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String[]]$NameCandidates
     )
 
     foreach ($candidateName in $NameCandidates) {
-        if ([string]::IsNullOrWhiteSpace($candidateName)) {
+        if ([String]::IsNullOrWhiteSpace($candidateName)) {
             continue
         }
 
@@ -145,6 +149,8 @@ function Test-VcfPowerCliVersionAtLeast {
         Boolean
     #>
 
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [Version]$MinimumVersion
     )
@@ -155,6 +161,43 @@ function Test-VcfPowerCliVersionAtLeast {
 
     return ($Script:VcfPowerCliModuleVersion -ge $MinimumVersion)
 }
+function ConvertFrom-SecureStringViaBstr {
+
+    <#
+        .SYNOPSIS
+        Converts a SecureString to a plain-text string using BSTR marshalling, then zeros the BSTR immediately.
+
+        .DESCRIPTION
+        Allocates a BSTR via Marshal.SecureStringToBSTR, reads the plain text, and guarantees
+        Marshal.ZeroFreeBSTR in a finally block so the plain-text window on the heap is as short as
+        possible. Intended only for immediate use (e.g. building a Basic auth header) — never store
+        the return value in a variable that outlives a single statement.
+
+        .PARAMETER SecureString
+        The SecureString to convert.
+
+        .OUTPUTS
+        String — the plain-text value of the SecureString.
+
+        .EXAMPLE
+        $plain = ConvertFrom-SecureStringViaBstr -SecureString $credential.Password
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [SecureString]$SecureString
+    )
+
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($SecureString)
+    try {
+        return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
+    } finally {
+        if ($bstr -ne [IntPtr]::Zero) {
+            [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
+        }
+    }
+}
 function Get-VcenterRestApiPlainPassword {
 
     <#
@@ -164,8 +207,7 @@ function Get-VcenterRestApiPlainPassword {
         .DESCRIPTION
         Priority order: VcenterPassword (SecureString) > VcenterCredential (PSCredential) > VcenterInsecurePassword (String).
         The returned value is intended for immediate Basic auth encoding only and is not written to the log.
-        Uses SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR so the plain text exists only on the stack
-        for the duration of this call.
+        Uses ConvertFrom-SecureStringViaBstr so the plain text exists only on the stack for the duration of this call.
 
         .PARAMETER VcenterCredential
         Optional PSCredential; password is extracted via BSTR and zeroed immediately after use.
@@ -180,9 +222,18 @@ function Get-VcenterRestApiPlainPassword {
         String, or $null if no source yields a non-empty password.
 
         .NOTES
-        Uses SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR for the SecureString and PSCredential paths.
+        Uses ConvertFrom-SecureStringViaBstr (SecureStringToBSTR / PtrToStringBSTR / ZeroFreeBSTR) for the
+        SecureString and PSCredential paths.
+
+        .EXAMPLE
+        $vcenterRestApiPlainPassword = Get-VcenterRestApiPlainPassword
+        if ($null -eq $vcenterRestApiPlainPassword) {
+            Write-LogMessage -Type ERROR -Message "Get-VcenterRestApiPlainPassword: result not found."
+        }
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingPlainTextForPassword', '')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingUsernameAndPasswordParams', '')]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('UsePSCredentialType', '')]
@@ -193,30 +244,14 @@ function Get-VcenterRestApiPlainPassword {
     )
 
     if ($null -ne $VcenterPassword) {
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($VcenterPassword)
-        try {
-            return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-        }
-        finally {
-            if ($bstr -ne [IntPtr]::Zero) {
-                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-            }
-        }
+        return ConvertFrom-SecureStringViaBstr -SecureString $VcenterPassword
     }
 
     if ($null -ne $VcenterCredential) {
-        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($VcenterCredential.Password)
-        try {
-            return [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr)
-        }
-        finally {
-            if ($bstr -ne [IntPtr]::Zero) {
-                [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr)
-            }
-        }
+        return ConvertFrom-SecureStringViaBstr -SecureString $VcenterCredential.Password
     }
 
-    if (-not [string]::IsNullOrWhiteSpace($VcenterInsecurePassword)) {
+    if (-not [String]::IsNullOrWhiteSpace($VcenterInsecurePassword)) {
         return $VcenterInsecurePassword
     }
 
@@ -226,9 +261,28 @@ function ConvertTo-SecureStringForCredential {
 
     <#
         .SYNOPSIS
-        Builds a SecureString from a string for PSCredential construction.
+        Builds a SecureString from a plain-text string for PSCredential construction.
+
+        .DESCRIPTION
+        Wraps ConvertTo-SecureString -AsPlainText -Force so callers do not need to suppress
+        PSAvoidUsingConvertToSecureStringWithPlainText at every call site. The suppression
+        is intentional — this is the designated conversion point for environment-variable
+        credentials.
+
+        .PARAMETER PlainText
+        The plain-text string to convert. Empty string is permitted (PSCredential allows blank passwords).
+
+        .OUTPUTS
+        SecureString
+
+        .EXAMPLE
+        # Use an environment variable so the plain text never appears in script source.
+        $securePassword = ConvertTo-SecureStringForCredential -PlainText $env:VCENTER_PASSWORD
+        $vcenterCredential = New-Object System.Management.Automation.PSCredential("administrator@vsphere.local", $securePassword)
     #>
 
+    [CmdletBinding()]
+    [OutputType([SecureString])]
     [Diagnostics.CodeAnalysis.SuppressMessageAttribute('PSAvoidUsingConvertToSecureStringWithPlainText', '')]
     Param (
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$PlainText
@@ -249,8 +303,15 @@ function Set-ScriptVcenterCredential {
 
         .PARAMETER Credential
         vCenter PSCredential to store.
+    
+        .EXAMPLE
+        $securePwd = ConvertTo-SecureStringForCredential -PlainText $env:VCENTER_PASSWORD
+        Set-ScriptVcenterCredential -Credential (
+            New-Object System.Management.Automation.PSCredential("administrator@vsphere.local", $securePwd)
+        )
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCredential]$Credential
     )
@@ -290,6 +351,8 @@ function Test-LogLevel {
         Returns $true if the message should be displayed, $false otherwise.
     #>
 
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$ConfiguredLevel,
         [Parameter(Mandatory = $true)] [ValidateSet("DEBUG", "INFO", "ADVISORY", "WARNING", "EXCEPTION", "ERROR")] [String]$MessageType
@@ -351,8 +414,9 @@ function Write-ErrorAndReturn {
         # Caller checks result and decides how to handle.
         $result = Add-HostToVDS -Hostname $esxHost -VdsName $vdsName
         if (-not $result.Success) {
-            Write-LogMessage -Type ERROR -Message "VDS configuration failed: $($result.ErrorMessage)."
-            throw [VcfDeploymentException]::new("VDS configuration failed: $($result.ErrorMessage).")
+            $err = "VDS configuration failed: $($result.ErrorMessage)."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
         .OUTPUTS
@@ -365,6 +429,8 @@ function Write-ErrorAndReturn {
         function instead to allow the caller to control error handling.
     #>
 
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ErrorCode = "ERR_UNKNOWN",
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage
@@ -431,6 +497,8 @@ function Get-CleanErrorMessage {
         - Original message is returned if neither field is found
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage
     )
@@ -480,6 +548,8 @@ function Get-CleanServiceErrorMessage {
         If the message format is not recognized, returns the original message.
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ErrorMessage
     )
@@ -522,8 +592,7 @@ function Get-CleanServiceErrorMessage {
         $actualMessage = $actualMessage -replace '\b(.{2,}?)\1+\b', '$1'
     }
 
-    # Build clean error message.
-    $cleanParts = [System.Collections.ArrayList]::new()
+    $cleanParts = [System.Collections.Generic.List[String]]::new()
     if ($reason) {
         $null = $cleanParts.Add("Reason: $reason")
     }
@@ -535,9 +604,8 @@ function Get-CleanServiceErrorMessage {
         return $cleanParts -join '. '
     }
 
-    # Fallback: try to extract just the essential parts by removing verbose fields.
+    # Fallback: extract essential parts by removing verbose VCF error fields (Args, Params, etc.)
     $cleaned = $ErrorMessage
-    # Remove technical details and metadata.
     $cleaned = $cleaned -replace 'Args:\s*[^,]+', ''
     $cleaned = $cleaned -replace 'Params:\s*[^,]+', ''
     $cleaned = $cleaned -replace 'Localized:\s*[^,]+', ''
@@ -637,6 +705,8 @@ function Get-VcfEdgeAtScaleInstallSource {
         Returns "N/A (manifest unreadable)" without attempting a PSGet lookup.
     #>
 
+    [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ModuleVersion
     )
@@ -673,6 +743,74 @@ function Get-VcfEdgeAtScaleInstallSource {
     }
 
     return "N/A"
+}
+function Get-MacOsVersionInfo {
+
+    <#
+    .SYNOPSIS
+        Returns a friendly macOS version string using sw_vers, or $null on non-macOS or failure.
+    .DESCRIPTION
+        Calls sw_vers to retrieve product name and version. Returns a string such as
+        "macOS 14.5" when successful, or $null when not on macOS or when sw_vers fails.
+    .OUTPUTS
+        String, or $null when not on macOS or when sw_vers fails.
+    .EXAMPLE
+        $macVersion = Get-MacOsVersionInfo
+    .NOTES
+        Returns $null on any error; the caller falls back to $PSVersionTable.OS.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param ()
+
+    if (-not $IsMacOS) { return $null }
+    try {
+        $macOsName = (sw_vers --productName)
+        $macOsRelease = (sw_vers --productVersion)
+        return "$macOsName $macOsRelease"
+    } catch [Exception] {
+        Write-LogMessage -Type DEBUG -Message "sw_vers failed; using fallback OS info. $($_.Exception.Message)"
+        return $null
+    }
+}
+function Get-WindowsVersionInfo {
+
+    <#
+    .SYNOPSIS
+        Returns a friendly Windows version string using Get-ComputerInfo, or $null on non-Windows or timeout.
+    .DESCRIPTION
+        Spawns Get-ComputerInfo in a background job with an 8-second timeout so it never blocks
+        the deployment startup path. Returns "<OSName> <OSVersion>" on success, $null otherwise.
+    .OUTPUTS
+        String, or $null when not on Windows, on timeout, or on any error.
+    .EXAMPLE
+        $winVersion = Get-WindowsVersionInfo
+    .NOTES
+        Returns $null on non-Windows, timeout, or any error; caller falls back to $PSVersionTable.OS.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param ()
+
+    if (-not $IsWindows) { return $null }
+    $computerInfoJob = $null
+    try {
+        $computerInfoJob = Start-Job -ScriptBlock { Get-ComputerInfo -ProgressAction SilentlyContinue | Select-Object OSName, OSVersion }
+        $null = Wait-Job -Job $computerInfoJob -Timeout 8
+        if ($computerInfoJob.State -eq 'Completed') {
+            $info = Receive-Job -Job $computerInfoJob -ErrorAction SilentlyContinue
+            if ($info) { return "$($info.OSName) $($info.OSVersion)" }
+        } else {
+            Write-LogMessage -Type DEBUG -Message "Get-ComputerInfo timed out after 8s; using fallback OS info."
+        }
+    } catch [Exception] {
+        Write-LogMessage -Type DEBUG -Message "Get-ComputerInfo failed; using fallback OS info. $($_.Exception.Message)"
+    } finally {
+        if ($null -ne $computerInfoJob) { Remove-Job -Job $computerInfoJob -Force -ErrorAction SilentlyContinue }
+    }
+    return $null
 }
 function Get-EnvironmentSetup {
 
@@ -716,6 +854,7 @@ function Get-EnvironmentSetup {
         CLI tool version detection (kubectl, vcf, python) is best-effort and never throws.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Version]$MinimumVcfPowerCliVersion = "9.0.0"
     )
@@ -772,52 +911,11 @@ function Get-EnvironmentSetup {
         $pythonVersion = $pyResult.Version
     }
 
-    # Start with basic OS information from PowerShell automatic variables.
     $operatingSystem = $($PSVersionTable.OS)
-    # Initialize platform-specific strings so the later if-tests are safe under StrictMode.
-    $macOsVersion = $null
-    $windowsVersion = $null
-
-    # Enhanced macOS information - sw_vers provides more user-friendly OS details than Darwin kernel info.
-    if ($IsMacOS) {
-        try {
-            $macOsName = (sw_vers --productName)
-            $macOsRelease = (sw_vers --productVersion)
-            $macOsVersion = "$macOsName $macOsRelease"
-        } catch [Exception] {
-            Write-LogMessage -Type DEBUG -Message "sw_vers failed; using fallback OS info. $($_.Exception.Message)"
-        }
-    }
-    if ($macOsVersion) {
-        $operatingSystem = $macOsVersion
-    }
-
-    # Enhanced Windows information — Get-ComputerInfo can take 5-30s; run it on a background job
-    # with a short timeout so it never blocks the deployment startup path.
-    if ($IsWindows) {
-        $computerInfoJob = $null
-        try {
-            $computerInfoJob = Start-Job -ScriptBlock { Get-ComputerInfo -ProgressAction SilentlyContinue | Select-Object OSName, OSVersion }
-            $null = Wait-Job -Job $computerInfoJob -Timeout 8
-            if ($computerInfoJob.State -eq 'Completed') {
-                $windowsProductInformation = Receive-Job -Job $computerInfoJob -ErrorAction SilentlyContinue
-                if ($windowsProductInformation) {
-                    $windowsVersion = "$($windowsProductInformation.OSName) $($windowsProductInformation.OSVersion)"
-                }
-            } else {
-                Write-LogMessage -Type DEBUG -Message "Get-ComputerInfo timed out after 8s; using fallback OS info."
-            }
-        } catch [Exception] {
-            Write-LogMessage -Type DEBUG -Message "Get-ComputerInfo failed; using fallback OS info. $($_.Exception.Message)"
-        } finally {
-            if ($null -ne $computerInfoJob) {
-                Remove-Job -Job $computerInfoJob -Force -ErrorAction SilentlyContinue
-            }
-        }
-    }
-    if ($windowsVersion) {
-        $operatingSystem = $windowsVersion
-    }
+    $macOsVersion = Get-MacOsVersionInfo
+    if ($macOsVersion) { $operatingSystem = $macOsVersion }
+    $windowsVersion = Get-WindowsVersionInfo
+    if ($windowsVersion) { $operatingSystem = $windowsVersion }
 
     Write-LogMessage -Type DEBUG -Message "Client PowerShell version is $powerShellRelease."
     Write-LogMessage -Type DEBUG -Message "Client VCF.PowerCLI version is $vcfPowerCliRelease."
@@ -831,7 +929,6 @@ function Get-EnvironmentSetup {
 }
 function New-LogFile {
 
-    [CmdletBinding(SupportsShouldProcess)]
     <#
         .SYNOPSIS
         Creates a log file with automatic directory structure and environment logging.
@@ -875,8 +972,10 @@ function New-LogFile {
         This function should be called before any Write-LogMessage calls to ensure the log
         infrastructure is properly initialized. The function throws a terminating error if it
         cannot create the required log directory or log file.
+        Side effects: sets $Script:LogFolder, $Script:LogFile, and $Script:NewLogFileCreatedThisSession.
     #>
 
+    [CmdletBinding(SupportsShouldProcess)]
     Param (
         [Parameter(Mandatory = $false)] [AllowEmptyString()] [String]$BaseDirectory,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$Directory = "logs",
@@ -886,18 +985,16 @@ function New-LogFile {
     # Generate timestamp for daily log file naming (yyyy-MM-dd format).
     $fileTimeStamp = Get-Date -Format "yyyy-MM-dd"
 
-    # Set script-scoped variables for log directory and file paths.
     # Default to the user's local application data directory so logs are never written into
     # the module installation folder (which may be read-only and is not a user data location).
     $localAppData = [System.Environment]::GetFolderPath([System.Environment+SpecialFolder]::LocalApplicationData)
-    $logParentPath = Join-Path $localAppData "VcfEdgeAtScale"
+    $logParentPath = Join-Path -Path $localAppData -ChildPath "VcfEdgeAtScale"
     if (-not [String]::IsNullOrWhiteSpace($BaseDirectory)) {
         $logParentPath = $BaseDirectory
     }
     $Script:LogFolder = Join-Path -Path $logParentPath -ChildPath $Directory
     $Script:LogFile = Join-Path -Path $Script:LogFolder -ChildPath "$Prefix-$fileTimeStamp.log"
 
-    # Create log directory if it doesn't exist.
     if (-not (Test-Path -Path $Script:LogFolder -PathType Container) ) {
         if ($PSCmdlet.ShouldProcess($Script:LogFolder, "Create directory")) {
             Write-Information "LogFolder not found, creating $Script:LogFolder" -InformationAction Continue
@@ -905,12 +1002,11 @@ function New-LogFile {
                 New-Item -ItemType Directory -Path $Script:LogFolder -ErrorAction Stop | Out-Null
             } catch {
                 Write-Information "Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)" -InformationAction Continue
-                throw "Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)"
+                throw [VcfDeploymentException]::new("Failed to create log directory `"$Script:LogFolder`": $($_.Exception.Message)")
             }
         }
     }
 
-    # Create the log file if it doesn't exist for today.
     # When creating a new log file, automatically capture environment details for troubleshooting.
     # $Script:NewLogFileCreatedThisSession is reset unconditionally so re-calling New-LogFile on the same day
     # does not re-trigger the daily update check. Under -WhatIf, ShouldProcess returns $false and the flag
@@ -922,7 +1018,7 @@ function New-LogFile {
                 New-Item -Type File -Path $Script:LogFile -ErrorAction Stop | Out-Null
             } catch {
                 Write-Information "Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)" -InformationAction Continue
-                throw "Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)"
+                throw [VcfDeploymentException]::new("Failed to create log file `"$Script:LogFile`": $($_.Exception.Message)")
             }
             Get-EnvironmentSetup
 
@@ -945,13 +1041,17 @@ function Write-LogEntryToFile {
 
         .PARAMETER LogContent
         The fully formatted log line to append (timestamp + type + message already joined).
+    
+        .EXAMPLE
+        Write-LogEntryToFile -LogContent "value"
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$LogContent
     )
 
-    if (-not $Script:LogFile -or [string]::IsNullOrWhiteSpace($Script:LogFile)) {
+    if (-not $Script:LogFile -or [String]::IsNullOrWhiteSpace($Script:LogFile)) {
         return
     }
     try {
@@ -962,6 +1062,86 @@ function Write-LogEntryToFile {
         Add-Content -Path $Script:LogFile -Value $LogContent -ErrorAction Stop
     } catch {
         Write-LogMessage -Type DEBUG -Message "Log file write skipped or failed (standalone call). $($_.Exception.Message)" -SuppressOutputToScreen -SuppressOutputToFile
+    }
+}
+function Complete-PendingLogMessage {
+
+    <#
+    .SYNOPSIS
+        Completes a pending NoNewline log line by appending a suffix and flushing to file and console.
+    .DESCRIPTION
+        When a prior Write-LogMessage -NoNewline call stored a pending message, this function appends
+        Message to form the final line, writes it to the log file, and outputs the suffix to the
+        console so the line completes. When no pending message exists, it logs a programming-error
+        warning and writes Message as a standalone line.
+    .PARAMETER ForceToScreen
+        Passed through from the outer Write-LogMessage call.
+    .PARAMETER Message
+        The suffix to append to the pending message, or the standalone message if no pending.
+    .PARAMETER MessageColor
+        Pre-computed console color for the current message type.
+    .PARAMETER MsgTypeToColor
+        Hashtable mapping type strings to console color names.
+    .PARAMETER ShouldDisplay
+        Whether the current message type meets the configured log-level threshold.
+    .PARAMETER SuppressOutputToFile
+        When set, skips writing to the log file.
+    .PARAMETER SuppressOutputToScreen
+        When set, skips console output.
+    .PARAMETER TimeStamp
+        Pre-formatted timestamp string for use in fallback standalone output.
+    .PARAMETER Type
+        The message type (INFO, ERROR, etc.) used in the fallback standalone log entry.
+    .EXAMPLE
+        Complete-PendingLogMessage -ForceToScreen:$false -Message " Done" -MessageColor "Green" -MsgTypeToColor $colors -ShouldDisplay $true -SuppressOutputToFile:$false -SuppressOutputToScreen:$false -TimeStamp $ts -Type INFO
+    .NOTES
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
+        Called exclusively from Write-LogMessage.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $false)] [Switch]$ForceToScreen,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Message,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MessageColor,
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [Hashtable]$MsgTypeToColor,
+        [Parameter(Mandatory = $true)] [Bool]$ShouldDisplay,
+        [Parameter(Mandatory = $false)] [Switch]$SuppressOutputToFile,
+        [Parameter(Mandatory = $false)] [Switch]$SuppressOutputToScreen,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$TimeStamp,
+        [Parameter(Mandatory = $true)] [ValidateSet("INFO", "ERROR", "WARNING", "EXCEPTION", "ADVISORY", "DEBUG")] [String]$Type
+    )
+
+    if ($null -ne $Script:LogMessagePending) {
+        $fullMessage = $Script:LogMessagePending + $Message
+        $pendingType = $Script:LogMessagePendingType
+        $pendingTimestamp = $Script:LogMessagePendingTimestamp
+        $pendingColor = $MsgTypeToColor.$pendingType
+        $Script:LogMessagePending = $null
+        $Script:LogMessagePendingType = $null
+        $Script:LogMessagePendingTimestamp = $null
+        if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ((Test-LogLevel -ConfiguredLevel $Script:ConfiguredLogLevel -MessageType $pendingType) -or $ForceToScreen)) {
+            # Write only the suffix; the NoNewline call already wrote the prefix without a newline.
+            Write-Host -ForegroundColor $pendingColor $Message
+            [Console]::Out.Flush()
+        }
+        if (-not $SuppressOutputToFile) {
+            Write-LogEntryToFile -LogContent "[$pendingTimestamp] ($pendingType) $fullMessage"
+        }
+    } else {
+        # No pending message; -CompletePending called without a prior -NoNewline. Log a programming-error
+        # warning, then write $Message as a standalone line so output is not silently lost.
+        $truncatedMessage = if ($Message.Length -gt 80) { "$($Message.Substring(0, 80))..." } else { $Message }
+        $warningText = "[Write-LogMessage] -CompletePending called with no pending NoNewline message. Suffix written as standalone line: '$truncatedMessage'"
+        Write-LogEntryToFile -LogContent "[$TimeStamp] (WARNING) $warningText"
+        if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ($ShouldDisplay -or $ForceToScreen)) {
+            Write-Host -ForegroundColor $MessageColor "[$Type] $Message"
+            [Console]::Out.Flush()
+        }
+        if (-not $SuppressOutputToFile) {
+            Write-LogEntryToFile -LogContent "[$TimeStamp] ($Type) $Message"
+        }
     }
 }
 function Write-LogMessage {
@@ -1060,14 +1240,18 @@ function Write-LogMessage {
         This function relies on the Script:LogFile, Script:LogOnly, and Script:ConfiguredLogLevel variables being set.
         The log file path should be established using the New-LogFile function before calling this function.
         The Script:ConfiguredLogLevel should be set during script initialization.
-        Write-Host is used here by design for console output (severity-based color); do not use Write-Host elsewhere for logging (use Write-LogMessage). Other approved Write-Host uses in this module: interactive tables and prompts (e.g. Show-Version, Find-VlcmImage).
+        Side effects: -NoNewline sets $Script:LogMessagePending, $Script:LogMessagePendingType, and
+        $Script:LogMessagePendingTimestamp; -CompletePending clears them.
+        Write-Host is the primary output mechanism in this function; all Write-Host calls are
+        intentional interactive console output. Use Write-LogMessage for diagnostic logging.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$AppendNewLine,
-        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Message,
         [Parameter(Mandatory = $false)] [Switch]$CompletePending,
         [Parameter(Mandatory = $false)] [Switch]$ForceToScreen,
+        [Parameter(Mandatory = $true)] [AllowEmptyString()] [String]$Message,
         [Parameter(Mandatory = $false)] [Switch]$NoNewline,
         [Parameter(Mandatory = $false)] [Switch]$PrependNewLine,
         [Parameter(Mandatory = $false)] [Switch]$SuppressOutputToFile,
@@ -1090,37 +1274,18 @@ function Write-LogMessage {
 
     # CompletePending: append Message to the stored NoNewline line and write one combined line to file and console.
     if ($CompletePending) {
-        if ($null -ne $Script:LogMessagePending) {
-            $fullMessage = $Script:LogMessagePending + $Message
-            $pendingType = $Script:LogMessagePendingType
-            $pendingTimestamp = $Script:LogMessagePendingTimestamp
-            $pendingColor = $msgTypeToColor.$pendingType
-            $Script:LogMessagePending = $null
-            $Script:LogMessagePendingType = $null
-            $Script:LogMessagePendingTimestamp = $null
-            if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ((Test-LogLevel -ConfiguredLevel $Script:ConfiguredLogLevel -MessageType $pendingType) -or $ForceToScreen)) {
-                # Write only the suffix to the console; the NoNewline call already wrote the prefix without a newline.
-                Write-Host -ForegroundColor $pendingColor $Message
-                [Console]::Out.Flush()
-            }
-            if (-not $SuppressOutputToFile) {
-                Write-LogEntryToFile -LogContent ('[' + $pendingTimestamp + '] ' + '(' + $pendingType + ')' + ' ' + $fullMessage)
-            }
-        } else {
-            # No pending message exists; -CompletePending was called without a prior -NoNewline. Log a warning so
-            # the caller can be corrected, then write $Message as a standalone line so output is not silently lost.
-            $truncatedMessage = if ($Message.Length -gt 80) { $Message.Substring(0, 80) + "..." } else { $Message }
-            $warningText = "[Write-LogMessage] -CompletePending called with no pending NoNewline message. Suffix written as standalone line: '$truncatedMessage'"
-            # Intentionally bypasses $SuppressOutputToFile; this is a programming error diagnostic, not regular output.
-            Write-LogEntryToFile -LogContent ('[' + $timeStamp + '] ' + '(WARNING)' + ' ' + $warningText)
-            if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ($shouldDisplay -or $ForceToScreen)) {
-                Write-Host -ForegroundColor $messageColor "[$Type] $Message"
-                [Console]::Out.Flush()
-            }
-            if (-not $SuppressOutputToFile) {
-                Write-LogEntryToFile -LogContent ('[' + $timeStamp + '] ' + '(' + $Type + ')' + ' ' + $Message)
-            }
+        $completePendingParams = @{
+            ForceToScreen          = $ForceToScreen
+            Message                = $Message
+            MessageColor           = $messageColor
+            MsgTypeToColor         = $msgTypeToColor
+            ShouldDisplay          = $shouldDisplay
+            SuppressOutputToFile   = $SuppressOutputToFile
+            SuppressOutputToScreen = $SuppressOutputToScreen
+            TimeStamp              = $timeStamp
+            Type                   = $Type
         }
+        Complete-PendingLogMessage @completePendingParams
         return
     }
 
@@ -1155,12 +1320,26 @@ function Write-LogMessage {
     }
 
     # Display message to console with color coding (unless suppressed, in log-only mode, or below log level threshold).
-    # When a NoNewline message is pending, suppress this message's console output so the pending line is not broken (e.g. "Creating the cluster... Success"); the message still goes to the log file.
+    # When a NoNewline pending message is active, INFO/DEBUG/ADVISORY are suppressed from the console so the
+    # pending line stays clean (e.g. "Creating cluster... Done"). WARNING, ERROR, and EXCEPTION always show
+    # on screen immediately — suppressing them would hide actionable failure details from the operator.
+    # A bare newline is written before a high-priority message that interrupts a pending line so the dangling
+    # prefix is visually complete; $Script:LogMessagePending is preserved so CompletePending still writes the
+    # correctly combined line to the log file.
     # This is the designated console output for the logger; do not use Write-Host elsewhere (use Write-LogMessage).
-    if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ($shouldDisplay -or $ForceToScreen) -and $null -eq $Script:LogMessagePending) {
-        Write-Host -ForegroundColor $messageColor "[$Type] $Message"
-        # Flush console output to prevent buffering issues when Write-Progress is active.
-        [Console]::Out.Flush()
+    if (-not $SuppressOutputToScreen -and $Script:LogOnly -ne "enabled" -and ($shouldDisplay -or $ForceToScreen)) {
+        if ($null -ne $Script:LogMessagePending -and $Type -notin @('WARNING', 'ERROR', 'EXCEPTION')) {
+            # Pending line is active; suppress lower-priority message from screen. It still goes to the log file.
+        } else {
+            if ($null -ne $Script:LogMessagePending) {
+                # A high-priority message interrupts the pending line. Write a bare newline to move the
+                # cursor off the dangling prefix before showing the WARNING/ERROR.
+                Write-Host ""
+            }
+            Write-Host -ForegroundColor $messageColor "[$Type] $Message"
+            # Flush console output to prevent buffering issues when Write-Progress is active.
+            [Console]::Out.Flush()
+        }
     }
 
     # Add blank line after message if requested and not in log-only mode and meets log level threshold.
@@ -1168,9 +1347,8 @@ function Write-LogMessage {
         Write-Host ""
     }
 
-    # Write message to log file (unless suppressed).
     if (-not $SuppressOutputToFile) {
-        Write-LogEntryToFile -LogContent ('[' + $timeStamp + '] ' + '(' + $Type + ')' + ' ' + $Message)
+        Write-LogEntryToFile -LogContent "[$timeStamp] ($Type) $Message"
     }
 }
 function Show-Version {
@@ -1192,6 +1370,7 @@ function Show-Version {
         Specifies the option to not display the output to screen.
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$Silence
     )
@@ -1202,6 +1381,185 @@ function Show-Version {
         Write-LogMessage -Type INFO -Message "Version: $Script:ModuleVersion"
     } else {
         Write-LogMessage -Type DEBUG -Message "Script Version: $Script:ModuleVersion"
+    }
+}
+function Get-RetryCredential {
+
+    <#
+        .SYNOPSIS
+        Prompts the operator to retry a failed vCenter/ESX connection with a new password.
+
+        .DESCRIPTION
+        Asks the operator if they want to re-enter their password (Y/N loop). If Y, prompts for
+        the new password and returns a new PSCredential. If N, throws VcfDeploymentException.
+
+        .PARAMETER IsEsx
+        When $true, appends "(or press Enter for no password)" to the password prompt and passes
+        -AllowEmpty to Get-InteractiveInput.
+
+        .PARAMETER ServerName
+        FQDN or IP of the target server, used in the prompt message.
+
+        .PARAMETER ServerType
+        "vCenter" or "ESX" — used in the prompt message.
+
+        .PARAMETER Username
+        Username to embed in the new PSCredential.
+
+        .EXAMPLE
+        $cred = Get-RetryCredential -Username $username -ServerName "vc.lab" -ServerType "vCenter" -IsEsx $false
+
+        .NOTES
+        Called by Invoke-VcenterConnectionWithRetry on authentication failure.
+    #>
+
+    [CmdletBinding()]
+    [OutputType([PSCredential])]
+    Param (
+        [Parameter(Mandatory = $true)] [Bool]$IsEsx,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServerName,
+        [Parameter(Mandatory = $true)] [ValidateSet("vCenter", "ESX")] [String]$ServerType,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$Username
+    )
+
+    Write-LogMessage -Type INFO -Message ""
+    $retryResponse = $null
+    while ($retryResponse -ne "Y" -and $retryResponse -ne "N") {
+        $retryResponse = Read-Host "Would you like to re-enter your password? (Y/N)"
+        $retryResponse = $retryResponse.Trim().ToUpper()
+    }
+    if ($retryResponse -eq "N") {
+        $err = "User chose not to retry. Exiting."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+    Write-LogMessage -Type INFO -Message ""
+    $promptMessage = "Enter the password for the user `"$Username`" on $ServerType `"$ServerName`""
+    if ($IsEsx) { $promptMessage = "$promptMessage (or press Enter for no password)" }
+    $promptMessage = $promptMessage.Trim().TrimEnd(": ")
+    $newPassword = Get-InteractiveInput -PromptMessage $promptMessage -AsSecureString -AllowEmpty:$IsEsx
+    Write-LogMessage -Type INFO -Message ""
+    Write-LogMessage -Type INFO -Message "Retrying connection with new credentials..."
+    return New-Object System.Management.Automation.PSCredential($Username, $newPassword)
+}
+function Invoke-VcenterConnectionWithRetry {
+
+    <#
+        .SYNOPSIS
+        Attempts to connect to a vCenter or ESX host, retrying once with new credentials when
+        authentication fails and the caller allows interactive re-prompting.
+
+        .DESCRIPTION
+        Runs the credential retry loop extracted from Connect-Vcenter. Tries the supplied
+        credential, then:
+        - SSL errors: throws immediately (non-retryable).
+        - Auth failures with -SkipRetryPrompt: throws immediately.
+        - Auth failures without -SkipRetryPrompt: prompts the user (Y/N). Y re-prompts for
+          password and retries; N throws.
+        - Generic errors: throws immediately.
+
+        On success, sets $connectionSuccessful to $true and returns. Never returns without
+        throwing when all attempts fail.
+
+        .PARAMETER CurrentCredential
+        Initial PSCredential to try. May be replaced by a re-prompted credential on retry.
+
+        .PARAMETER ServerName
+        FQDN or IP of the target server.
+
+        .PARAMETER ServerType
+        "vCenter" or "ESX" — used in log messages and prompt text only.
+
+        .PARAMETER SkipRetryPrompt
+        When set, throws immediately on authentication failure without prompting.
+
+        .OUTPUTS
+        None. Throws on all failure paths.
+
+        .EXAMPLE
+        Invoke-VcenterConnectionWithRetry -CurrentCredential $cred -ServerName "vc.lab" -ServerType "vCenter"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] [PSCredential]$CurrentCredential,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServerName,
+        [Parameter(Mandatory = $true)] [ValidateSet("vCenter", "ESX")] [String]$ServerType,
+        [Parameter(Mandatory = $false)] [Switch]$SkipRetryPrompt
+    )
+
+    $connectionSuccessful = $false
+    $isEsx = ($ServerType -eq "ESX")
+
+    while (-not $connectionSuccessful) {
+        try {
+            Write-LogMessage -Type DEBUG -Message "Connecting to $ServerType `"$ServerName`" as user `"$($CurrentCredential.UserName)`"."
+            $connectParams = @{
+                Server     = $ServerName
+                Credential = $CurrentCredential
+                ErrorAction = 'Stop'
+            }
+            $null = Connect-VIServer @connectParams
+            $connectionSuccessful = $true
+            Write-LogMessage -Type DEBUG -Message "Successfully connected to $ServerType `"$ServerName`"."
+        } catch [System.TimeoutException] {
+            $err = "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        } catch {
+            $errorMessage = $_.Exception.Message
+
+            switch -Regex ($errorMessage) {
+                "SSL connection could not be established|SSL|certificate" {
+                    $sslHelp = @"
+Failed to establish SSL connection to $ServerType `"$ServerName`". Common causes and solutions:
+  1. Self-signed or untrusted SSL certificate.
+     Solution: Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:`$false
+  2. TLS protocol version mismatch.
+     Solution: [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+  3. Network connectivity or firewall blocking HTTPS (port 443).
+     Solution: Test-NetConnection -ComputerName $ServerName -Port 443
+Full error details: $errorMessage.
+"@
+                    Write-LogMessage -Type ERROR -Message $sslHelp.Trim()
+                    throw [VcfDeploymentException]::new("SSL connection to $ServerType `"$ServerName`" failed: $errorMessage.")
+                }
+                "incorrect user name or password|authentication|credentials" {
+                    # When the caller owns retry logic, suppress the ERROR so it is not shown twice.
+                    if ($SkipRetryPrompt) {
+                        Write-LogMessage -Type DEBUG -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed (caller will handle retry)."
+                        Write-LogMessage -Type DEBUG -Message "Full error details: $errorMessage."
+                        throw [VcfDeploymentException]::new("Authentication failed")
+                    }
+                    Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."
+                    Write-LogMessage -Type DEBUG -Message "Full error details: $errorMessage."
+
+                    $CurrentCredential = Get-RetryCredential `
+                        -IsEsx      $isEsx `
+                        -ServerName $ServerName `
+                        -ServerType $ServerType `
+                        -Username   $CurrentCredential.UserName
+                }
+                default {
+                    Write-LogMessage -Type DEBUG -Message "Connection error details: $errorMessage."
+                    switch -Regex ($errorMessage) {
+                        "Network is unreachable|unreachable\s*\(.*:443\)" {
+                            Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType `"$ServerName`": the host is not reachable on the network. Check that the host is powered on, the IP address or host name is correct, and that port 443 is open."
+                            break
+                        }
+                        "did not properly respond|connection.*failed|timed out|host has failed to respond" {
+                            Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType `"$ServerName`": connection timed out or host did not respond. Check network and firewall (port 443)."
+                            break
+                        }
+                        default {
+                            $err = "Failed to connect to $ServerType `"$ServerName`": $errorMessage"
+                            Write-LogMessage -Type ERROR -Message $err
+                        }
+                    }
+                    throw [VcfDeploymentException]::new($err)
+                }
+            }
+        }
     }
 }
 function Connect-Vcenter {
@@ -1278,6 +1636,7 @@ function Connect-Vcenter {
         - Function is designed for use in deployment scenarios where reliable server connectivity is critical
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [PSCredential]$ServerCredential,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServerName,
@@ -1291,103 +1650,11 @@ function Connect-Vcenter {
     $connectedVcenter = $Global:DefaultViServers | Where-Object { $_.Name -eq $ServerName -and $_.IsConnected }
 
     if (-not $connectedVcenter) {
-        # Attempt to establish a new connection to the vCenter. If it fails, throw a terminating error.
-        $connectionSuccessful = $false
-        $currentCredential = $ServerCredential
-
-        while (-not $connectionSuccessful) {
-            try {
-                Write-LogMessage -Type DEBUG -Message "Connecting to $ServerType `"$ServerName`" as user `"$($currentCredential.UserName)`"."
-                $connectParams = @{
-                    Server = $ServerName
-                    Credential = $currentCredential
-                    ErrorAction = 'Stop'
-                }
-                $null = Connect-VIServer @connectParams
-                $connectionSuccessful = $true
-                Write-LogMessage -Type DEBUG -Message "Successfully connected to $ServerType `"$ServerName`"."
-            } catch [System.TimeoutException] {
-                Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_."
-                throw [VcfDeploymentException]::new("Cannot connect to $ServerType Server `"$ServerName`" due to network/timeout issues: $_.")
-            } catch {
-                # Extract clean error message and classify so we can show targeted guidance (SSL, auth, or generic).
-                $errorMessage = $_.Exception.Message
-
-                switch -Regex ($errorMessage) {
-                    "SSL connection could not be established|SSL|certificate" {
-                        $sslHelp = @"
-Failed to establish SSL connection to $ServerType `"$ServerName`". Common causes and solutions:
-  1. Self-signed or untrusted SSL certificate.
-     Solution: Set-PowerCLIConfiguration -InvalidCertificateAction Ignore -Confirm:`$false
-  2. TLS protocol version mismatch.
-     Solution: [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-  3. Network connectivity or firewall blocking HTTPS (port 443).
-     Solution: Test-NetConnection -ComputerName $ServerName -Port 443
-Full error details: $errorMessage.
-"@
-                        Write-LogMessage -Type ERROR -Message $sslHelp.Trim()
-                        throw [VcfDeploymentException]::new("SSL connection to $ServerType `"$ServerName`" failed: $errorMessage.")
-                    }
-                    "incorrect user name or password|authentication|credentials" {
-                        Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": Authentication failed."
-                        Write-LogMessage -Type DEBUG -Message "Full error details: $errorMessage."
-                        # Skip retry prompt if requested (e.g., during ESX validation where retries are handled at higher level).
-                        if ($SkipRetryPrompt) {
-                            throw "Authentication failed"
-                        }
-
-                        # Prompt user if they want to re-enter credentials.
-                        Write-Host ""
-                        $retryResponse = $null
-                        while ($retryResponse -ne "Y" -and $retryResponse -ne "N") {
-                            # Remove colon from prompt message as Read-Host adds it automatically.
-                            $retryResponse = Read-Host "Would you like to re-enter your password? (Y/N)"
-                            $retryResponse = $retryResponse.Trim().ToUpper()
-                        }
-
-                        if ($retryResponse -eq "Y") {
-                            # Re-prompt for password.
-                            Write-Host ""
-                            $username = $currentCredential.UserName
-                            $isEsx = ($ServerType -eq "ESX")
-                            # Remove colon from prompt message as Read-Host adds it automatically.
-                            $promptMessage = "Enter the password for the user `"$username`" on $ServerType `"$ServerName`""
-                            if ($isEsx) {
-                                $promptMessage += " (or press Enter for no password)"
-                            }
-                            $promptMessage = $promptMessage.Trim()
-                            # Ensure no colon or colon-space at the end as Read-Host adds ": " automatically.
-                            $promptMessage = $promptMessage.TrimEnd(": ")
-                            $newPassword = Get-InteractiveInput -PromptMessage $promptMessage -AsSecureString -AllowEmpty:$isEsx
-                            Write-Host ""
-                            $currentCredential = New-Object System.Management.Automation.PSCredential($username, $newPassword)
-                            Write-LogMessage -Type INFO -Message "Retrying connection with new credentials..."
-                        } else {
-                            Write-LogMessage -Type ERROR -Message "User chose not to retry. Exiting."
-                            throw [VcfDeploymentException]::new("Authentication failed")
-                        }
-                    }
-                    default {
-                        # Generic connection error (timeout, host unreachable, etc.). First match wins for user-facing message.
-                        Write-LogMessage -Type DEBUG -Message "Connection error details: $errorMessage."
-                        switch -Regex ($errorMessage) {
-                            "Network is unreachable|unreachable\s*\(.*:443\)" {
-                                Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType `"$ServerName`": the host is not reachable on the network. Check that the host is powered on, the IP address or host name is correct, and that port 443 is open."
-                                break
-                            }
-                            "did not properly respond|connection.*failed|timed out|host has failed to respond" {
-                                Write-LogMessage -Type ERROR -Message "Cannot connect to $ServerType `"$ServerName`": connection timed out or host did not respond. Check network and firewall (port 443)."
-                                break
-                            }
-                            default {
-                                Write-LogMessage -Type ERROR -Message "Failed to connect to $ServerType `"$ServerName`": $errorMessage"
-                            }
-                        }
-                        throw "Failed to connect to $ServerType `"$ServerName`": $errorMessage"
-                    }
-                }
-            }
-        }
+        Invoke-VcenterConnectionWithRetry `
+            -CurrentCredential $ServerCredential `
+            -ServerName        $ServerName `
+            -ServerType        $ServerType `
+            -SkipRetryPrompt:  $SkipRetryPrompt.IsPresent
     } else {
         # Connection already exists. Surface the data on what user the connection is using.
         $existingUsername = ($Global:DefaultVIServers | Where-Object {$_.Name -eq $ServerName }).User
@@ -1436,11 +1703,7 @@ function Test-VcenterConnection {
 
         .EXAMPLE
         # Check connection before critical operation (uses $Script:vCenterName by default).
-        $connectionTest = Test-VcenterConnection
-        if (-not $connectionTest.IsConnected) {
-            Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-            throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
-        }
+        Assert-VcenterConnected
 
         .EXAMPLE
         # Fast check without API call.
@@ -1475,6 +1738,8 @@ function Test-VcenterConnection {
         - In finally blocks to check if cleanup is needed
     #>
 
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServerName = $Script:vCenterName,
         [Parameter(Mandatory = $false)] [Switch]$SkipConnectivityTest
@@ -1538,7 +1803,39 @@ function Test-VcenterConnection {
         return $result
     }
 }
+function Assert-VcenterConnected {
+
+    <#
+        .SYNOPSIS
+        Throws VcfDeploymentException if the active vCenter connection is absent or broken.
+
+        .DESCRIPTION
+        Calls Test-VcenterConnection and throws VcfDeploymentException if IsConnected is false.
+        Use at the top of any function that requires an active vCenter session before beginning
+        operations. Logs the error before throwing so the failure is captured in the log file.
+
+        .EXAMPLE
+        Assert-VcenterConnected
+        # Throws if not connected to $Script:vCenterName; execution continues only when connected.
+
+        .NOTES
+        Throws [VcfDeploymentException]; never returns a value.
+        Always checks $Script:vCenterName (the module-level vCenter connection). Call at the top
+        of any function that requires an active vCenter session before beginning operations.
+    #>
+
+    [CmdletBinding()]
+    Param ()
+
+    $connectionTest = Test-VcenterConnection
+    if (-not $connectionTest.IsConnected) {
+        $errorMsg = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $errorMsg
+        throw [VcfDeploymentException]::new($errorMsg)
+    }
+}
 function Invoke-VcenterReconnectIfNeeded {
+
     <#
         .SYNOPSIS
         Ensures an active vCenter connection; if the session was lost, reconnects using stored or prompted credentials.
@@ -1555,12 +1852,16 @@ function Invoke-VcenterReconnectIfNeeded {
 
         .OUTPUTS
         None. Returns after connection is established. Throws if reconnect fails.
+    
+        .EXAMPLE
+        Invoke-VcenterReconnectIfNeeded
     #>
+
     [CmdletBinding()]
     Param ()
 
     if ([String]::IsNullOrWhiteSpace($Script:vCenterName) -or [String]::IsNullOrWhiteSpace($Script:VCenterUser)) {
-        throw "Invoke-VcenterReconnectIfNeeded requires Script:vCenterName and Script:VCenterUser to be set (e.g. from Start-VcfEdgeAtScale)."
+        throw [VcfDeploymentException]::new("Invoke-VcenterReconnectIfNeeded requires Script:vCenterName and Script:VCenterUser to be set (e.g. from Start-VcfEdgeAtScale).")
     }
     $connectionTest = Test-VcenterConnection -ServerName $Script:vCenterName
     if ($connectionTest.IsConnected) {
@@ -1691,6 +1992,7 @@ function Disconnect-Vcenter {
         - Function is designed for use in cleanup scenarios, error handling routines, and temporary connection management
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $false)] [Switch]$AllServers,
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$ServerName,
@@ -1738,7 +2040,6 @@ function Disconnect-Vcenter {
                 Write-LogMessage -Type INFO -Message "Successfully disconnected from all vCenter and ESX hosts."
             }
         } else {
-            # Check if any connections are still active.
             $activeConnections = @($Global:DefaultVIServer) | Where-Object { $_.IsConnected -eq $true }
             if ($activeConnections.Count -eq 0) {
                 if ($Silence) {
@@ -1748,8 +2049,9 @@ function Disconnect-Vcenter {
                 }
             } else {
                 $serverNames = $activeConnections | Select-Object -ExpandProperty Name
-                Write-LogMessage -Type ERROR -Message "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
-                throw [VcfDeploymentException]::new("Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')")
+                $err = "Failed to disconnect from all servers. The following connections remain active: $($serverNames -join ', ')"
+                Write-LogMessage -Type ERROR -Message $err
+                throw [VcfDeploymentException]::new($err)
             }
         }
     }
@@ -1791,8 +2093,9 @@ function Test-VCenterVersion {
         .EXAMPLE
         $result = Test-VCenterVersion -MinimumVersion "9.0.0"
         if (-not $result.Success) {
-            Write-LogMessage -Type ERROR -Message "Version validation failed: $($result.ErrorMessage)"
-            throw [VcfDeploymentException]::new("Version validation failed: $($result.ErrorMessage)")
+            $err = "Version validation failed: $($result.ErrorMessage)"
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
         }
 
         Validates the vCenter version against a minimum requirement of 9.0.0.
@@ -1829,6 +2132,8 @@ function Test-VCenterVersion {
         Disconnect-Vcenter
     #>
 
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MinimumVersion
     )
@@ -1836,7 +2141,6 @@ function Test-VCenterVersion {
     Write-LogMessage -Type DEBUG -Message "Entered Test-VCenterVersion function..."
 
     try {
-        # Get the connected vCenter instance using the script-scoped vCenter name.
 
         $vcServer = $Global:DefaultViServers | Where-Object { $_.Name -eq $Script:vCenterName -and $_.IsConnected }
 
@@ -1844,7 +2148,6 @@ function Test-VCenterVersion {
             return Write-ErrorAndReturn -ErrorMessage "Not connected to vCenter `"$Script:vCenterName`". Please establish a connection first." -ErrorCode "ERR_NOT_CONNECTED"
         }
 
-        # Get the vCenter version from the API version property.
 
         $vcVersionString = $vcServer.Version
 
@@ -1856,8 +2159,8 @@ function Test-VCenterVersion {
 
         # Convert version strings to [version] type for proper semantic version comparison.
         try {
-            $vcVersion = [version]$vcVersionString
-            $minVersion = [version]$MinimumVersion
+            $vcVersion = [Version]$vcVersionString
+            $minVersion = [Version]$MinimumVersion
         } catch {
             return Write-ErrorAndReturn -ErrorMessage "Failed to parse version strings. vCenter version: `"$vcVersionString`", Minimum version: `"$MinimumVersion`". Both must be in valid version format (e.g., 9.0.0)." -ErrorCode "ERR_VERSION_PARSE_FAILED"
         }
@@ -1870,11 +2173,11 @@ function Test-VCenterVersion {
         # Version validation passed.
         Write-LogMessage -Type DEBUG -Message "vCenter `"$Script:vCenterName`" version $vcVersionString meets minimum required version ($MinimumVersion)."
 
-        return @{
-            Success = $true
-            ErrorMessage = $null
-            ErrorCode = $null
-            Version = $vcVersionString
+        return [PSCustomObject]@{
+            Success        = $true
+            ErrorMessage   = $null
+            ErrorCode      = $null
+            Version        = $vcVersionString
             MinimumVersion = $MinimumVersion
         }
 
@@ -1901,8 +2204,14 @@ function Test-ESXVersion {
 
         .OUTPUTS
         PSCustomObject with Success, ErrorMessage, ErrorCode, Version, MinimumVersion.
+    
+        .EXAMPLE
+        $eSXVersionResult = Test-ESXVersion -MinimumVersion "value" -ServerName $vcenterConnection
+        if (-not $eSXVersionResult.IsValid) { Write-LogMessage -Type ERROR -Message $eSXVersionResult.Summary }
     #>
 
+    [CmdletBinding()]
+    [OutputType([PSCustomObject])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$MinimumVersion,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ServerName
@@ -1926,8 +2235,8 @@ function Test-ESXVersion {
         Write-LogMessage -Type DEBUG -Message "Detected ESX host `"$ServerName`" version: $esxVersionString"
 
         try {
-            $esxVersion = [version]$esxVersionString
-            $minVersion = [version]$MinimumVersion
+            $esxVersion = [Version]$esxVersionString
+            $minVersion = [Version]$MinimumVersion
         } catch {
             return Write-ErrorAndReturn -ErrorMessage "Failed to parse version strings. ESX version: `"$esxVersionString`", Minimum version: `"$MinimumVersion`". Both must be in valid version format (e.g., 9.0.0)." -ErrorCode "ERR_VERSION_PARSE_FAILED"
         }
@@ -1938,17 +2247,229 @@ function Test-ESXVersion {
 
         Write-LogMessage -Type DEBUG -Message "ESX host `"$ServerName`" version $esxVersionString meets minimum required version ($MinimumVersion)."
 
-        return @{
-            Success = $true
-            ErrorMessage = $null
-            ErrorCode = $null
-            Version = $esxVersionString
+        return [PSCustomObject]@{
+            Success        = $true
+            ErrorMessage   = $null
+            ErrorCode      = $null
+            Version        = $esxVersionString
             MinimumVersion = $MinimumVersion
         }
 
     } catch {
         return Write-ErrorAndReturn -ErrorMessage "Failed to validate ESX version for `"$ServerName`": $_" -ErrorCode "ERR_VALIDATION_EXCEPTION"
     }
+}
+function Invoke-DatastoreResolutionWithDiagnostics {
+
+    <#
+        .SYNOPSIS
+        Retrieves a named datastore from vCenter, emitting diagnostic information when the datastore is not found.
+
+        .DESCRIPTION
+        Calls Get-Datastore for the specified name. When found, returns the datastore object. When not found,
+        logs available datastores as diagnostic guidance and throws a VcfDeploymentException.
+
+        .PARAMETER DatastoreName
+        Name of the datastore to retrieve from the connected vCenter.
+
+        .EXAMPLE
+        $datastoreObject = Invoke-DatastoreResolutionWithDiagnostics -DatastoreName "shared-storage"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([Object])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Retrieving datastore `"$DatastoreName`" from vCenter `"$Script:vCenterName`"..."
+    $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
+
+    if ($datastoreObject) {
+        Write-LogMessage -Type DEBUG -Message "Found datastore `"$DatastoreName`" (ID: $($datastoreObject.Id)) on vCenter `"$Script:vCenterName`"."
+        return $datastoreObject
+    }
+
+    Write-LogMessage -Type ERROR -Message "Datastore `"$DatastoreName`" not found on vCenter `"$Script:vCenterName`"."
+    Write-LogMessage -Type ERROR -Message "The datastore specified in the configuration does not exist or is not accessible."
+
+    try {
+        $availableDatastores = Get-Datastore -Server $Script:vCenterName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object
+        if ($availableDatastores) {
+            Write-LogMessage -Type ERROR -Message "Available datastores on vCenter `"$Script:vCenterName`":"
+            foreach ($ds in $availableDatastores) {
+                Write-LogMessage -Type ERROR -Message "  - $ds"
+            }
+        } else {
+            Write-LogMessage -Type ERROR -Message "No datastores found on vCenter `"$Script:vCenterName`"."
+        }
+    } catch [VcfDeploymentException] {
+        throw
+    } catch {
+        Write-LogMessage -Type DEBUG -Message "Could not retrieve list of available datastores: $($_.Exception.Message)"
+    }
+
+    $err = "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
+    Write-LogMessage -Type ERROR -Message $err
+    throw [VcfDeploymentException]::new($err)
+}
+function Get-SubscriptionSslThumbprint {
+
+    <#
+        .SYNOPSIS
+        Retrieves the SSL certificate thumbprint from a subscription URL endpoint.
+
+        .DESCRIPTION
+        Opens a TCP/SSL connection to the host of the subscription URL, performs an SSL handshake,
+        extracts the server certificate, and returns the thumbprint formatted with colon separators
+        (e.g. "AA:BB:CC:..."). The TCP and SSL resources are always closed in a finally block.
+        Throws VcfDeploymentException if the connection fails or the certificate cannot be retrieved.
+
+        .PARAMETER SubscriptionUrl
+        The full URL of the content library subscription endpoint. The host and port are parsed from this URL.
+
+        .OUTPUTS
+        System.String
+        Returns the colon-separated SHA1 thumbprint of the server's SSL certificate.
+
+        .EXAMPLE
+        $thumbprint = Get-SubscriptionSslThumbprint -SubscriptionUrl "https://vcenter.example.com/cls/vcsp/lib/abc/lib.json"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SubscriptionUrl
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Retrieving SSL certificate thumbprint from subscription URL: $SubscriptionUrl"
+    $subscriptionUri = [System.Uri]$SubscriptionUrl
+    $hostname = $subscriptionUri.Host
+    $port = if ($subscriptionUri.Port -ne -1) { $subscriptionUri.Port } else { if ($subscriptionUri.Scheme -eq "https") { 443 } else { 80 } }
+
+    $tcpClient = $null
+    $sslStream = $null
+    $sslThumbprint = $null
+
+    try {
+        Write-LogMessage -Type DEBUG -Message "Opening TCP connection to $hostname on port $port..."
+        $tcpClient = New-Object System.Net.Sockets.TcpClient($hostname, $port)
+
+        # Accept all certs for retrieval; params required by RemoteCertificateValidationCallback.
+        $sslStream = New-Object System.Net.Security.SslStream(
+            $tcpClient.GetStream(),
+            $false,
+            { param($certSender, $certificate, $chain, $sslPolicyErrors) $null = $certSender, $certificate, $chain, $sslPolicyErrors; return $true }
+        )
+
+        Write-LogMessage -Type DEBUG -Message "Performing SSL handshake with $hostname..."
+        $sslStream.AuthenticateAsClient($hostname)
+
+        $certificate = $sslStream.RemoteCertificate
+        if (-not $certificate) {
+            Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. RemoteCertificate is null."
+            $err = "This may indicate a network connectivity issue or the server is not responding."
+            Write-LogMessage -Type ERROR -Message $err
+            throw [VcfDeploymentException]::new($err)
+        }
+
+        $rawHash = $certificate.GetCertHashString()
+        $sslThumbprint = ($rawHash.ToUpper() -replace '(..)(?=.+)', '$1:')
+        Write-LogMessage -Type DEBUG -Message "Retrieved SSL thumbprint for $hostname - $sslThumbprint"
+    } catch {
+        Write-LogMessage -Type ERROR -Message "Failed to retrieve SSL certificate thumbprint from $hostname - $($_.Exception.Message)"
+        if ($_.Exception.InnerException) {
+            Write-LogMessage -Type ERROR -Message "Inner exception: $($_.Exception.InnerException.Message)"
+        }
+        $err = "Cannot create content library without SSL thumbprint."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    } finally {
+        if ($null -ne $sslStream) {
+            try { $sslStream.Close() } catch {
+                Write-LogMessage -Type DEBUG -Message "Suppressed during SSL stream cleanup: $($_.Exception.Message)"
+            }
+        }
+        if ($null -ne $tcpClient) {
+            try { $tcpClient.Close() } catch {
+                Write-LogMessage -Type DEBUG -Message "Suppressed during TCP client cleanup: $($_.Exception.Message)"
+            }
+        }
+    }
+
+    if (-not $sslThumbprint) {
+        $err = "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    return $sslThumbprint
+}
+function Invoke-SubscriptionContentLibraryCreate {
+
+    <#
+        .SYNOPSIS
+        Creates a subscription-based content library and verifies creation by returning its ID.
+
+        .DESCRIPTION
+        Calls New-ContentLibrary with the provided datastore, SSL thumbprint, and subscription URL.
+        After creation, calls Get-ContentLibraryId to verify the library exists and returns its ID.
+        Throws VcfDeploymentException if the post-creation lookup returns no ID.
+
+        .PARAMETER DatastoreObject
+        The resolved datastore object (from Invoke-DatastoreResolutionWithDiagnostics) to associate
+        with the new content library.
+
+        .PARAMETER LibraryDescription
+        Description string for the new content library.
+
+        .PARAMETER LibraryName
+        Name of the new content library.
+
+        .PARAMETER SslThumbprint
+        Colon-separated SSL thumbprint for the subscription URL (from Get-SubscriptionSslThumbprint).
+
+        .PARAMETER SubscriptionUrl
+        The subscription endpoint URL for the content library.
+
+        .OUTPUTS
+        System.String
+        Returns the unique ID of the newly created content library.
+
+        .EXAMPLE
+        $libraryId = Invoke-SubscriptionContentLibraryCreate -DatastoreObject $ds -LibraryDescription "Patch library" -LibraryName "VCF-Lib" -SslThumbprint "AA:BB:CC" -SubscriptionUrl "https://vcenter.example.com/lib.json"
+    #>
+
+    [CmdletBinding()]
+    [OutputType([String])]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNull()] $DatastoreObject,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryDescription,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SslThumbprint,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SubscriptionUrl
+    )
+
+    Write-LogMessage -Type DEBUG -Message "Creating content library `"$LibraryName`" with SSL thumbprint: $SslThumbprint"
+    New-ContentLibrary -Name $LibraryName `
+        -Description $LibraryDescription `
+        -SubscriptionUrl $SubscriptionUrl `
+        -Datastore $DatastoreObject `
+        -AutomaticSync `
+        -SslThumbprint $SslThumbprint `
+        -ErrorAction Stop `
+        -Server $Script:vCenterName | Out-Null
+
+    Write-LogMessage -Type DEBUG -Message "Successfully created content library `"$LibraryName`" on vCenter `"$Script:vCenterName`"."
+
+    $contentLibraryId = Get-ContentLibraryId -LibraryName $LibraryName
+    if (-not $contentLibraryId) {
+        $err = "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
+    }
+
+    return $contentLibraryId
 }
 function New-SubscriptionBasedContentLibrary {
 
@@ -1964,9 +2485,10 @@ function New-SubscriptionBasedContentLibrary {
         This function performs the following operations:
         1. Checks if a content library with the same name already exists
         2. Retrieves and validates the specified datastore object from vCenter
-        3. Creates a new subscription based content library with the provided name, description and subscriptionURL
-        4. Associates the content library with the specified datastore for storage
-        5. Verifies the library was created successfully and returns its unique identifier
+        3. Retrieves the SSL thumbprint from the subscription URL endpoint
+        4. Creates a new subscription based content library with the provided name, description and subscriptionURL
+        5. Associates the content library with the specified datastore for storage
+        6. Verifies the library was created successfully and returns its unique identifier
 
         The function includes comprehensive error handling for authorization issues, network timeouts,
         datastore validation, and other potential failures during content library creation. All operations
@@ -2021,7 +2543,7 @@ function New-SubscriptionBasedContentLibrary {
         - This function is typically called only after Test-ContentLibraryBySubscriptionUri confirms
           no library with the SubscriptionUrl exists, so SubscriptionUrl checking is not performed here
         - The function checks for existing libraries by name before creating
-        - If a library with the same SubscriptionUrl exists, returns the existing library ID
+        - If a library with the same name exists, returns the existing library ID
         - The function validates datastore existence before attempting library creation
         - The function verifies library creation was successful before returning the library ID
         - Uses comprehensive error handling for authorization, network timeout, datastore validation, and general failures
@@ -2031,11 +2553,15 @@ function New-SubscriptionBasedContentLibrary {
 
         .LINK
         Get-ContentLibraryId
+        Get-SubscriptionSslThumbprint
+        Invoke-DatastoreResolutionWithDiagnostics
+        Invoke-SubscriptionContentLibraryCreate
         New-ContentLibrary
         Test-ContentLibraryBySubscriptionUri
     #>
 
     [CmdletBinding()]
+    [OutputType([String])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryDescription,
@@ -2047,11 +2573,11 @@ function New-SubscriptionBasedContentLibrary {
 
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
+        $err = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
-    # Check if a content library with the same name already exists.
     $contentLibraryId = Get-ContentLibraryId -LibraryName $LibraryName
     if ($contentLibraryId) {
         Write-LogMessage -Type INFO -Message "Content library `"$LibraryName`" already exists on vCenter `"$Script:vCenterName`". Skipping content library creation."
@@ -2059,159 +2585,31 @@ function New-SubscriptionBasedContentLibrary {
     }
 
     try {
-        # Get Datastore object. Using the datastore name.
-        Write-LogMessage -Type DEBUG -Message "Retrieving datastore `"$DatastoreName`" from vCenter `"$Script:vCenterName`"..."
-        $datastoreObject = Get-Datastore -Name $DatastoreName -Server $Script:vCenterName -ErrorAction SilentlyContinue
-
-        if (-not $datastoreObject) {
-            Write-LogMessage -Type ERROR -Message "Datastore `"$DatastoreName`" not found on vCenter `"$Script:vCenterName`"."
-            Write-LogMessage -Type ERROR -Message "The datastore specified in the configuration does not exist or is not accessible."
-
-            # List available datastores to help the user identify the correct name.
-            try {
-                $availableDatastores = Get-Datastore -Server $Script:vCenterName -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name | Sort-Object
-                if ($availableDatastores) {
-                    Write-LogMessage -Type ERROR -Message "Available datastores on vCenter `"$Script:vCenterName`":"
-                    foreach ($ds in $availableDatastores) {
-                        Write-LogMessage -Type ERROR -Message "  - $ds"
-                    }
-                } else {
-                    Write-LogMessage -Type ERROR -Message "No datastores found on vCenter `"$Script:vCenterName`"."
-                }
-            } catch [VcfDeploymentException] {
-                throw  # already logged and typed — propagate without re-wrapping
-            } catch {
-                Write-LogMessage -Type DEBUG -Message "Could not retrieve list of available datastores: $($_.Exception.Message)"
-            }
-
-            Write-LogMessage -Type ERROR -Message "SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`"."
-            throw [VcfDeploymentException]::new("SOLUTION: Update the datastore name in your configuration file to match an existing datastore on vCenter `"$Script:vCenterName`".")
-        }
-
-        Write-LogMessage -Type DEBUG -Message "Found datastore `"$DatastoreName`" (ID: $($datastoreObject.Id)) on vCenter `"$Script:vCenterName`"."
-
-        # Create subscription based content library. Using the datastore object.
-        # Note: The presence of -SubscriptionUrl makes this a subscribed library (no -Type parameter needed).
-        # Automatic sync is enabled by default for subscribed libraries.
-        Write-LogMessage -Type DEBUG -Message "Creating subscription-based content library `"$LibraryName`" on datastore `"$DatastoreName`"..."
-
-        # Get SSL certificate thumbprint from the subscription URL. This is required for content library creation.
-        Write-LogMessage -Type DEBUG -Message "Retrieving SSL certificate thumbprint from subscription URL: $SubscriptionUrl"
-        $subscriptionUri = [System.Uri]$SubscriptionUrl
-        $hostname = $subscriptionUri.Host
-        $port = if ($subscriptionUri.Port -ne -1) { $subscriptionUri.Port } else { if ($subscriptionUri.Scheme -eq "https") { 443 } else { 80 } }
-
-        $tcpClient = $null
-        $sslStream = $null
-        $sslThumbprint = $null
-
-        try {
-            # Open a TCP connection to the host on the specified port.
-            Write-LogMessage -Type DEBUG -Message "Opening TCP connection to $hostname on port $port..."
-            $tcpClient = New-Object System.Net.Sockets.TcpClient($hostname, $port)
-
-            # Create the SSL Stream with certificate validation callback that accepts all certificates.
-            # This allows us to retrieve the certificate even if it's self-signed or untrusted.
-            $sslStream = New-Object System.Net.Security.SslStream(
-                $tcpClient.GetStream(),
-                $false,
-                { param($certSender, $certificate, $chain, $sslPolicyErrors) $null = $certSender, $certificate, $chain, $sslPolicyErrors; return $true } # Accept all certs for retrieval; params required by RemoteCertificateValidationCallback.
-            )
-
-            # Perform the SSL handshake.
-            Write-LogMessage -Type DEBUG -Message "Performing SSL handshake with $hostname..."
-            $sslStream.AuthenticateAsClient($hostname)
-
-            # Extract the certificate and format the thumbprint.
-            $certificate = $sslStream.RemoteCertificate
-            if (-not $certificate) {
-                Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. RemoteCertificate is null."
-                Write-LogMessage -Type ERROR -Message "This may indicate a network connectivity issue or the server is not responding."
-                throw [VcfDeploymentException]::new("This may indicate a network connectivity issue or the server is not responding.")
-            }
-
-            # Get the raw hash and format it with colons (format required by New-ContentLibrary).
-            $rawHash = $certificate.GetCertHashString()
-            $sslThumbprint = ($rawHash.ToUpper() -replace '(..)(?=.+)', '$1:')
-            Write-LogMessage -Type DEBUG -Message "Retrieved SSL thumbprint for $hostname - $sslThumbprint"
-        } catch {
-            Write-LogMessage -Type ERROR -Message "Failed to retrieve SSL certificate thumbprint from $hostname - $($_.Exception.Message)"
-            if ($_.Exception.InnerException) {
-                Write-LogMessage -Type ERROR -Message "Inner exception: $($_.Exception.InnerException.Message)"
-            }
-            Write-LogMessage -Type ERROR -Message "Cannot create content library without SSL thumbprint."
-            throw [VcfDeploymentException]::new("Cannot create content library without SSL thumbprint.")
-        }
-        finally {
-            # Clean up SSL stream and TCP client.
-            if ($null -ne $sslStream) {
-                try {
-                    $sslStream.Close()
-                } catch {
-                    Write-LogMessage -Type DEBUG -Message "Suppressed during SSL stream cleanup: $($_.Exception.Message)"
-                }
-            }
-            if ($null -ne $tcpClient) {
-                try {
-                    $tcpClient.Close()
-                } catch {
-                    Write-LogMessage -Type DEBUG -Message "Suppressed during TCP client cleanup: $($_.Exception.Message)"
-                }
-            }
-        }
-
-        if (-not $sslThumbprint) {
-            Write-LogMessage -Type ERROR -Message "Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint."
-            throw [VcfDeploymentException]::new("Could not retrieve SSL certificate from $hostname. Cannot create content library without SSL thumbprint.")
-        }
-
-        # Create the content library with SSL thumbprint (required parameter).
-        Write-LogMessage -Type DEBUG -Message "Creating content library with SSL thumbprint: $sslThumbprint"
-        New-ContentLibrary -Name $LibraryName `
-            -Description $LibraryDescription `
-            -SubscriptionUrl $SubscriptionUrl `
-            -Datastore $datastoreObject `
-            -AutomaticSync `
-            -SslThumbprint $sslThumbprint `
-            -ErrorAction Stop `
-            -Server $Script:vCenterName | Out-Null
-
-        Write-LogMessage -Type DEBUG -Message "Successfully created content library `"$LibraryName`" on vCenter `"$Script:vCenterName`"."
-
-        # Verify the library was created and retrieve its ID.
-        $contentLibraryId = Get-ContentLibraryId -LibraryName $LibraryName
-        if (-not $contentLibraryId) {
-            Write-LogMessage -Type ERROR -Message "Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`"."
-            throw [VcfDeploymentException]::new("Content library `"$LibraryName`" was created but could not be retrieved from vCenter `"$Script:vCenterName`".")
-        }
-
-        return $contentLibraryId
+        $datastoreObject = Invoke-DatastoreResolutionWithDiagnostics -DatastoreName $DatastoreName
+        $sslThumbprint = Get-SubscriptionSslThumbprint -SubscriptionUrl $SubscriptionUrl
+        return Invoke-SubscriptionContentLibraryCreate -DatastoreObject $datastoreObject -LibraryDescription $LibraryDescription -LibraryName $LibraryName -SslThumbprint $sslThumbprint -SubscriptionUrl $SubscriptionUrl
     }
     catch [System.UnauthorizedAccessException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)")
+        $err = "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to authorization issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
     catch [System.TimeoutException] {
-        Write-LogMessage -Type ERROR -Message "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)")
+        $err = "Cannot create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`" due to network/timeout issues: $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     } catch {
         $errorMessage = $_.Exception.Message
         $innerException = $_.Exception.InnerException
-
-        # Build detailed error message.
-        $detailedError = "Failed to create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`": $errorMessage"
-
-        # Include inner exception details if available.
+        $innerDetail = ""
         if ($null -ne $innerException) {
-            $detailedError += "`nInner exception: $($innerException.Message)"
+            $innerDetail = "`nInner exception: $($innerException.Message)"
             if ($null -ne $innerException.InnerException) {
-                $detailedError += "`nNested inner exception: $($innerException.InnerException.Message)"
+                $innerDetail = "$innerDetail`nNested inner exception: $($innerException.InnerException.Message)"
             }
         }
-
+        $detailedError = "Failed to create content library `"$LibraryName`" (`"$LibraryDescription`") on vCenter `"$Script:vCenterName`": $errorMessage$innerDetail"
         Write-LogMessage -Type ERROR -Message $detailedError
-
-        # Provide specific guidance for subscription errors.
         if ($errorMessage -match "subscribe|subscription") {
             Write-LogMessage -Type ERROR -Message "The subscription URL `"$SubscriptionUrl`" may be invalid, unreachable, or the publisher library may not be available."
             Write-LogMessage -Type ERROR -Message "Common causes:"
@@ -2221,8 +2619,7 @@ function New-SubscriptionBasedContentLibrary {
             Write-LogMessage -Type ERROR -Message "  4. SSL certificate validation failures (check PowerCLI InvalidCertificateAction setting)"
             Write-LogMessage -Type ERROR -Message "SOLUTION: Verify the subscription URL is correct and the publisher library is accessible from this vCenter."
         }
-
-        throw "Failed to query lifecycle content libraries on `"$Script:vCenterName`". Check logs for details."
+        throw [VcfDeploymentException]::new("Failed to query lifecycle content libraries on `"$Script:vCenterName`". Check logs for details.")
     }
 }
 function Get-SupervisorLifecycleContentLibraries {
@@ -2267,6 +2664,10 @@ function Get-SupervisorLifecycleContentLibraries {
         • Returns structured object instead of throwing exceptions
         • Cmdlet failures return Success=$false
     #>
+    [OutputType([PSCustomObject])]
+
+    [CmdletBinding()]
+    Param ()
 
     Write-LogMessage -Type DEBUG -Message "Entered Get-SupervisorLifecycleContentLibraries function..."
 
@@ -2276,9 +2677,8 @@ function Get-SupervisorLifecycleContentLibraries {
         # Query lifecycle content libraries using PowerCLI cmdlet.
         $librariesList = Invoke-VcenterNamespaceManagementLifecycleContentLibrariesList -ErrorAction Stop
 
-        # Check if any library has status "READY".
         $hasReadyLibrary = $false
-        $libraries = [System.Collections.ArrayList]::new()
+        $libraries = [System.Collections.Generic.List[Object]]::new()
 
         if ($librariesList) {
             foreach ($libraryEntry in $librariesList) {
@@ -2307,7 +2707,6 @@ function Get-SupervisorLifecycleContentLibraries {
             }
         }
 
-        # Return success result.
         return [PSCustomObject]@{
             Success = $true
             HasReadyLibrary = $hasReadyLibrary
@@ -2318,7 +2717,6 @@ function Get-SupervisorLifecycleContentLibraries {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to query lifecycle content libraries: $errorMessage"
 
-        # Return failure result.
         return [PSCustomObject]@{
             Success = $false
             HasReadyLibrary = $false
@@ -2374,6 +2772,7 @@ function Set-SupervisorLifecycleContentLibrary {
     #>
 
     [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContentLibraryId
     )
@@ -2383,7 +2782,6 @@ function Set-SupervisorLifecycleContentLibrary {
     try {
         Write-LogMessage -Type DEBUG -Message "Associating content library `"$ContentLibraryId`" with supervisor for lifecycle operations..."
 
-        # Initialize the set specification with the library ID.
         $setSpec = Initialize-VcenterNamespaceManagementLifecycleContentLibrariesSetSpec -Library $ContentLibraryId -ErrorAction Stop
 
         # Associate content library with supervisor using PowerCLI cmdlet.
@@ -2391,7 +2789,6 @@ function Set-SupervisorLifecycleContentLibrary {
 
         Write-LogMessage -Type DEBUG -Message "Successfully associated content library `"$ContentLibraryId`" with supervisor for lifecycle operations."
 
-        # Return success result.
         return [PSCustomObject]@{
             Success = $true
             ErrorMessage = $null
@@ -2400,7 +2797,6 @@ function Set-SupervisorLifecycleContentLibrary {
         $errorMessage = $_.Exception.Message
         Write-LogMessage -Type ERROR -Message "Failed to associate content library `"$ContentLibraryId`" with supervisor: $errorMessage"
 
-        # Return failure result.
         return [PSCustomObject]@{
             Success = $false
             ErrorMessage = $errorMessage
@@ -2448,6 +2844,8 @@ function Initialize-SupervisorLifecycleContentLibrary {
         • Invoke-VcenterNamespaceManagementLifecycleContentLibrariesSet (via Set-SupervisorLifecycleContentLibrary)
     #>
 
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ContentLibraryId
     )
@@ -2556,6 +2954,8 @@ function Test-ContentLibraryBySubscriptionUri {
         New-SubscriptionBasedContentLibrary
     #>
 
+    [CmdletBinding()]
+    [OutputType([Bool])]
     Param (
         [Parameter(Mandatory = $false)] [ValidateNotNullOrEmpty()] [String]$SubscriptionUri
     )
@@ -2564,12 +2964,12 @@ function Test-ContentLibraryBySubscriptionUri {
 
     $connectionTest = Test-VcenterConnection
     if (-not $connectionTest.IsConnected) {
-        Write-LogMessage -Type ERROR -Message "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
-        throw [VcfDeploymentException]::new("Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)")
+        $err = "Not connected to vCenter `"$Script:vCenterName`": $($connectionTest.ErrorMessage)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 
     try {
-        # Get all content libraries from vCenter.
         $contentLibraries = Get-ContentLibrary -Server $Script:vCenterName -ErrorAction Stop
 
         # Search for a content library with matching SubscriptionUri.
@@ -2587,8 +2987,9 @@ function Test-ContentLibraryBySubscriptionUri {
     } catch {
         # Re-throw API errors so callers can distinguish a transient failure from a missing library.
         # Returning $false on error would cause callers to create a duplicate content library.
-        Write-LogMessage -Type ERROR -Message "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
-        throw [VcfDeploymentException]::new("Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)")
+        $err = "Failed to check for content library with SubscriptionUri `"$SubscriptionUri`" on vCenter `"$Script:vCenterName`": $($_.Exception.Message)"
+        Write-LogMessage -Type ERROR -Message $err
+        throw [VcfDeploymentException]::new($err)
     }
 }
 function Initialize-SupervisorContentLibrary {
@@ -2644,6 +3045,7 @@ function Initialize-SupervisorContentLibrary {
         Initialize-SupervisorLifecycleContentLibrary
     #>
 
+    [CmdletBinding()]
     Param (
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$DatastoreName,
         [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$LibraryName,
@@ -2660,7 +3062,6 @@ function Initialize-SupervisorContentLibrary {
         $contentLibraryId = New-SubscriptionBasedContentLibrary -DatastoreName $DatastoreName -LibraryDescription "Async patch library for supervisor" -LibraryName $LibraryName -SubscriptionUrl $SubscriptionUrl
     } else {
         Write-LogMessage -Type DEBUG -Message "Content library `"$contentLibraryName`" found with SubscriptionUri `"$SubscriptionUrl`" on vCenter `"$Script:vCenterName`"."
-        # Get the content library ID for the existing library.
         $contentLibraryId = Get-ContentLibraryId -LibraryName $contentLibraryName
     }
 
@@ -2672,6 +3073,7 @@ function Initialize-SupervisorContentLibrary {
     }
 }
 function Set-VclsRetreatModeForCluster {
+
     <#
         .SYNOPSIS
         Puts vSphere Cluster Services (vCLS) in retreat mode for a cluster using the cluster reconfigure API.
@@ -2701,6 +3103,9 @@ function Set-VclsRetreatModeForCluster {
         .NOTES
         Non-fatal: on failure (e.g. unsupported vCenter version or API not available), logs a WARNING and returns.
         Primary path: cluster.ExtensionData.ReconfigureComputeResource_Task with ClusterSystemVmsConfigSpec.DeploymentMode = ABSENT.
+    
+        .EXAMPLE
+        Set-VclsRetreatModeForCluster -ClusterName "edge-cluster-1"
     #>
     [CmdletBinding()]
     Param (
@@ -2746,12 +3151,12 @@ function Set-VclsRetreatModeForCluster {
                     }
                     if ($taskState -eq "error") {
                         $errMsg = if ($taskView.Info.Error -and $taskView.Info.Error.LocalizedMessage) { $taskView.Info.Error.LocalizedMessage } else { "Task failed." }
-                        throw $errMsg
+                        throw [VcfDeploymentException]::new($errMsg)
                     }
                     Start-Sleep -Seconds $TaskPollIntervalSeconds
                 } while ((Get-Date) -lt $taskDeadline)
                 if ($taskState -ne "success") {
-                    throw "Task did not complete within $TaskWaitTimeoutSeconds seconds (state: $taskState)."
+                    throw [VcfDeploymentException]::new("Task did not complete within $TaskWaitTimeoutSeconds seconds (state: $taskState).")
                 }
             }
             Write-LogMessage -Type INFO -Message "Set vCLS to retreat mode for cluster `"$ClusterName`""
@@ -2793,3 +3198,345 @@ function Set-VclsRetreatModeForCluster {
 }
 
 #endregion
+function Write-ClusterEsxiNodeHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs ESX host connection and power state for a vSphere cluster after deployment checks.
+
+        .DESCRIPTION
+        Emits a single summary line when all hosts are healthy (ConnectionState=Connected and
+        PowerState=PoweredOn). When one or more hosts are unhealthy, logs a header and lists only
+        the unhealthy hosts at WARNING severity so operators can triage without scrolling past
+        noise for healthy hosts.
+
+        .PARAMETER ClusterName
+        The vCenter cluster display name.
+    
+        .EXAMPLE
+        Write-ClusterEsxiNodeHealthReport -ClusterName "edge-cluster-1"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+    )
+
+    try {
+        $clusterObject = Get-Cluster -Name $ClusterName -Server $Script:vCenterName -ErrorAction Stop
+        $vmHosts = @(Get-VMHost -Location $clusterObject -Server $Script:vCenterName -ErrorAction Stop | Sort-Object -Property Name)
+        $unhealthyHosts = @($vmHosts | Where-Object { $_.ConnectionState -ne "Connected" -or $_.PowerState -ne "PoweredOn" })
+        if ($unhealthyHosts.Count -eq 0) {
+            Write-LogMessage -Type INFO -Message "ESX node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): all Connected/PoweredOn."
+            return
+        }
+        Write-LogMessage -Type WARNING -Message "ESX node health for cluster `"$ClusterName`" ($($vmHosts.Count) host(s)): $($unhealthyHosts.Count) not Connected/PoweredOn."
+        foreach ($vmHost in $unhealthyHosts) {
+            Write-LogMessage -Type WARNING -Message "  $($vmHost.Name): ConnectionState=$($vmHost.ConnectionState), PowerState=$($vmHost.PowerState)."
+        }
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not list ESX host health for cluster `"$ClusterName`": $($_.Exception.Message)"
+    }
+}
+function Write-SupervisorHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs a concise supervisor health summary after deployment, surfacing only non-healthy findings.
+
+        .DESCRIPTION
+        Queries the supervisor summary via Invoke-GetSupervisorNamespaceManagementSummary (and
+        conditions via Invoke-GetSupervisorNamespaceManagementConditions when available) and logs a
+        single INFO line when the supervisor is healthy (ConfigStatus=RUNNING, KubernetesStatus=READY,
+        no ERROR/WARNING summary messages, all conditions Status=True). When any check is not
+        healthy, delegates to Write-SupervisorKubernetesDiagnosticReport for the full diagnostic
+        output. Non-fatal if the API is unavailable.
+
+        .PARAMETER ClusterName
+        The vCenter cluster display name (for log context).
+
+        .PARAMETER SupervisorId
+        Supervisor resource identifier.
+    
+        .EXAMPLE
+        Write-SupervisorHealthReport -ClusterName "edge-cluster-1" -SupervisorId "domain-c123"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId
+    )
+
+    $cmdSummary = Get-Command Invoke-GetSupervisorNamespaceManagementSummary -ErrorAction SilentlyContinue
+    if (-not $cmdSummary) {
+        Write-LogMessage -Type DEBUG -Message "Write-SupervisorHealthReport: Invoke-GetSupervisorNamespaceManagementSummary is not available; skipping post-deployment supervisor health report."
+        return
+    }
+
+    try {
+        $summary = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $SupervisorId -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not read supervisor health for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): $($_.Exception.Message)"
+        return
+    }
+
+    $configStatus = $summary.ConfigStatus
+    $kubernetesStatus = $summary.KubernetesStatus
+    $summaryMessages = @($summary.Messages)
+    $nonInfoMessages = @($summaryMessages | Where-Object {
+        $severityText = if ($null -ne $_.Severity) { $_.Severity.ToString() } else { "" }
+        $severityText -match "^(ERROR|CRITICAL|WARNING|WARN)$"
+    })
+
+    $nonTrueConditions = @()
+    $cmdConditions = Get-Command Invoke-GetSupervisorNamespaceManagementConditions -ErrorAction SilentlyContinue
+    if ($cmdConditions) {
+        try {
+            $conditions = @(Invoke-GetSupervisorNamespaceManagementConditions -Supervisor $SupervisorId -ErrorAction Stop)
+            $nonTrueConditions = @($conditions | Where-Object { $_.Status -ne "True" -and -not [String]::IsNullOrWhiteSpace($_.Status) })
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor conditions API failed for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): $($_.Exception.Message)"
+        }
+    }
+
+    $isHealthy = ($configStatus -eq "RUNNING") -and ($kubernetesStatus -eq "READY") -and ($nonInfoMessages.Count -eq 0) -and ($nonTrueConditions.Count -eq 0)
+    if ($isHealthy) {
+        Write-LogMessage -Type INFO -Message "Supervisor health for cluster `"$ClusterName`" (supervisor `"$SupervisorId`"): ConfigStatus=RUNNING, KubernetesStatus=READY, no outstanding messages or conditions."
+        return
+    }
+
+    # Delegate to the full diagnostic report so operators can see summary messages and condition details.
+    Write-SupervisorKubernetesDiagnosticReport -ClusterName $ClusterName -Context "post-deployment health (ConfigStatus=$configStatus, KubernetesStatus=$kubernetesStatus)" -SupervisorId $SupervisorId
+}
+function Write-VsanClusterHealthReport {
+
+    <#
+        .SYNOPSIS
+        Logs a concise vSAN cluster health summary after deployment, surfacing only non-green findings.
+
+        .DESCRIPTION
+        Calls Get-VsanClusterHealthSummaryViaView with FetchFromCache=$true so the latest cached
+        result (refreshed by Invoke-VsanClusterHealthRetestAfterDeployment) is reported. Logs a
+        single INFO line when overallHealth is green; otherwise logs a header plus the non-green
+        group/test entries at WARNING severity. Non-fatal when the vSAN Health API is unavailable.
+
+        .PARAMETER ClusterName
+        The vSAN cluster name.
+    
+        .EXAMPLE
+        Write-VsanClusterHealthReport -ClusterName "edge-cluster-1"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName
+    )
+
+    $healthSummary = Get-VsanClusterHealthSummaryViaView -ClusterName $ClusterName -FetchFromCache
+    if (-not $healthSummary) {
+        Write-LogMessage -Type WARNING -Message "vSAN health for cluster `"$ClusterName`": summary not available from vCenter. Check vSAN Health in the UI."
+        return
+    }
+
+    $overallHealth = $healthSummary.overallHealth
+    if ($overallHealth -eq "green") {
+        Write-LogMessage -Type INFO -Message "vSAN health for cluster `"$ClusterName`": overallHealth=green."
+        return
+    }
+
+    $overallDescription = $healthSummary.overallHealthDescription
+    $descriptionSuffix = if (-not [String]::IsNullOrWhiteSpace($overallDescription)) { " ($overallDescription)" } else { "" }
+    $headerLine = "vSAN health for cluster `"$ClusterName`": overallHealth=$overallHealth$descriptionSuffix."
+    Write-LogMessage -Type WARNING -Message $headerLine
+
+    # List only non-green tests so Connected/healthy checks are not shown.
+    $healthGroups = $healthSummary.groups
+    if (-not $healthGroups) {
+        return
+    }
+    foreach ($healthGroup in @($healthGroups)) {
+        $groupName = $healthGroup.PSObject.Properties["groupName"].Value
+        $groupTests = $healthGroup.PSObject.Properties["tests"].Value
+        if (-not $groupTests) {
+            continue
+        }
+        foreach ($test in @($groupTests)) {
+            $testHealth = $test.PSObject.Properties["health"].Value
+            if (-not $testHealth -or $testHealth -eq "green") {
+                continue
+            }
+            $testName = $test.PSObject.Properties["testName"].Value
+            Write-LogMessage -Type WARNING -Message "  [$testHealth] $groupName / $testName"
+        }
+    }
+}
+function Write-SupervisorApiSummaryMessages {
+
+    <#
+    .SYNOPSIS
+        Logs supervisor summary messages returned by the vCenter namespace-management API.
+    .DESCRIPTION
+        Iterates the messages array from a supervisor summary response, formats severity and
+        detail text (including AdditionalProperties fallback), maps severity to a log level, and
+        emits each message via Write-LogMessage. Emits actionable guidance for known patterns
+        such as IP pool utilization warnings.
+    .PARAMETER Messages
+        Array of supervisor summary message objects from Invoke-GetSupervisorNamespaceManagementSummary.
+    .EXAMPLE
+        Write-SupervisorApiSummaryMessages -Messages @($summary.Messages)
+    .NOTES
+        Called by Write-SupervisorKubernetesDiagnosticReport.
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [AllowEmptyCollection()] [Object[]]$Messages
+    )
+
+    $summaryMessages = @($Messages)
+    if ($summaryMessages.Count -gt 0) {
+        Write-LogMessage -Type INFO -Message "Supervisor summary messages ($($summaryMessages.Count)):"
+        foreach ($msg in $summaryMessages) {
+            $severityText = if (-not [String]::IsNullOrWhiteSpace($msg.Severity)) { $msg.Severity.ToString() } else { "" }
+            $detailsText = ""
+            if ($null -ne $msg.Details) {
+                $detailsText = $msg.Details.Localized
+                if ([String]::IsNullOrWhiteSpace($detailsText)) { $detailsText = $msg.Details.DefaultMessage }
+            }
+            if ([String]::IsNullOrWhiteSpace($detailsText) -and $null -ne $msg.AdditionalProperties) {
+                $apDict = [System.Collections.Generic.IDictionary[string, object]]$msg.AdditionalProperties
+                foreach ($apKey in @("message", "detail", "text", "description")) {
+                    $apVal = $null
+                    if ($apDict.TryGetValue($apKey, [Ref]$apVal) -and -not [String]::IsNullOrWhiteSpace($apVal)) {
+                        if ([String]::IsNullOrWhiteSpace($detailsText)) { $detailsText = $apVal.ToString() }
+                        elseif ($apKey -ne "message") { $detailsText = "$detailsText Details: '$($apVal.ToString())'." }
+                    }
+                }
+                if ([String]::IsNullOrWhiteSpace($severityText)) {
+                    $apSev = $null
+                    if ($apDict.TryGetValue("severity", [Ref]$apSev) -and -not [String]::IsNullOrWhiteSpace($apSev)) { $severityText = $apSev.ToString() }
+                }
+            }
+            if ([String]::IsNullOrWhiteSpace($detailsText)) { $detailsText = "(no details)" }
+            $messageId = $msg.Id
+            $detailsId = if ($null -ne $msg.Details) { $msg.Details.Id } else { $null }
+            $kbLink = $msg.KbArticleLink
+            $logType = switch -Regex ($severityText) {
+                "^(ERROR|CRITICAL)$" { "ERROR"; break }
+                "^(WARNING|WARN)$"   { "WARNING"; break }
+                default              { "INFO" }
+            }
+            $line = "  [$severityText] $detailsText"
+            $idText = if (-not [String]::IsNullOrWhiteSpace($messageId)) { $messageId } else { $detailsId }
+            if (-not [String]::IsNullOrWhiteSpace($idText)) { $line = "$line (id: $idText)" }
+            if (-not [String]::IsNullOrWhiteSpace($kbLink)) { $line = "$line KB: $kbLink" }
+            Write-LogMessage -Type $logType -Message $line
+            switch -Regex ($detailsText) {
+                "IPPool.*utilization|utilization.*IPPool|low on free IP" {
+                    Write-LogMessage -Type WARNING -Message "  ^ IP pool utilization is high. If a supervisor service (Harbor or Argo CD) subsequently fails with 'exhausted all IP addresses in requested IPPools', increase `"siteSpec[N].primaryWorkloadNetwork.primaryWorkloadNetworkIPCount`" in supervisor.json and redeploy."
+                    break
+                }
+            }
+        }
+    } else {
+        Write-LogMessage -Type INFO -Message "No summary messages from the API (check Workload Management in the UI if status is not READY)."
+    }
+}
+function Write-SupervisorKubernetesDiagnosticReport {
+
+    <#
+        .SYNOPSIS
+        Logs supervisor Kubernetes status messages and conditions from the vCenter namespace-management APIs.
+
+        .DESCRIPTION
+        Surfaces the same class of information shown under Kubernetes Status in the vCenter UI (summary
+        messages such as workload network IP pool utilization, plus supervisor conditions when the API is available).
+
+        .PARAMETER ClusterName
+        Cluster name for log context.
+
+        .PARAMETER Context
+        Short phrase describing why diagnostics are being shown (for example timeout or Harbor failure).
+
+        .PARAMETER SupervisorId
+        Supervisor resource identifier passed to Invoke-GetSupervisorNamespaceManagementSummary.
+    
+        .EXAMPLE
+        Write-SupervisorKubernetesDiagnosticReport -ClusterName "edge-cluster-1" -SupervisorId "domain-c123"
+    #>
+
+    [CmdletBinding()]
+    Param (
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$ClusterName,
+        [Parameter(Mandatory = $false)] [String]$Context,
+        [Parameter(Mandatory = $true)] [ValidateNotNullOrEmpty()] [String]$SupervisorId
+    )
+
+    $cmdSummary = Get-Command Invoke-GetSupervisorNamespaceManagementSummary -ErrorAction SilentlyContinue
+    if (-not $cmdSummary) {
+        Write-LogMessage -Type DEBUG -Message "Write-SupervisorKubernetesDiagnosticReport: Invoke-GetSupervisorNamespaceManagementSummary is not available."
+        return
+    }
+
+    $headerSuffix = "cluster `"$ClusterName`", supervisor `"$SupervisorId`""
+    $header = if ([String]::IsNullOrWhiteSpace($Context)) {
+        "Supervisor Kubernetes diagnostics ($headerSuffix)"
+    } else {
+        "Supervisor Kubernetes diagnostics — $Context ($headerSuffix)"
+    }
+    Write-LogMessage -Type INFO -Message "======== $header ========"
+    Write-LogMessage -Type INFO -Message "Kubernetes Status in the UI indicates whether the Supervisor is operable; messages below mirror the supervisor summary API."
+
+    try {
+        $summary = Invoke-GetSupervisorNamespaceManagementSummary -Supervisor $SupervisorId -ErrorAction Stop
+    } catch {
+        Write-LogMessage -Type WARNING -Message "Could not read supervisor summary from vCenter: $($_.Exception.Message)"
+        Write-LogMessage -Type INFO -Message "======== End supervisor Kubernetes diagnostics ========"
+        return
+    }
+
+    Write-LogMessage -Type INFO -Message "ConfigStatus: $($summary.ConfigStatus); KubernetesStatus: $($summary.KubernetesStatus)."
+
+    if ($null -ne $summary.Stats) {
+        $st = $summary.Stats
+        # Render utilization as percentages at INFO (easy to parse); keep absolute values at DEBUG.
+        $cpuPercent = if ($st.CpuCapacity -gt 0) { [Math]::Round(($st.CpuUsed / $st.CpuCapacity) * 100, 1) } else { 0 }
+        $memoryPercent = if ($st.MemoryCapacity -gt 0) { [Math]::Round(($st.MemoryUsed / $st.MemoryCapacity) * 100, 1) } else { 0 }
+        $storagePercent = if ($st.StorageCapacity -gt 0) { [Math]::Round(($st.StorageUsed / $st.StorageCapacity) * 100, 1) } else { 0 }
+        Write-LogMessage -Type INFO -Message "Summary utilization: CPU=$cpuPercent% Memory=$memoryPercent% Storage=$storagePercent%."
+        Write-LogMessage -Type DEBUG -Message "Summary stats (absolute): CpuUsed=$($st.CpuUsed) CpuCapacity=$($st.CpuCapacity) MemoryUsed=$($st.MemoryUsed) MemoryCapacity=$($st.MemoryCapacity) StorageUsed=$($st.StorageUsed) StorageCapacity=$($st.StorageCapacity)."
+    }
+
+    Write-SupervisorApiSummaryMessages -Messages @($summary.Messages)
+
+    $cmdConditions = Get-Command Invoke-GetSupervisorNamespaceManagementConditions -ErrorAction SilentlyContinue
+    if ($cmdConditions) {
+        try {
+            $conditions = @(Invoke-GetSupervisorNamespaceManagementConditions -Supervisor $SupervisorId -ErrorAction Stop)
+            if ($conditions.Count -gt 0) {
+                Write-LogMessage -Type INFO -Message "Supervisor conditions ($($conditions.Count)):"
+                foreach ($condition in $conditions) {
+                    $descriptionText = $condition.Description
+                    if ($descriptionText -and $descriptionText.Length -gt 400) {
+                        $descriptionText = "$($descriptionText.Substring(0, 400))..."
+                    }
+                    $conditionMessages = $condition.Messages
+                    $joinedMessages = if ($conditionMessages -and $conditionMessages.Count -gt 0) {
+                        ($conditionMessages | ForEach-Object { $_.ToString() }) -join "; "
+                    } else {
+                        ""
+                    }
+                    Write-LogMessage -Type INFO -Message "  Type=$($condition.Type) Status=$($condition.Status) Severity=$($condition.Severity) Reason=$($condition.Reason) Description=$descriptionText Messages=$joinedMessages"
+                    if ($condition.Status -ne "True" -and -not [String]::IsNullOrWhiteSpace($condition.Status)) {
+                        Write-LogMessage -Type WARNING -Message "  ^ Condition Status is not True; see Reason/Description/Messages above."
+                    }
+                }
+            }
+        } catch {
+            Write-LogMessage -Type DEBUG -Message "Supervisor conditions API failed: $($_.Exception.Message)"
+        }
+    }
+
+    Write-LogMessage -Type INFO -Message "======== End supervisor Kubernetes diagnostics ========"
+}

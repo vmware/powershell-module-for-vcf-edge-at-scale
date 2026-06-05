@@ -1,5 +1,14 @@
 # Release Notes
 
+<a id="v1.0.3.1023"></a>
+## 1.0.3.1023
+
+### Release Date: 2026-05-08
+
+### Details
+- Fix: Cleanup no longer waits up to one hour for supervisor readiness when the supervisor is in ERROR state
+- Chore: Decomposed larger functions to permit better automated test coverage
+
 <a id="v1.0.3.1022"></a>
 ## 1.0.3.1022
 

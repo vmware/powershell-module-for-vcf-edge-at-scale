@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
 #
+# Copyright (c) 2026 Broadcom. All Rights Reserved.
+# Broadcom Confidential. The term "Broadcom" refers to Broadcom Inc.
+# and/or its subsidiaries.
+#
+# =============================================================================
+#
 # SOFTWARE LICENSE AGREEMENT
 #
 # Copyright (c) CA, Inc. All rights reserved.
@@ -62,7 +68,7 @@ _DEFAULT_BASE_DIR = SCRIPT_DIR.parent
 _FALLBACK_TEMPLATES_DIR = SCRIPT_DIR.parent / "Templates"
 
 # Must stay in sync with VEAS-UI-VERSION in veas-ui.html.
-UI_VERSION = "1.0.3.1022"
+UI_VERSION = "1.0.3.1023"
 README_URL = "https://github.com/vmware/powershell-module-for-vcf-edge-at-scale"
 _MAX_CONNECTIVITY_WORKERS = 20
 # Maximum request body accepted from the browser (5 MB is far more than any
@@ -101,11 +107,35 @@ _DEBUG = os.environ.get("VEAS_DEBUG", "").strip() not in ("", "0", "false")
 _MIN_VMK_MTU = 1500
 _MAX_VMK_MTU = 9190
 # Bind address for the HTTP server. Localhost only — the server has no TLS and is
-# not designed for network exposure. Use SSH port-forwarding for remote access.
+# not designed for network exposure.
 _BIND_HOST = "127.0.0.1"
 # Sentinel returned when an integer field cannot be parsed; distinct from 0 so
 # callers can distinguish "field missing/invalid" from "field explicitly set to 0".
 _COUNT_PARSE_ERROR = -1
+
+def _build_allowed_origin_hosts() -> frozenset:
+    """Builds the set of hostnames accepted in the HTTP Origin header.
+
+    Always includes the standard loopback aliases. Also includes the machine's
+    short hostname (case-insensitive) so that browsers on Windows Server that
+    open http://<COMPUTERNAME>:<port> — rather than http://localhost:<port> —
+    still pass the origin check. The short hostname is safe to allow because
+    the server is bound exclusively to 127.0.0.1; any Origin with the machine
+    name must have originated from the server's own browser.
+    """
+    hosts = {"127.0.0.1", "localhost", "::1"}
+    try:
+        short = socket.gethostname().lower().split(".")[0]
+        if short:
+            hosts.add(short)
+            fqdn = socket.getfqdn().lower()
+            if fqdn and fqdn != short:
+                hosts.add(fqdn)
+    except OSError:
+        pass
+    return frozenset(hosts)
+
+_ALLOWED_ORIGIN_HOSTS = _build_allowed_origin_hosts()
 
 # Resolved once at import time so every path-safety check uses the same anchor
 # and avoids repeated syscalls.
@@ -228,6 +258,10 @@ def is_valid_netmask(value):
                 return False
             bits = (bits << 8) | octet
         # A valid netmask has the form: some number of leading 1s then all 0s.
+        # 0.0.0.0 (bits == 0) would pass the contiguous-bits check but is not a
+        # valid subnet mask in practice — it almost always indicates a data-entry error.
+        if bits == 0:
+            return False
         inverted = bits ^ 0xFFFFFFFF
         return inverted == 0 or (inverted & (inverted + 1)) == 0
     except (ValueError, TypeError):
@@ -455,11 +489,13 @@ def _validate_vmk_interfaces(vmk_interfaces, storage_type: str, prefix: str, err
             )
 
 
-def _validate_networking(networking: dict, storage_type: str | None, prefix: str, errors: list[str]) -> tuple[list[str], dict[str, str]]:
+def _validate_networking(networking: dict, storage_type: str | None, prefix: str, errors: list[str], warnings: list[str] | None = None) -> tuple[list[str], dict[str, str]]:
     """
-    Validates a cluster's networking block, appending errors in place.
+    Validates a cluster's networking block, appending errors (and optionally warnings) in place.
     Returns (seg_names, seg_gw_map) for the cluster's segments (both empty on validation failure).
     """
+    if warnings is None:
+        warnings = []
     segments = networking.get("networkSegments")
     seg_names = []
     seg_gw_map = {}
@@ -489,6 +525,11 @@ def _validate_networking(networking: dict, storage_type: str | None, prefix: str
                 # Only track duplicates when the VLAN is structurally valid; validate_vlan_id
                 # rejects None/non-integer values so str() here is always a numeric string.
                 vid = str(seg.get("vlanId"))
+                if vid == "0":
+                    warnings.append(
+                        f"{seg_prefix}.vlanId: VLAN 0 (untagged) is set. "
+                        "This is almost always a data-entry error — verify this is intentional."
+                    )
                 if vid in seen_vlans:
                     errors.append(f"{seg_prefix}.vlanId: duplicate VLAN ID {vid} within cluster.")
                 seen_vlans.add(vid)
@@ -644,7 +685,7 @@ def _validate_cluster(cluster, idx: int, common: dict, common_nic_list, errors: 
     if not isinstance(networking, dict):
         errors.append(f"{prefix}.networking: required object is missing.")
     else:
-        seg_names, seg_gw_map = _validate_networking(networking, storage_type, prefix, errors)
+        seg_names, seg_gw_map = _validate_networking(networking, storage_type, prefix, errors, warnings)
 
     harbor = cluster.get("harborConfiguration")
     disable_harbor = _resolve_bool(cluster, common, "disableHarbor")
@@ -837,6 +878,32 @@ def validate_supervisor(
             errors.append(
                 f"supervisor.commonSupervisorSpec.{arr_field}: must be a non-empty array."
             )
+
+    # NTP servers: each entry must be a non-empty FQDN or IPv4 address.
+    ntp_servers = common_spec.get("networkNtpServers", [])
+    if isinstance(ntp_servers, list):
+        for ntp in ntp_servers:
+            if not isinstance(ntp, str) or not ntp.strip():
+                errors.append(
+                    f"supervisor.commonSupervisorSpec.networkNtpServers: '{ntp}' is not a valid entry."
+                )
+            elif not is_valid_fqdn_or_ip(ntp.strip()):
+                errors.append(
+                    f"supervisor.commonSupervisorSpec.networkNtpServers: '{ntp}' is not a valid FQDN or IPv4 address."
+                )
+
+    # Search domains: each entry must be a non-empty string that looks like a DNS domain.
+    search_domains = common_spec.get("networkSearchDomains", [])
+    if isinstance(search_domains, list):
+        for domain in search_domains:
+            if not isinstance(domain, str) or not domain.strip():
+                errors.append(
+                    f"supervisor.commonSupervisorSpec.networkSearchDomains: '{domain}' is not a valid entry."
+                )
+            elif not is_valid_fqdn_or_ip(domain.strip()):
+                errors.append(
+                    f"supervisor.commonSupervisorSpec.networkSearchDomains: '{domain}' is not a valid domain name."
+                )
 
     # DNS servers: 1–3 entries, each a valid IPv4 address.
     dns_servers = common_spec.get("dnsServers", [])
@@ -1818,8 +1885,22 @@ class ConfigHandler(BaseHTTPRequestHandler):
     # Default base directory; overridden per-instance via _make_handler().
     base_dir: Path = _DEFAULT_BASE_DIR
 
+    # StreamRequestHandler.setup() reads this attribute and calls
+    # self.connection.settimeout(self.timeout) on the *accepted* socket before
+    # creating rfile/wfile. This prevents a stalled client from blocking
+    # rfile.read(Content-Length) indefinitely in the single-threaded server.
+    timeout = 30
+
     def log_message(self, fmt, *args):
         print(f"[{self.log_date_time_string()}] {fmt % args}")
+
+    def log_error(self, fmt, *args):
+        # Suppress idle-connection timeout noise. handle_one_request() catches
+        # TimeoutError and calls log_error("Request timed out: %r", e) for every
+        # browser keep-alive connection that expires — this is normal, not an error.
+        if args and isinstance(args[0], TimeoutError):
+            return
+        self.log_message(fmt, *args)
 
     def handle(self):
         """Wraps the request lifecycle to suppress benign client-disconnect errors.
@@ -1841,17 +1922,22 @@ class ConfigHandler(BaseHTTPRequestHandler):
         """Returns True when the request is safe to process.
 
         Non-browser clients (curl, PowerShell Invoke-RestMethod) send no Origin
-        header and are always allowed.  Browser-initiated cross-origin requests
-        include an Origin; we only permit origins whose host resolves to the
-        loopback interface so that a malicious page cannot CSRF-trigger /save,
-        /generate, or /connectivity-check against the locally running server.
+        header and are always allowed.  Browser requests include an Origin; we
+        only permit origins whose hostname is in _ALLOWED_ORIGIN_HOSTS, which
+        covers the loopback aliases plus the machine's own short hostname and
+        FQDN so that browsers on Windows Server that open the UI via the
+        computer name (http://SERVERNAME:8080) are not incorrectly rejected.
+        Origin: null is always rejected — it signals a sandboxed or file://
+        origin, neither of which should ever reach this server.
         """
         origin = self.headers.get("Origin", "")
         if not origin:
             return True
+        if origin == "null":
+            return False
         try:
-            host = urlparse(origin).hostname or ""
-            return host in ("127.0.0.1", "localhost", "::1")
+            host = (urlparse(origin).hostname or "").lower()
+            return host in _ALLOWED_ORIGIN_HOSTS
         except Exception:
             return False
 
@@ -2245,14 +2331,14 @@ class ConfigHandler(BaseHTTPRequestHandler):
                     backups.append(str(backup_path))
 
             # Write new files atomically via sibling temp files with owner-only permissions.
-            # os.open with O_CREAT | O_EXCL | mode 0o600 ensures no world-readable window
-            # between creation and write — the same pattern used for backup files above.
-            # Each tmp file is cleaned up if replace() fails so no orphaned files remain.
+            # The temp filename includes the timestamp so that a previous interrupted save
+            # (which leaves a .tmp file) cannot permanently block future saves with O_EXCL.
+            # Each tmp file is cleaned up on error so no orphaned files remain.
             for dest_path, content in (
                 (infra_path, json.dumps(infra_built, indent=2)),
                 (sup_path, json.dumps(sup_built, indent=2)),
             ):
-                tmp_path = dest_path.with_name(dest_path.name + ".tmp")
+                tmp_path = dest_path.with_name(f"{dest_path.name}.{timestamp}.tmp")
                 try:
                     fd = os.open(str(tmp_path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
                     with os.fdopen(fd, "wb") as tf:
@@ -2294,7 +2380,8 @@ class _SecureHTTPServer(HTTPServer):
 
     def handle_error(self, request, client_address):
         exc = sys.exc_info()[1]
-        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError)):
+        if isinstance(exc, (ConnectionAbortedError, ConnectionResetError, BrokenPipeError,
+                             TimeoutError)):
             return
         super().handle_error(request, client_address)
 
@@ -2352,7 +2439,7 @@ def main():
         raise
 
     print("VcfEdgeAtScale Configuration UI")
-    print(f"Listening on {_BIND_HOST}:{args.port} (localhost only — use SSH port-forwarding for remote access)")
+    print(f"Listening on {_BIND_HOST}:{args.port} (localhost only)")
     print(f"Base directory: {base_dir}")
     if not (base_dir / "infrastructure.json").exists():
         print("  WARNING: infrastructure.json not found in base directory.")
