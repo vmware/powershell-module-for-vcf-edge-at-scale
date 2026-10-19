@@ -4205,8 +4205,10 @@ function Initialize-VcfEdgeAtScale {
         # Ensure VcfCmd is resolved even when today's log file already existed at startup
         # (New-LogFile only calls Get-EnvironmentSetup on first creation of the daily log file).
         $null = Get-VcfEdgeAtScaleVcfCmd
-        Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
-        Test-CommandAvailability -Command $Script:KubectlCmd -Description "kubectl"
+        if ($initParams.ComputeOnly -eq $false ) {
+            Test-CommandAvailability -Command $Script:VcfCmd -Description "vcf-cli"
+            Test-CommandAvailability -Command $Script:KubectlCmd -Description "kubectl"
+        }
 
         if ($clustersToProcess.Count -eq 1) {
             $firstEdgeSite = $clustersToProcess[0].edgeSite
