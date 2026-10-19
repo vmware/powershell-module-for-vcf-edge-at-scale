@@ -4484,20 +4484,58 @@ function Get-JsonPropertyValue {
                     return Resolve-JsonArrayPropertyValue -ArrayPropertyName $arrayPropertyName -CurrentObject $currentObject -IsLastPathPart $isLastPart -PropertyPath $PropertyPath -RemainingPath $remainingPath
                 }
 
-                $currentObject = if ($currentObject -is [PSCustomObject]) {
-                    $currentObject.$part
+                # 1. Direct in-branch assignment to prevent pipeline unrolling of 1-element arrays
+                if ($currentObject -is [PSCustomObject]) {
+                    $currentObject = $currentObject.$part
                 } elseif ($currentObject -is [Hashtable]) {
-                    $currentObject[$part]
+                    $currentObject = $currentObject[$part]
+                } elseif ($currentObject -is [System.Collections.IEnumerable] -and $currentObject -isnot [String]) {
+                    # 2. Handle array/collection traversal when navigating nested paths
+                    $array = @($currentObject)
+                    if ($array.Count -gt 0) {
+                        if ($array.Count -eq 1) {
+                            $single = $array[0]
+                            if ($single -is [PSCustomObject]) {
+                                $currentObject = $single.$part
+                            } elseif ($single -is [Hashtable]) {
+                                $currentObject = $single[$part]
+                            } else {
+                                try { $currentObject = $single.$part } catch { $currentObject = $null }
+                            }
+                        } else {
+                            try { $currentObject = $array.$part } catch { $currentObject = $null }
+                        }
+                    } else {
+                        $currentObject = $null
+                    }
                 } else {
-                    try { $currentObject.$part } catch {
+                    try {
+                        $currentObject = $currentObject.$part
+                    } catch {
                         Write-LogMessage -Type ERROR -SuppressOutputToScreen -Message "Cannot access property '$part' in path '$PropertyPath': $($_.Exception.Message)"
                         return $null
                     }
                 }
             }
 
-            if ($null -eq $currentObject) { return "" }
+            if ($null -eq $currentObject) { return $null }
+
+            # 3. Serialize objects or arrays to JSON strings so validation checks receive valid non-empty string content
+            if ($currentObject -is [PSCustomObject] -or $currentObject -is [Hashtable]) {
+                return ($currentObject | ConvertTo-Json -Compress -Depth 10)
+            }
+
+            if ($currentObject -is [System.Collections.IEnumerable] -and $currentObject -isnot [String]) {
+                $arr = @($currentObject)
+                if ($arr.Count -eq 0) { return $null }
+                return ($currentObject | ConvertTo-Json -Compress -Depth 10)
+            }
+
             return $currentObject.ToString()
+        }
+
+        if ($InputData -is [PSCustomObject] -or $InputData -is [Hashtable]) {
+            return ($InputData | ConvertTo-Json -Compress -Depth 10)
         }
 
         return $InputData.ToString()
@@ -4506,6 +4544,7 @@ function Get-JsonPropertyValue {
         return $null
     }
 }
+
 function Get-ValidationPresetRules {
 
     <#
